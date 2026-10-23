@@ -73,6 +73,14 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"
+# (5) THE TIMEZONE. The fixture's dates are naive strings ("2026-06-01T12:00:00"), and git reads a
+# naive GIT_AUTHOR_DATE in the MACHINE'S zone — so every %at/%ct in the stream moves with the host,
+# and with them the digest pin below and the golden. Measured: the same fixture, the same command,
+# the same git, reads a823b914… under WEST and 9a112638… under UTC — CI's runners are UTC, a dev Mac
+# is not, and the gate failed on exactly that. Pin it HERE rather than in clean-env.sh: that file is
+# sourced by gates whose own fixtures (mergechurncheck and its 2026-06 dates) were derived on a
+# non-UTC machine, and shifting them is a separate change with its own re-derivation.
+export TZ=UTC
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"       # BOTH seams — positional and env
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 GOLD="$ROOT/test/gitframingcheck_golden.txt"
@@ -359,7 +367,7 @@ echo "arm 2: the raw stream the reader parses is byte-pinned"
 "$REAL_GIT" -c core.quotepath=false -C "$H" log --no-ext-diff --no-textconv -c \
     -z --name-only --format='%x00__C__%x00%ae%x00%at%x00%ct' 2>/dev/null > "$TMP/raw.z"
 digest=$( python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$TMP/raw.z" )
-[ "$digest" = a823b914f6269ee4b50c23204c407c9e009940fa7d62d530d7316de418a33b3d ] \
+[ "$digest" = 9a11263860e97452932460b72c9eca9020a6ad01b1d29ceba917f1db1167796c ] \
     && ok "the stream is byte-identical to the pinned digest" \
     || no "raw-stream digest drifted: $digest"
 # Fields that spell the marker EXACTLY (NUL-delimited, so a '\n'-prefixed first path does not count):
