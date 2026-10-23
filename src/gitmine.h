@@ -877,15 +877,31 @@ inline GitLogWalk forEachGitLogRecord( const std::string& root, const std::strin
     while( !atEnd )
     {
         if( gitWalksAbandoned() ) { break; }   // the walk readers' abandon contract: stop at the next field; pclose ends the child
-        if( haveLookahead ) { field = std::move( lookahead ); haveLookahead = false; }
+        // COPY, not move: the slot is a reusable buffer, and a copy hands the held value over while
+        // leaving the slot in a valid state for its next fill. No read ever sees a moved-from slot —
+        // the two writers below each assign a FRESH value before they set the flag — but a move here
+        // is what bugprone-use-after-move reads as a second use of a moved-from object: the
+        // reassignment that makes it safe happens in an earlier iteration than the next move, and no
+        // analyzer can prove the correlation between the flag and the writers. (A swap is no better:
+        // it reads the slot too, so the checker relocates the finding to the move at the path append
+        // below.) The copy runs once per record boundary — and once per a merge's prefix empty —
+        // against a walk that spawns a git child per run, so it costs nothing measurable, and it
+        // leaves the slot's lifetime readable to man and machine alike.
+        if( haveLookahead ) { field = lookahead; haveLookahead = false; }
         else if( !fields.next( field ) ) { atEnd = true; break; }
 
         if( field.empty() )
         {
             // One field of lookahead decides what this empty IS: the record boundary (the next field is
             // the marker, or the stream ends here) or a merge's prefix empty (anything else follows).
+            // The held-lookahead slot is ALWAYS empty here: the top of the loop consumes it (and clears the
+            // flag) before any field is examined, and the only writers — the two branches below — each
+            // assign a FRESH value before the next iteration. So the field after this empty is always the
+            // next one on the stream; there is no held field to prefer. A `haveLookahead ? … : …` here would
+            // be dead code, and its move of `lookahead` is also what made the slot's lifetime unreadable to
+            // bugprone-use-after-move (a second move in a later iteration that no reader can prove safe).
             std::string next;
-            bool        haveNext = haveLookahead ? ( next = std::move( lookahead ), haveLookahead = false, true ) : fields.next( next );
+            bool        haveNext = fields.next( next );
             if( !haveNext || next == kGitLogMarker )
             {
                 closeRecord();
