@@ -418,7 +418,9 @@ marker_tracked=$( git -C "$H" ls-files | grep -cx '__C__' )
 [ "$marker_tracked" = 1 ] && ok "a file named exactly __C__ is tracked — the name the frame must survive" \
                           || no "the marker-named file is not tracked ($marker_tracked)"
 files_n=$( grep -oE 'files="[0-9]+"' "$TMP/owners.xml" | head -1 | grep -oE '[0-9]+' )
-[ "$files_n" = 11 ] && ok "--owners analysed 11 files (files=11)" || no "owners files=$files_n, want 11"
+[ "$files_n" = 11 ] \
+    && ok "--owners analysed 11 files (files=11)" \
+    || no "owners files=$files_n, want 11"
 ranked=$( grep -oE 'ranked="[0-9]+"' "$TMP/hotspots.xml" | head -1 | grep -oE '[0-9]+' )
 unranked=$( grep -oE 'unranked_no_complexity="[0-9]+"' "$TMP/hotspots.xml" | head -1 | grep -oE '[0-9]+' )
 [ "$ranked" = 11 ] && [ "$unranked" = 0 ] \
