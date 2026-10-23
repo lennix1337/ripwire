@@ -32,6 +32,7 @@
 
 #include "Diagnostics.h" // ASSUME — the null-stream precondition
 
+#include <atomic>
 #include <cstdio>
 #include <string>
 
@@ -145,7 +146,15 @@ inline bool readByteSafeLineBounded( std::FILE* in, std::string& line, std::size
 // parameter on the line reader because the two delimiters answer different questions ("where does this
 // line end" vs "is this field the record boundary") and a caller that confused them would read a
 // hostile filename as commit metadata.
-inline bool readNulSafeField( std::FILE* in, std::string& field )
+//
+// `abandon`, when non-null, is polled once per byte: the git history walkers stop at their next FIELD,
+// and a stream whose fields never arrive — a git answering in its default line format, or a test shim
+// streaming bare lines — must still abandon INSIDE the field read rather than park the reader in one
+// never-terminated field until end-of-stream. When it flips, the partial field is dropped and false is
+// returned, which the caller reads as end-of-stream; it then closes the pipe, and that is what ends
+// the child. false is ALSO end-of-stream, so a caller that must tell the two apart consults the flag
+// itself — which is what the walkers already do at the top of their loop.
+inline bool readNulSafeField( std::FILE* in, std::string& field, const std::atomic<bool>* abandon = nullptr )
 {
     ASSUME( in != nullptr );
 
@@ -153,6 +162,7 @@ inline bool readNulSafeField( std::FILE* in, std::string& field )
     bool didReadAnyByte = false;
     for( int byteOrEof = std::fgetc( in ); byteOrEof != EOF; byteOrEof = std::fgetc( in ) )
     {
+        if( abandon != nullptr && abandon->load( std::memory_order_relaxed ) ) { return false; }
         didReadAnyByte = true;
         if( byteOrEof == '\0' )
         {

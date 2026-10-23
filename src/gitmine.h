@@ -786,16 +786,20 @@ struct GitLogWalk
 
 // One field of lookahead over a NUL-framed stream: `next` is readNulSafeField or the held field, which
 // the boundary rule in forEachGitLogRecord parks here while it decides what an empty field means.
+// `abandon` rides into the field read itself — the walkers' stop-at-the-next-field contract, polled
+// once per byte, so a stream whose fields never arrive (a git answering in its default line format, or
+// a shim streaming bare lines) cannot park the reader inside one field until end-of-stream.
 struct NulFieldStream
 {
-    std::FILE* pipe    = nullptr;
-    std::string held;
-    bool        hasHeld = false;
+    std::FILE*               pipe    = nullptr;
+    std::string              held;
+    bool                     hasHeld = false;
+    const std::atomic<bool>* abandon = nullptr;
 
     bool next( std::string& field )
     {
         if( hasHeld ) { field = std::move( held ); hasHeld = false; return true; }
-        return readNulSafeField( pipe, field );
+        return readNulSafeField( pipe, field, abandon );
     }
 };
 
@@ -853,7 +857,11 @@ inline GitLogWalk forEachGitLogRecord( const std::string& root, const std::strin
         return walk;
     }
 
-    NulFieldStream fields{ pipe, {}, false };
+    // The walkers' abandon contract rides into the field read: the flag is polled per byte, so a
+    // stream whose fields never arrive (the default-format degrade, a test shim's bare lines) stops
+    // the read where the old line reader stopped it — at its next unit — instead of blocking to
+    // end-of-stream inside one unterminated field.
+    NulFieldStream fields{ pipe, {}, false, &gGitWalksAbandoned };
     std::string    field;
     std::string    lookahead;
     bool           haveLookahead = false;
