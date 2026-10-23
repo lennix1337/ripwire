@@ -775,9 +775,10 @@ struct GitLogRecord
 // The walk's exit status, carried so the K51 contract (a prefix is not an answer) survives the
 // migration: `unread` — git would not start, or died part-way, so the records are empty or a prefix;
 // `notRun` — git never ran at all (no popen, not on PATH, not executable), so there is no prefix either.
+// The visitor form streams: there is no records vector to keep, which is the point — one record in
+// memory at a time, the whole-history walk costs what it always cost.
 struct GitLogWalk
 {
-    std::vector<GitLogRecord> records;
     bool                      unread   = false;
     bool                      notRun   = false;
     int                       exitCode = 0;
@@ -935,18 +936,6 @@ inline GitLogWalk forEachGitLogRecord( const std::string& root, const std::strin
         walk.unread = true;
         walk.notRun = ( walk.exitCode == 127 || walk.exitCode == 126 );
     }
-    return walk;
-}
-
-// The collecting form, for the one consumer that keeps every record: the raw stream the churn /
-// co-change core is resolved against, memoized per (repo, HEAD, window).
-inline GitLogWalk gitLogRecords( const std::string& root, const std::string& extraArgs )
-{
-    GitLogWalk walk;
-    const GitLogWalk streamed = forEachGitLogRecord( root, extraArgs, [ & ]( const GitLogRecord& r ) { walk.records.push_back( r ); } );
-    walk.unread   = streamed.unread;
-    walk.notRun   = streamed.notRun;
-    walk.exitCode = streamed.exitCode;
     return walk;
 }
 
@@ -1794,24 +1783,6 @@ struct RawCommitStream
     // git's decoded exit code (WEXITSTATUS), -1 when it did not exit normally or never started; 0 on a clean read.
     int exitCode = 0;
 };
-
-// K51: mark a walk unread. `exitCode` is git's decoded exit (-1: it never started, or did not exit normally); the shell's 127
-// (not on PATH) and 126 (not executable) mean git never ran either, so `commits` is empty, not a prefix.
-inline void markWalkUnread( RawCommitStream& out, int exitCode, bool neverStarted ) noexcept
-{
-    out.unread   = true;
-    out.exitCode = exitCode;
-    out.notRun   = neverStarted || exitCode == 127 || exitCode == 126;
-}
-
-// K51: fold the walk's pclose() status into `out` — 0 is a clean read and changes nothing.
-inline void noteWalkExit( RawCommitStream& out, int status ) noexcept
-{
-    if( status != 0 )
-    {
-        markWalkUnread( out, decodedExitCode( status ), false );
-    }
-}
 
 inline RawCommitStream gitLogNameOnlyRaw( const std::string& root, const std::string& coSince )
 {
