@@ -171,6 +171,13 @@ reader's stream, which for the repositories this fix targets is the corrupted on
 tell that blob from a fresh read. Every repository's history is walked once more after the upgrade; on trees
 with ordinary names the walk produces the same stream, so the cost is one cold walk and no changed answer.
 
+**The walkers' stop contract rides the field read.** The line readers this replaces checked the abandon flag
+before every line; the first cut of the field reader checked it only between fields, so a stream whose fields
+never arrive — a git answering in its default format, or a shim streaming bare lines — held the read inside one
+unterminated field until end-of-stream instead of stopping at the next unit. The flag is now polled once per
+byte, and the memory-guard fixture that measures it refuses in about a second where the narrowed read blocked
+for the whole stream.
+
 **One case is disclosed, not fixed:** a merge whose FIRST combined path is a file literally named `__C__`
 still reads as pathless — its prefix empty is followed by the marker-spelled path, which the boundary rule
 cannot tell from a real record boundary, so that merge's files lose their attribution (a pathless phantom
