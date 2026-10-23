@@ -136,4 +136,31 @@ inline bool readByteSafeLineBounded( std::FILE* in, std::string& line, std::size
     return detail::readByteSafeLineCore<true>( in, line, maxBytes, overflowed );
 }
 
+// The NUL-framed sibling of readByteSafeLine, for `git log -z` byte streams: -z terminates every
+// --format field and every --name-only path with NUL instead of '\n', and an EMPTY field is the record
+// boundary the parser must see — so, unlike the line reader, a zero-length field is a SUCCESSFUL read
+// here, and only end-of-stream with nothing read returns false. Same parity contract as
+// readByteSafeLine: one fgetc per byte, EOF as an int sentinel distinct from every byte value, the only
+// narrowing explicit through `unsigned char`. Kept a separate function rather than a delimiter
+// parameter on the line reader because the two delimiters answer different questions ("where does this
+// line end" vs "is this field the record boundary") and a caller that confused them would read a
+// hostile filename as commit metadata.
+inline bool readNulSafeField( std::FILE* in, std::string& field )
+{
+    ASSUME( in != nullptr );
+
+    field.clear();
+    bool didReadAnyByte = false;
+    for( int byteOrEof = std::fgetc( in ); byteOrEof != EOF; byteOrEof = std::fgetc( in ) )
+    {
+        didReadAnyByte = true;
+        if( byteOrEof == '\0' )
+        {
+            return true; // delimiter consumed, not appended
+        }
+        field.push_back( static_cast<char>( static_cast<unsigned char>( byteOrEof ) ) );
+    }
+    return didReadAnyByte; // EOF: a final unterminated field still counts; nothing read is the end
+}
+
 } // namespace rw
