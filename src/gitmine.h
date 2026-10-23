@@ -746,15 +746,24 @@ inline GitCommandLines gitCommandLines( const std::string& cmd )
 // RAW (no C-quoting), and the marker is a WHOLE-FIELD sentinel a path can never spell.
 //
 // The pinned byte layout (specs/git-porcelain-framing/evidence/layout-pin.md; the prototype command
-// that produced it is in the spec's Implementation Notes):
+// that produced it is in the spec's Implementation Notes; re-pinned by test/gitframingcheck.sh):
 //
 //   \0 __C__ \0 <author-email> \0 <author-ts> \0 <committer-ts> [ \0 ] [ \n <path1> | <path1> ] \0 <path2> \0 …
 //
 // Every record opens with an empty field, then the marker, then its three metadata fields. A commit
 // with paths follows the metadata with a '\n'-prefixed first path (git's separator); a path-less
-// commit stops after its metadata. The next record's opening empty field is the record boundary —
-// and an empty field can only come from the format, because paths are never empty. A field that ends
+// commit stops after its metadata. A MERGE follows with one MORE empty field — the prefix empty —
+// and then BARE paths with no '\n', which is what a combined diff emits; a clean merge stops after
+// its prefix empty. The next record's opening empty field is the record boundary. A field that ends
 // at end-of-stream without its delimiter still counts; readNulSafeField returns it.
+//
+// The boundary rule, with ONE field of lookahead: an empty field ends the current record and opens
+// the next iff the field after it is the marker (or the stream ends). Any other empty field is a
+// merge prefix and is skipped — that is what keeps a merge's combined-diff files, the ones the first
+// migration draft dropped, attached to the merge that introduced them. The one collision left is the
+// same class the line frame had: a merge whose FIRST combined path is a file literally named `__C__`
+// reads as a pathless record, because its prefix empty is followed by the marker-spelled path. That
+// boundary is disclosed here and pinned in the gate rather than papered over.
 struct GitLogRecord
 {
     std::string              authorEmail;
@@ -774,14 +783,19 @@ struct GitLogWalk
     int                       exitCode = 0;
 };
 
-// The NUL-framed field iterator over one `git log -z` stream: every --format field and every
-// --name-only path arrives as one readNulSafeField call, and a zero-length field — the record
-// boundary — is a successful read, not the end of the stream.
+// One field of lookahead over a NUL-framed stream: `next` is readNulSafeField or the held field, which
+// the boundary rule in forEachGitLogRecord parks here while it decides what an empty field means.
 struct NulFieldStream
 {
-    std::FILE* pipe = nullptr;
+    std::FILE* pipe    = nullptr;
+    std::string held;
+    bool        hasHeld = false;
 
-    bool next( std::string& field ) { return readNulSafeField( pipe, field ); }
+    bool next( std::string& field )
+    {
+        if( hasHeld ) { field = std::move( held ); hasHeld = false; return true; }
+        return readNulSafeField( pipe, field );
+    }
 };
 
 // The marker as a whole field. A path may carry these bytes; only a field that IS this string opens a record.
@@ -838,35 +852,57 @@ inline GitLogWalk forEachGitLogRecord( const std::string& root, const std::strin
         return walk;
     }
 
-    NulFieldStream fields{ pipe };
+    NulFieldStream fields{ pipe, {}, false };
     std::string    field;
+    std::string    lookahead;
+    bool           haveLookahead = false;
+    bool           atEnd         = false;
 
     GitLogRecord cur;
-    bool         inRecord   = false;   // a record is open (its opening empty field was seen)
-    bool         sawMarker  = false;   // ...and its marker was read: a record without one is never visited
-    bool         wantMarker = false;   // the next field must be the marker
-    int          metaLeft   = 0;       // metadata fields still to read for this record
-    bool         havePath   = false;   // this record has taken its first path
+    bool         inRecord  = false;   // a record is open (its opening empty field was seen)
+    bool         sawMarker = false;   // ...and its marker was read: a record without one is never visited
+    bool         wantMarker = false;  // the next field must be the marker
+    int          metaLeft  = 0;       // metadata fields still to read for this record
+    int          empties   = 0;       // empty fields since this record's metadata (0 = none, 1 = a merge prefix)
+    bool         havePath  = false;   // this record has taken its first path
 
     const auto closeRecord = [ & ]()
     {
         if( inRecord && sawMarker ) { visit( cur ); }
-        cur       = GitLogRecord{};
-        sawMarker = false;
+        cur        = GitLogRecord{};
+        sawMarker  = false;
     };
 
-    while( fields.next( field ) )
+    while( !atEnd )
     {
         if( gitWalksAbandoned() ) { break; }   // the walk readers' abandon contract: stop at the next field; pclose ends the child
+        if( haveLookahead ) { field = std::move( lookahead ); haveLookahead = false; }
+        else if( !fields.next( field ) ) { atEnd = true; break; }
+
         if( field.empty() )
         {
-            closeRecord();
-            inRecord   = true;
-            wantMarker = true;
-            metaLeft   = 3;
-            havePath   = false;
+            // One field of lookahead decides what this empty IS: the record boundary (the next field is
+            // the marker, or the stream ends here) or a merge's prefix empty (anything else follows).
+            std::string next;
+            bool        haveNext = haveLookahead ? ( next = std::move( lookahead ), haveLookahead = false, true ) : fields.next( next );
+            if( !haveNext || next == kGitLogMarker )
+            {
+                closeRecord();
+                inRecord    = true;
+                wantMarker  = true;
+                metaLeft    = 3;
+                empties     = 0;
+                havePath    = false;
+                if( haveNext ) { lookahead = std::move( next ); haveLookahead = true; }
+            }
+            else
+            {
+                ++empties;   // a merge prefix (or the record's own close): skipped, but counted
+                lookahead = std::move( next ); haveLookahead = true;
+            }
             continue;
         }
+
         if( wantMarker )
         {
             wantMarker = false;
@@ -881,10 +917,13 @@ inline GitLogWalk forEachGitLogRecord( const std::string& root, const std::strin
             --metaLeft;
             continue;
         }
+
+        // A path. The first path of a REGULAR commit arrives with git's '\n' separator (no empty was
+        // counted since the metadata); a merge's first path arrives bare after its prefix empty.
         if( !havePath )
         {
             havePath = true;
-            if( field.front() == '\n' ) { field.erase( 0, 1 ); }   // git's separator before a commit's first path
+            if( empties == 0 && !field.empty() && field.front() == '\n' ) { field.erase( 0, 1 ); }
         }
         cur.paths.push_back( std::move( field ) );
     }
@@ -2510,10 +2549,11 @@ inline std::vector<FileOwnership> gitFileAuthors(
     };
     const std::string rootSlash = root + "/";
 
-    // git log -c -z --name-only --format='%x00__C__%x00%ae%x00%at%x00%ct%x00' 2>/dev/null  (optionally
+    // git log -c -z --name-only --format='%x00__C__%x00%ae%x00%at%x00%ct' 2>/dev/null  (optionally
     // scoped to one path with `-- <relpath>`): one record per commit through the shared NUL-framed
-    // reader, author email and author timestamp as their own fields. Mirrors every other consumer's
-    // single-pass invocation style.
+    // reader, author email and author timestamp as their own fields. NO trailing %x00 — the last
+    // field runs to the stream's end, and the boundary rule reads the empty that FOLLOWS it.
+    // Mirrors every other consumer's single-pass invocation style.
     std::string extraArgs;
     if( singleFile )
     {
