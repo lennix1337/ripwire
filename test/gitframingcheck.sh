@@ -40,6 +40,10 @@
 #   (c2) the single-file pathspec seam — --owners=SYM appends a pathspec to the shared command, and a
 #       pathspec glued to -z answers EMPTY, which reads as "git unavailable / no history" rather than
 #       as a broken command. The pin for the one space that separates them.
+#   (f) an empty METADATA field is data, not framing — git accepts an empty author email
+#       (--author="No Email <>"), and the boundary rule must not eat a pending-metadata empty as a
+#       merge prefix: pre-fix the whole record shifted (email←the %at digits, epochs off by one, the
+#       first path's '\n' unstripped) and the commit was left PATHLESS, its file unattributed.
 #   (d) the honest tree is byte-identical to the golden RECORDED FROM THE PRE-CHANGE BINARY — the
 #       "no behavior change on honest trees" claim, over --owners/--hotspots/--cochange.
 #   (e) the marker literal lives ONLY inside the shared helper — five consumer bodies, zero hits.
@@ -94,8 +98,8 @@ command -v git >/dev/null 2>&1 || { echo "git required"; exit 2; }
 REAL_GIT="$( command -v git )"
 echo "gitframingcheck: BIN=$BIN  ROOT=$ROOT  git=$( git --version )"
 
-TMP="$( mktemp -d )"; H="$( mktemp -d )"; G="$( mktemp -d )"
-trap 'rm -rf "$TMP" "$H" "$G"' EXIT
+TMP="$( mktemp -d )"; H="$( mktemp -d )"; G="$( mktemp -d )"; E="$( mktemp -d )"
+trap 'rm -rf "$TMP" "$H" "$G" "$E"' EXIT
 # The fixtures are FRESH mktemp paths every run, and that is load-bearing beyond tidiness: the tool
 # memoizes its history walks under $TMPDIR/ripwire keyed on (repo, HEAD, window) — the repo key is
 # path-derived — so a fixed fixture path would let a previous run's cached churn answer this run's
@@ -328,6 +332,32 @@ grep -q '<owners [^>]*of="sharedFn"' "$TMP/owners-sym.xml" \
 sym_p=$( tr '>' '\n' < "$TMP/owners-sym.xml" | grep -oE '<f p="[^"]*"' | head -1 )
 [ "$sym_p" = '<f p="shared.cpp"' ] && ok 'the SYM form reports shared.cpp — the file holding the definition' \
                                    || no "the SYM form reports '$sym_p', want <f p=\"shared.cpp\""
+
+# ── ARM (f): an empty METADATA field is data, not framing ──────────────────────────────────────────
+# PR #433 review (Major): the empty-field branch ran before the metadata state machine, so a
+# legitimately empty %ae was eaten as a merge prefix and the record shifted wholesale. The guard:
+# an empty is framing only when no marker is pending and no metadata is owed. One-commit fixture,
+# empty-email author, ordinary committer — pre-fix the record is pathless and plain.cpp gets no row.
+echo "arm f: an empty %ae is metadata — the file keeps its attribution"
+mkdir -p "$E"
+git -C "$E" init -q -b main
+ID Cm cm@x.invalid Cm cm@x.invalid; D 2026-06-14T12:00:00
+mkfn emptyMailFn > "$E/plain.cpp"
+git -C "$E" add -A >/dev/null
+git -C "$E" commit -qm "e1: empty-email author" --author="No Email <>" >/dev/null
+UC
+"$BIN" --owners=emptyMailFn --detail=1 --no-cache "$E" > "$TMP/owners-empty.xml" 2>"$TMP/owners-empty.err"; e_rc=$?
+[ "$e_rc" = 0 ] && ok "--owners=emptyMailFn exits 0" \
+               || no "--owners=emptyMailFn exits $e_rc: $( head -1 "$TMP/owners-empty.err" )"
+e_p=$( tr '>' '\n' < "$TMP/owners-empty.xml" | grep -oE '<f p="[^"]*"' | head -1 )
+[ "$e_p" = '<f p="plain.cpp"' ] \
+    && ok 'plain.cpp is reported — the empty-email record kept its path (pre-fix: pathless, no row)' \
+    || no "the empty-email record lost its path (got '${e_p:-nothing}')"
+"$BIN" --for=emptyMailFn --detail=1 --no-cache "$E" > "$TMP/for-empty.xml" 2>/dev/null
+e_churn=$( churn_of_fn "$TMP/for-empty.xml" "emptyMailFn" )
+[ "$e_churn" = "1" ] \
+    && ok 'plain.cpp churn=1 — the empty-email commit counts for its own file' \
+    || no "plain.cpp churn='$e_churn', want 1 (pre-fix: no row, no churn)"
 
 # ── ARM (d): the honest tree is byte-identical to the pre-change golden ────────────────────────────
 echo "arm d: the honest tree is byte-identical to the golden recorded from the PRE-CHANGE binary"

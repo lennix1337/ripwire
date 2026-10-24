@@ -782,6 +782,11 @@ struct GitLogWalk
     bool                      unread   = false;
     bool                      notRun   = false;
     int                       exitCode = 0;
+    // The degraded-epoch count — records whose author or committer epoch field was empty or
+    // unparsable (parseEpochField nullopt): their epochs read 0, so a window cut on them excluded
+    // those commits and its count is a FLOOR. This field is the sink a consumer reads to disclose
+    // that; folding it away would be the silent-floor the honesty rules forbid.
+    int                       epochUnparsed = 0;
 };
 
 // One field of lookahead over a NUL-framed stream: `next` is readNulSafeField or the held field, which
@@ -806,13 +811,17 @@ struct NulFieldStream
 // The marker as a whole field. A path may carry these bytes; only a field that IS this string opens a record.
 inline constexpr const char* kGitLogMarker = "__C__";
 
-// An epoch field: git's decimal seconds, 0 when the field is empty or does not parse.
-inline std::int64_t parseEpochField( const std::string& field ) noexcept
+// An epoch field: git's decimal seconds. nullopt when the field is empty, carries non-digits, or
+// leaves bytes unconsumed — a DEGRADED read the walk counts (GitLogWalk::epochUnparsed) instead of
+// folding it into a genuine zero, because epoch 0 is 1970 and can be real, while a failed parse
+// means a commit whose window position is unknown: it falls below every cutoff, and any count that
+// excluded it is a floor until the consumer says so. PR #433 review.
+inline std::optional<std::int64_t> parseEpochField( const std::string& field ) noexcept
 {
-    if( field.empty() ) { return 0; }
+    if( field.empty() ) { return std::nullopt; }
     char*               end = nullptr;
     const std::int64_t  v   = std::strtoll( field.c_str(), &end, 10 );
-    return ( end != field.c_str() ) ? v : 0;
+    return ( end != nullptr && end != field.c_str() && *end == '\0' ) ? std::optional<std::int64_t>{ v } : std::nullopt;
 }
 
 // A pclose()/wait status as an exit code: WEXITSTATUS on a normal exit, -1 for a signal or an unreadable status.
@@ -898,6 +907,16 @@ inline GitLogWalk forEachGitLogRecord( const std::string& root, const std::strin
         if( haveLookahead ) { field = lookahead; haveLookahead = false; }
         else if( !fields.next( field ) ) { atEnd = true; break; }
 
+        // An empty field's meaning is decided by ONE field of lookahead, and the pending-metadata
+        // state changes only the non-boundary reading: an empty followed by the MARKER (or the end
+        // of the stream) is a record boundary no matter what is pending — that is also how a
+        // truncated phantom record (the disclosed collision) is closed without swallowing the record
+        // after it. An empty followed by anything else is DATA while the record still owes its
+        // marker or metadata — git accepts an empty author email (--author="No Email <>"), so %ae
+        // can arrive legitimately empty, and eating it as a merge prefix shifted the whole record
+        // (email←the %at digits, epochs off by one, the first path's '\n' unstripped) into a
+        // pathless phantom. Only a record that owes no metadata reads a non-boundary empty as a
+        // merge prefix. PR #433 review.
         if( field.empty() )
         {
             // One field of lookahead decides what this empty IS: the record boundary (the next field is
@@ -919,13 +938,20 @@ inline GitLogWalk forEachGitLogRecord( const std::string& root, const std::strin
                 empties     = 0;
                 havePath    = false;
                 if( haveNext ) { lookahead = std::move( next ); haveLookahead = true; }
+                continue;
+            }
+            if( wantMarker || metaLeft > 0 )
+            {
+                // DATA: park the lookahead and fall through — the empty field itself is delivered to
+                // the state machine below as the pending metadata field it is (the empty-%ae shape).
+                lookahead = std::move( next ); haveLookahead = true;
             }
             else
             {
                 ++empties;   // a merge prefix (or the record's own close): skipped, but counted
                 lookahead = std::move( next ); haveLookahead = true;
+                continue;
             }
-            continue;
         }
 
         if( wantMarker )
@@ -936,9 +962,14 @@ inline GitLogWalk forEachGitLogRecord( const std::string& root, const std::strin
         }
         if( metaLeft > 0 )
         {
-            if( metaLeft == 3 )      { cur.authorEmail  = field; }
-            else if( metaLeft == 2 ) { cur.authorTs     = parseEpochField( field ); }
-            else                     { cur.committerTs  = parseEpochField( field ); }
+            if( metaLeft == 3 ) { cur.authorEmail = field; }
+            else
+            {
+                const std::optional<std::int64_t> epoch = parseEpochField( field );
+                if( !epoch ) { ++walk.epochUnparsed; }
+                if( metaLeft == 2 ) { cur.authorTs    = epoch.value_or( 0 ); }
+                else                { cur.committerTs = epoch.value_or( 0 ); }
+            }
             --metaLeft;
             continue;
         }
@@ -2570,11 +2601,13 @@ inline std::vector<FileOwnership> gitFileAuthors(
     forEachGitLogRecord( root, extraArgs, [ & ]( const GitLogRecord& rec )
     {
         // The old line frame parsed `email|ts` out of one field and skipped the commit's files when
-        // either half was missing or the epoch did not parse. Under the NUL frame the fields arrive
-        // separately, so the same guard is an empty email or a non-positive epoch — git never stamps a
-        // real commit at or before the epoch, and a header that forged one is exactly what this frame
-        // exists to make impossible.
-        if( rec.authorEmail.empty() || rec.authorTs <= 0 )
+        // either half was missing or the epoch did not parse. Under the NUL frame the epoch half of
+        // that guard stands alone: git never stamps a real commit at or before the epoch, and a
+        // header that forged one is exactly what this frame exists to make impossible. The EMAIL half
+        // had to go — git accepts an empty author email (--author="No Email <>", PR #433 review), and
+        // the frame now delivers such a record intact, so skipping on an empty email would discard
+        // real history; the ownership key for it is honestly empty.
+        if( rec.authorTs <= 0 )
         {
             return;
         }
