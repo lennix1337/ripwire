@@ -1694,11 +1694,19 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                      + "\"" + mcpReingestField( passesAtEntry ) + mcpFreshFields( passesAtEntry )
                      + mcpEnvelopeNoteField( "_assumed_root", assumedRootNote ) + mcpEnvelopeNoteField( "_memory_stop", memoryStopNote ) + "}}";
             };
-            // #350: a refusal composed after an ingest the memory guard cut may name a false cause ("no git HEAD" for a
-            // HEAD tree that was only partly read) — so every error built after a stop carries the guard's sentence too
+            // A refusal can depend on a partial resident index even when this request did not run an ingest.
             const auto memoryStopSuffix = [ & ]( std::string_view msg ) -> std::string
             {
-                if( memguard::stopCounts().recorded.load( std::memory_order_relaxed ) <= stopsAtEntry || msg.find( "memory guard" ) != std::string_view::npos )
+                if( msg.find( "memory guard" ) != std::string_view::npos )
+                {
+                    return {};
+                }
+                const McpIndex& ix = mcpIndexSlot();
+                if( ix.valid && ix.root == path && ix.ing.memoryStop.isSet() )
+                {
+                    return "; " + memguard::softStopLine( ix.ing );
+                }
+                if( memguard::stopCounts().recorded.load( std::memory_order_relaxed ) <= stopsAtEntry )
                 {
                     return {};
                 }

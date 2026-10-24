@@ -336,6 +336,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "bodyless_defs",     "bodyless_defs=K: K of defs= have no body, so no callees to read" },
     { "unproven_defs",     "unproven_defs=K: K same-named defs not tied to that file, in no count or row (bare name shows them)" },
     { "declined_calls",    "declined_calls=K: K call sites left unbound (no evidence chose one def), in no count or row" },
+    { "declined_literal_calls", "declined_literal_calls=K: K built-in member calls on JavaScript/TypeScript literals dropped when an in-repo definition shares the member name" },
     { "cross_kind",        "cross_kind=kind:N,...: the defs= definitions differ in kind; rows union all of them (narrow with file:name)" },
     // lane recall: absent at zero, callers and impact only (graphlegend.h kDeclinedIfaceLegend).
     { "declined_iface",    "declined_iface=K: K declined TS calls sharing a name with an interface/abstract signature, by name only (MAY go through it); not a subset of declined_calls=" },
@@ -1101,8 +1102,8 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "copied", "copied=1: the PATH binary is a byte-identical copy of this one, an ok copied install", true, "c", MapHeaderRead::No, {}, "doctor" },
     { "loaded", "loaded=/expected=: grammars whose tags query compiled / grammars compiled in; a shortfall fails the row", true, "c", MapHeaderRead::No, {}, "doctor" },   // also defines expected=
     { "dir", "dir=: the per-user cache directory scanned (TMPDIR/XDG_CACHE_HOME ladder); unwritable fails the row", true, "c", MapHeaderRead::No, {}, "doctor" },
-    { "blobs", "blobs=N: ripwire cache blobs in dir=; the scan stops at 4096 (blobs_floor=1 then)", true, "c", MapHeaderRead::No, {}, "doctor" },
-    { "blobs_floor", "blobs_floor=1: the 4096-blob scan cap fired; blobs= and bytes= are FLOORS, not totals", true, "c", MapHeaderRead::No, {}, "doctor" },
+    // Define the conditional floor with its always-present count; cache churn must not change the dictionary.
+    { "blobs", "blobs=N: ripwire cache blobs in dir=; the scan stops at 4096; blobs_floor=1 when capped: blobs= and bytes= are FLOORS, not totals", true, "c", MapHeaderRead::No, {}, "doctor" },   // also defines blobs_floor=
     { "bytes", "bytes=N: total size in bytes of the blobs counted (short when truncated=1)", true, "c", MapHeaderRead::No, {}, "doctor" },
     { "many", "many=1: more than 50 blobs; an eviction-sanity flag, informational, never fails the row", true, "c", MapHeaderRead::No, {}, "doctor" },
     { "truncated", "truncated=1: cache-dir, blob scan cut (cap or I/O error); tracked-binaries, scan SKIPPED, stale=0 unmeasured", true, "c", MapHeaderRead::No, {}, "doctor" },

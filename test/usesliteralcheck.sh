@@ -35,40 +35,130 @@ has_site(){ uses_sites "$1" | grep -qxF "$2"; }
 
 # ── 1) replace: literal calls filtered out, direct + casted receiver kept, declined_literal_calls="2" ──
 REPLACE_OUT="$( "$BIN" "$CORPUS" --uses=replace --no-cache 2>/dev/null )"
-echo "$REPLACE_OUT" | grep -q 'count="2"' && ok "replace count=2" || no "replace count != 2: $REPLACE_OUT"
-echo "$REPLACE_OUT" | grep -q 'declined_literal_calls="2"' && ok "replace declined_literal_calls=2" || no "replace missing declined_literal_calls=2"
-has_site replace "call app.ts:4"  && ok "replace direct call kept @app.ts:4" || no "replace direct call missing @app.ts:4"
-has_site replace "call app.ts:16" && ok "replace casted receiver call kept @app.ts:16" || no "replace casted receiver missing @app.ts:16"
-! has_site replace "call app.ts:8" && ok "replace literal string call dropped @app.ts:8" || no "replace literal string call leaked @app.ts:8"
-! has_site replace "call app.ts:9" && ok "replace template literal call dropped @app.ts:9" || no "replace template literal call leaked @app.ts:9"
+if echo "$REPLACE_OUT" | grep -q 'count="2"'; then
+    ok "replace count=2"
+else
+    no "replace count != 2: $REPLACE_OUT"
+fi
+if echo "$REPLACE_OUT" | grep -q 'declined_literal_calls="2"'; then
+    ok "replace declined_literal_calls=2"
+else
+    no "replace missing declined_literal_calls=2"
+fi
+REPLACE_LEGEND="${REPLACE_OUT%%-->*}"
+if printf '%s' "$REPLACE_LEGEND" | grep -q 'declined_literal_calls='; then
+    ok "replace compact legend defines declined_literal_calls="
+else
+    no "replace compact legend leaves declined_literal_calls= undefined"
+fi
+if has_site replace "call app.ts:4"; then
+    ok "replace direct call kept @app.ts:4"
+else
+    no "replace direct call missing @app.ts:4"
+fi
+if has_site replace "call app.ts:16"; then
+    ok "replace casted receiver call kept @app.ts:16"
+else
+    no "replace casted receiver missing @app.ts:16"
+fi
+if ! has_site replace "call app.ts:8"; then
+    ok "replace literal string call dropped @app.ts:8"
+else
+    no "replace literal string call leaked @app.ts:8"
+fi
+if ! has_site replace "call app.ts:9"; then
+    ok "replace template literal call dropped @app.ts:9"
+else
+    no "replace template literal call leaked @app.ts:9"
+fi
 
 # ── 2) map: literal array call filtered out, direct call kept, declined_literal_calls="1" ─────────────
 MAP_OUT="$( "$BIN" "$CORPUS" --uses=map --no-cache 2>/dev/null )"
-echo "$MAP_OUT" | grep -q 'count="1"' && ok "map count=1" || no "map count != 1: $MAP_OUT"
-echo "$MAP_OUT" | grep -q 'declined_literal_calls="1"' && ok "map declined_literal_calls=1" || no "map missing declined_literal_calls=1"
-has_site map "call app.ts:5" && ok "map direct call kept @app.ts:5" || no "map direct call missing @app.ts:5"
-! has_site map "call app.ts:10" && ok "map literal array call dropped @app.ts:10" || no "map literal array call leaked @app.ts:10"
+if echo "$MAP_OUT" | grep -q 'count="1"'; then
+    ok "map count=1"
+else
+    no "map count != 1: $MAP_OUT"
+fi
+if echo "$MAP_OUT" | grep -q 'declined_literal_calls="1"'; then
+    ok "map declined_literal_calls=1"
+else
+    no "map missing declined_literal_calls=1"
+fi
+if has_site map "call app.ts:5"; then
+    ok "map direct call kept @app.ts:5"
+else
+    no "map direct call missing @app.ts:5"
+fi
+if ! has_site map "call app.ts:10"; then
+    ok "map literal array call dropped @app.ts:10"
+else
+    no "map literal array call leaked @app.ts:10"
+fi
 
 # ── 3) test: literal regex call filtered out, direct call kept, declined_literal_calls="1" ───────────
 TEST_OUT="$( "$BIN" "$CORPUS" --uses=test --no-cache 2>/dev/null )"
-echo "$TEST_OUT" | grep -q 'count="1"' && ok "test count=1" || no "test count != 1: $TEST_OUT"
-echo "$TEST_OUT" | grep -q 'declined_literal_calls="1"' && ok "test declined_literal_calls=1" || no "test missing declined_literal_calls=1"
-has_site test "call app.ts:6" && ok "test direct call kept @app.ts:6" || no "test direct call missing @app.ts:6"
-! has_site test "call app.ts:11" && ok "test literal regex call dropped @app.ts:11" || no "test literal regex call leaked @app.ts:11"
+if echo "$TEST_OUT" | grep -q 'count="1"'; then
+    ok "test count=1"
+else
+    no "test count != 1: $TEST_OUT"
+fi
+if echo "$TEST_OUT" | grep -q 'declined_literal_calls="1"'; then
+    ok "test declined_literal_calls=1"
+else
+    no "test missing declined_literal_calls=1"
+fi
+if has_site test "call app.ts:6"; then
+    ok "test direct call kept @app.ts:6"
+else
+    no "test direct call missing @app.ts:6"
+fi
+if ! has_site test "call app.ts:11"; then
+    ok "test literal regex call dropped @app.ts:11"
+else
+    no "test literal regex call leaked @app.ts:11"
+fi
 
 # ── 4) trimEnd: prototype polyfill keeps literal call row ─────────────────────────────────────────────
 TRIM_OUT="$( "$BIN" "$CORPUS" --uses=trimEnd --no-cache 2>/dev/null )"
-echo "$TRIM_OUT" | grep -q 'defs="1"' && ok "trimEnd defs=1" || no "trimEnd defs != 1: $TRIM_OUT"
-echo "$TRIM_OUT" | grep -q 'count="1"' && ok "trimEnd count=1" || no "trimEnd count != 1: $TRIM_OUT"
-has_site trimEnd "call polyfill.js:5" && ok "trimEnd polyfill call kept @polyfill.js:5" || no "trimEnd polyfill call missing @polyfill.js:5"
+if echo "$TRIM_OUT" | grep -q 'defs="1"'; then
+    ok "trimEnd defs=1"
+else
+    no "trimEnd defs != 1: $TRIM_OUT"
+fi
+if echo "$TRIM_OUT" | grep -q 'count="1"'; then
+    ok "trimEnd count=1"
+else
+    no "trimEnd count != 1: $TRIM_OUT"
+fi
+if has_site trimEnd "call polyfill.js:5"; then
+    ok "trimEnd polyfill call kept @polyfill.js:5"
+else
+    no "trimEnd polyfill call missing @polyfill.js:5"
+fi
 
 # ── 5) repeat: no in-repo definition answers with exit 0 and external="1" ────────────────────────────
 REPEAT_CODE=0
 REPEAT_OUT="$( "$BIN" "$CORPUS" --uses=repeat --no-cache 2>"$TMP/err" )" || REPEAT_CODE=$?
-[ "$REPEAT_CODE" -eq 0 ] && ok "repeat exits 0 with no in-repo definition" || no "repeat exited $REPEAT_CODE"
-echo "$REPEAT_OUT" | grep -q 'external="1"' && ok "repeat reports external=1" || no "repeat missing external=1: $REPEAT_OUT"
-echo "$REPEAT_OUT" | grep -q 'count="1"' && ok "repeat reports count=1" || no "repeat missing count=1: $REPEAT_OUT"
-has_site repeat "call app.ts:19" && ok "repeat call kept @app.ts:19" || no "repeat call missing @app.ts:19"
+if [ "$REPEAT_CODE" -eq 0 ]; then
+    ok "repeat exits 0 with no in-repo definition"
+else
+    no "repeat exited $REPEAT_CODE"
+fi
+if echo "$REPEAT_OUT" | grep -q 'external="1"'; then
+    ok "repeat reports external=1"
+else
+    no "repeat missing external=1: $REPEAT_OUT"
+fi
+if echo "$REPEAT_OUT" | grep -q 'count="1"'; then
+    ok "repeat reports count=1"
+else
+    no "repeat missing count=1: $REPEAT_OUT"
+fi
+if has_site repeat "call app.ts:19"; then
+    ok "repeat call kept @app.ts:19"
+else
+    no "repeat call missing @app.ts:19"
+fi
 
 # ── 6) determinism ────────────────────────────────────────────────────────────────────────────────────
 "$BIN" "$CORPUS" --uses=replace --no-cache >"$TMP/a" 2>/dev/null

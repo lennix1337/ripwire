@@ -555,6 +555,12 @@ echo "$CAP_ROW" | grep -q 'truncated="1"' \
     || { no "L10: over-the-cap cache-dir row DIFFERED run-to-run on a static fixture"; diff <(echo "$CAPOUT1") <(echo "$CAPOUT2"); }
 if echo "$CAPOUT1" | xmllint --noout - 2>/dev/null; then ok "L10: over-the-cap output is well-formed XML"; else no "L10: over-the-cap output malformed XML"; fi
 
+if python3 "$ROOT/test/doctor_cache_legend.py" "$BIN"; then
+    ok "L10: full and compact dictionaries stay identical across the isolated cache scan cap"
+else
+    no "L10: cache scan cap changed dictionary prose beyond the declared volatile fields"
+fi
+
 # ── (H) TWO SHAS, LABELLED: built_from= (the binary) vs at= (the tree) ──────────────────────────
 # lens2-crossverb L6 (capture-audit-2026-09-04): --version printed "git <sha>" — the commit this BINARY was
 # compiled from — while --doctor/--test-gate/--handoff printed at="<sha>", the tree's HEAD *now*. In any

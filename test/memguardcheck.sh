@@ -368,7 +368,7 @@ fi
 # (B6) MCP: a soft stop answers with the envelope disclosure, and every answer from that partial index keeps it
 printf '%s\n' \
     "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$FX\",\"pattern\":\"a_01\"}}}" \
-    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"$FX\",\"symbol\":\"a_02\"}}}" \
+    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$FX\",\"pattern\":\"a_02\"}}}" \
     | RIPWIRE_TEST_MEMGUARD=crawl:30 mcp_call "$TMP" --max-memory=64M >"$TMP/b6.out"
 ms2="$( mcp_field "$TMP/b6.out" 2 _memory_stop )"; ms3="$( mcp_field "$TMP/b6.out" 3 _memory_stop )"
 case "$ms2" in *"memory guard"*crawl*64M*) ok "(B6) MCP grep under a crawl stop carries _memory_stop";; *) no "(B6) id=2 _memory_stop='${ms2:0:200}' resp: $( head -c 300 "$TMP/b6.out" )";; esac
@@ -379,6 +379,13 @@ if grep -q '_memory_stop' "$TMP/b6c.out"; then
     no "(B6c) a normal MCP answer carries _memory_stop"
 else
     ok "(B6c) a normal MCP answer carries no _memory_stop"
+fi
+
+# A symbol miss has an error envelope, not a success result; it must retain the partial-index cause too.
+if python3 "$ROOT/test/memory_partial_refusal.py" "$BIN"; then
+    ok "(B6d) resident partial-index misses disclose the guard without contaminating another complete root"
+else
+    no "(B6d) a resident partial-index refusal lost its memory disclosure or leaked it across roots"
 fi
 
 # (B7) MCP: over the hard limit a tool call is refused by name, and the server stays up

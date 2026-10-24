@@ -1279,19 +1279,16 @@ fi
 #       name), not an invocation.
 #   docs/docs_commands_build.py:627,642 — generates prose ABOUT `git log` as an example of ambient
 #       non-document output for docs/COMMANDS.md; it never invokes git.
-#   docs/captures/COMMANDS_showcase_2026-10-08.md:542,557 — PROSE inside the recorded `--recall` run over the scratch
-#       knowledge-base dir (the "dumped tool output" pattern quoting its own docs: "a `git log`, an API response dump...",
-#       "the `git log`, the `--help` text and the JSON access log are not in the population"). Nothing walks git history
-#       there. The scanner reads it as a shell recipe only because the PRECEDING recorded block ends inside a truncated
-#       "```bash" fence and arm 9's fence tracker does not know that the five-backtick capture fence that closes the block
-#       is not its closing fence (it sees a three-backtick line only), so the next block is read as recipe text. Which
-#       section the recall picks depends on the generated docs/COMMANDS.md, so this is exempted by the two lines' content
-#       hash (a re-captured line that changes at all drops back into the sweep); a regenerated capture under a new date
-#       re-keys these two entries. Added 2026-10-08 (lane/lean-answers-068 fix round 2); the tracker gap is a named
-#       deferral (harmless: it can only over-scan recorded output, never miss a recipe).
-#   docs/captures/COMMANDS_showcase_2026-10-11.md:580,595 — the same two prose lines, byte for byte (same content hashes), in the
-#       train 27 re-capture: the recorded --recall run again follows a block that ends inside a truncated "```bash" fence. Re-keyed
-#       under the new date, as the entry above says a regenerated capture does.
+#
+# FENCES, not exemptions, keep the docs/captures recorded output out of the sweep. A capture wraps each recorded block in a
+# five-backtick fence, and a recorded block can end inside a TRUNCATED three-backtick shell opener (the `--recall` runs quote
+# a help-wanted prompt cut mid-recipe, then print prose about "a `git log`, an API response dump"). The tracker used to know
+# only three-backtick fences, so it took the five-backtick close for a stray line, stayed in the truncated recipe and read the
+# next block's prose as shell. test/lib/historywalkscan.py now follows the CommonMark delimiter rule (a fence closes only on a
+# bare run of the SAME character at least as long as its opener; everything else inside is content), and the self-test below
+# the verdict proves it on a five-backtick wrapper around a nested shell opener, on three- and four-backtick and tilde recipes
+# that must stay scanned, and on a short close that must not escape its wrapper. The 2026-10-08 and 2026-10-11 per-hash
+# entries this gap once needed are gone: no capture, present or future, needs one for this reason.
 ARM9_OK='bench/cppbench/run_cppbench.py:e5d3f485c59b0187
 bench/cppbench/run_cppbench.py:7e89ac16d50cd5d2
 bench/cppbench/run_cppbench.py:5d65fe73e9406e01
@@ -1302,69 +1299,8 @@ bench/roundc-h2h/derive_questions.py:3c59a07f84c2b48d
 bench/shotgun/cochange_history.py:eb47c55f978cf817
 bench/substitution_report.py:c3043030dc3e5473
 docs/docs_commands_build.py:fa972c42dc369a5c
-docs/docs_commands_build.py:f10f0b8021b7b6c2
-docs/captures/COMMANDS_showcase_2026-10-08.md:118fbfbb8f6823fe
-docs/captures/COMMANDS_showcase_2026-10-08.md:22be6025a57af773
-docs/captures/COMMANDS_showcase_2026-10-11.md:118fbfbb8f6823fe
-docs/captures/COMMANDS_showcase_2026-10-11.md:22be6025a57af773'
-python3 - "$TMP/tracked.z" "$ARM9_OK" > "$TMP/arm9" <<'PY'
-import hashlib, os, re, sys
-paths = [p.decode('utf-8', 'surrogateescape')
-         for p in open(sys.argv[1], 'rb').read().split(b'\0') if p]
-okSet = {l.strip() for l in sys.argv[2].splitlines() if l.strip()}
-SCOPE_RE = re.compile(r'^(bench/|docs/|scripts/|test/lib/)')
-SELF = 'test/ripwirepubliccheck.sh'
-GIT_LOGREV = re.compile(r'git[^|&;\n]{0,40}\b(log|rev-list|for-each-ref)\b')
-# CASE-SENSITIVE on purpose: under re.IGNORECASE `\bHEAD\b` matched the `| head -n 50` a shell recipe pipes
-# into, and an unpinned `git log --format=%H | head -n 50` read as pinned. Each accepted spelling is listed.
-PIN_SIGNAL = re.compile(r'\bHEAD\b|--ref\b|\b(?:ref|REF)\b|\bPIN\b|\b[0-9a-fA-F]{7,40}\b|\bv[0-9]+\.[0-9]+(?:\.[0-9]+)?\b')
-ALL_TOKEN = re.compile(r'--all\b|--branches\b|--remotes\b')
-FENCE_OPEN = re.compile(r'^```(bash|sh|shell|zsh)\s*$')
-FENCE_CLOSE = re.compile(r'^```\s*$')
-for p in paths:
-    if p == SELF or not SCOPE_RE.match(p):
-        continue
-    ext = os.path.splitext(p)[1]
-    if ext not in ('.py', '.sh', '.md'):
-        continue
-    try:
-        data = open(p, 'rb').read()
-    except OSError as e:
-        print(f'{p}: tracked in-scope file could not be read ({e.strerror}) — arm 9 did not scan it')
-        continue
-    if b'\0' in data:
-        continue   # binary, skip
-    lines = data.decode('utf-8', 'replace').split('\n')
-    inFence = False
-    for lineIndex, line in enumerate(lines):
-        i = lineIndex + 1
-        stripped = line.strip()
-        if ext == '.md':
-            if not inFence and FENCE_OPEN.match(stripped):
-                inFence = True; continue
-            if inFence and FENCE_CLOSE.match(stripped):
-                inFence = False; continue
-            if not inFence:
-                continue
-        if stripped.startswith('#'):
-            continue
-        m = GIT_LOGREV.search(line)
-        if not m:
-            continue
-        # test the PIN/--all signals against the line with the matched invocation text masked out —
-        # `for-each-ref`'s own command name contains a `\bref\b`-shaped substring, which otherwise
-        # satisfies PIN_SIGNAL by itself and makes every for-each-ref call read as pre-pinned,
-        # including the unpinned `for-each-ref ... | git log` shape arm 9 exists to catch
-        rest = line[:m.start()] + line[m.end():]
-        if not (ALL_TOKEN.search(rest) or not PIN_SIGNAL.search(rest)):
-            continue   # a ref-shaped token is on this line — the floor calls it pinned
-        # keyed by CONTENT, not by line number: an edit anywhere else in the file must not move this
-        # exemption off its target, and a real edit to this exact line must drop it back into the sweep
-        contentHash = hashlib.sha256(line.encode('utf-8', 'surrogateescape')).hexdigest()[:16]
-        if f'{p}:{contentHash}' in okSet:
-            continue   # allowlisted — this exact line's content is unchanged from the reviewed hit
-        print(f'{p}:{i}: unpinned {m.group(0)!r} — {line.strip()[:140]}')
-PY
+docs/docs_commands_build.py:f10f0b8021b7b6c2'
+python3 "$ROOT/test/lib/historywalkscan.py" "$TMP/tracked.z" "$ARM9_OK" > "$TMP/arm9"
 arm9rc=$?
 if [ "$arm9rc" -ne 0 ]; then
     # an empty report from a scanner that crashed is not a clean sweep
@@ -1375,6 +1311,92 @@ elif [ -s "$TMP/arm9" ]; then
     sed 's/^/          /' "$TMP/arm9"
 else
     ok "arm 9 — every tracked measurement script's history walk is ref-pinned or allowlisted"
+fi
+
+# ── arm 9 self-test: the markdown fence tracker, run on throwaway fixtures ─────────────────────────
+# The sweep above is only as honest as its fence tracker, and a tracker that wrongly reads prose as a recipe (or a recipe
+# as prose) is invisible in a clean tree. So the same scanner is run over files built here, each case named by its path:
+# a five-backtick capture wrapper around a truncated nested shell opener must hide the prose after it (the false positive
+# this self-test was written for), while real recipes in three-backtick, four-backtick and tilde fences must still be
+# found, a shorter or other-character close must not end a wrapper early, and a comment line and a pinned walk stay clean.
+# The per-path content-hash exemption is exercised too: it must silence its own line and no identical line elsewhere.
+# A self-test that CRASHED (traceback on stderr, nothing on stdout) is not a self-test that found nothing wrong: the
+# verdict reads the interpreter's exit status and stderr as well as stdout. arm9_selftest_verdict <rc> <stdout> <stderr>
+# prints the diagnostics and returns 1 when the run must be judged FAIL, so the control below can drive the same code.
+arm9_selftest_verdict(){
+    local rc="$1" out="$2" err="$3" bad=0
+    if [ "$rc" -ne 0 ]; then
+        printf 'the self-test interpreter exited %s:\n' "$rc"; bad=1
+    fi
+    if [ -s "$err" ]; then
+        printf 'the self-test wrote to stderr:\n'; cat "$err"; bad=1
+    fi
+    if [ -s "$out" ]; then
+        cat "$out"; bad=1
+    fi
+    [ "$bad" = 0 ]
+}
+python3 - "$ROOT/test/lib/historywalkscan.py" > "$TMP/arm9self" 2> "$TMP/arm9self.err" <<'PY'
+import hashlib, os, subprocess, sys, tempfile
+scanner = sys.argv[1]
+WALK = 'git log --format=%H'
+files = {
+    # the observed false positive: a capture wrapper ending a block inside a truncated nested opener, then more prose
+    'docs/captures/wrapper5.md': ['## recorded', '', '`````', 'recorded prompt', '```bash', f'{WALK} --all', '… [159 more lines]',
+                                  '`````', '', f'prose about "a `git log`, an API response dump" and `{WALK}`', '',
+                                  '`````', 'recorded output', '`````'],
+    'docs/shell3.md': ['```bash', WALK, '```'],
+    'docs/shell4.md': ['````bash', '```', WALK, '````'],
+    'docs/tilde.md': ['~~~bash', '```', WALK, '~~~', 'prose', f'`{WALK}`'],
+    # shorter / other-character closes stay inside the five-backtick wrapper; the recipe after the real close is found
+    'docs/shortclose.md': ['`````', '```', '````', '~~~~~', WALK, '`````', '```bash', WALK, '```'],
+    'docs/commented.md': ['```bash', f'# {WALK} --all', 'git log v1.2.3 --format=%H', '```'],
+    'docs/exempt.md': ['```sh', 'git rev-list --branches', '```'],
+    'docs/notexempt.md': ['```sh', 'git rev-list --branches', '```'],
+}
+expected = ['docs/notexempt.md:2', 'docs/shell3.md:2', 'docs/shell4.md:3', 'docs/shortclose.md:8', 'docs/tilde.md:3']
+exemptKey = 'docs/exempt.md:' + hashlib.sha256(b'git rev-list --branches').hexdigest()[:16]
+with tempfile.TemporaryDirectory() as root:
+    for path, body in files.items():
+        os.makedirs(os.path.dirname(os.path.join(root, path)), exist_ok=True)
+        with open(os.path.join(root, path), 'wb') as f:
+            f.write(('\n'.join(body) + '\n').encode('utf-8'))
+    with open(os.path.join(root, 'tracked.z'), 'wb') as f:
+        f.write(b''.join(p.encode() + b'\0' for p in sorted(files)))
+    run = subprocess.run([sys.executable, scanner, 'tracked.z', exemptKey], cwd=root, capture_output=True, text=True)
+    if run.returncode != 0:
+        print(f'the scanner exited {run.returncode} on the fixtures: {run.stderr.strip()[:300]}')
+        sys.exit(0)
+    got = sorted(':'.join(l.split(':', 2)[:2]) for l in run.stdout.splitlines())
+    if got != expected:
+        print('fence tracker disagrees with the fixtures')
+        print('  expected (path:line): ' + ', '.join(expected))
+        print('  got:                  ' + ', '.join(got))
+PY
+arm9selfrc=$?
+if arm9_selftest_verdict "$arm9selfrc" "$TMP/arm9self" "$TMP/arm9self.err" > "$TMP/arm9selfverdict" 2>&1; then
+    ok "arm 9 self-test — a five-backtick wrapper hides its nested shell opener; three/four-backtick and tilde recipes are still scanned"
+else
+    no "arm 9 self-test — the markdown fence tracker misreads its fixtures or the self-test itself failed:"
+    sed 's/^/          /' "$TMP/arm9selfverdict"
+fi
+# CONTROL: the verdict must refuse each way the self-test can fail without printing a disagreement — an exception
+# (nonzero exit, stderr only, empty stdout), a nonzero exit with nothing written anywhere, and a clean exit that wrote
+# only to stderr — and must accept a silent clean run. The crash is a real interpreter run, not a hand-set status.
+ctlBad=""
+: > "$TMP/ctl.empty"
+python3 -c 'raise RuntimeError("injected self-test crash")' > "$TMP/ctl.out" 2> "$TMP/ctl.err"; ctlRc=$?
+if [ "$ctlRc" -eq 0 ] || [ -s "$TMP/ctl.out" ] || [ ! -s "$TMP/ctl.err" ]; then
+    ctlBad="$ctlBad the injected crash did not fail with stderr only;"
+fi
+arm9_selftest_verdict "$ctlRc" "$TMP/ctl.out" "$TMP/ctl.err" > /dev/null 2>&1 && ctlBad="$ctlBad a crash with empty stdout passed;"
+arm9_selftest_verdict 3 "$TMP/ctl.empty" "$TMP/ctl.empty" > /dev/null 2>&1 && ctlBad="$ctlBad a silent nonzero exit passed;"
+arm9_selftest_verdict 0 "$TMP/ctl.empty" "$TMP/ctl.err" > /dev/null 2>&1 && ctlBad="$ctlBad a stderr-only clean exit passed;"
+arm9_selftest_verdict 0 "$TMP/ctl.empty" "$TMP/ctl.empty" > /dev/null 2>&1 || ctlBad="$ctlBad a silent clean run was refused;"
+if [ -n "$ctlBad" ]; then
+    no "arm 9 self-test control — the self-test verdict is not crash-proof:$ctlBad"
+else
+    ok "arm 9 self-test control — a crashed, stderr-only or nonzero self-test cannot read as PASS"
 fi
 
 printf 'ripwirepubliccheck: %s tracked file(s) swept\n' "$tracked"
