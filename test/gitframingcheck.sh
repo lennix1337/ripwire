@@ -341,7 +341,7 @@ sym_p=$( tr '>' '\n' < "$TMP/owners-sym.xml" | grep -oE '<f p="[^"]*"' | head -1
 echo "arm f: an empty %ae is metadata — the file keeps its attribution"
 mkdir -p "$E"
 git -C "$E" init -q -b main
-ID Cm cm@x.invalid Cm cm@x.invalid; D 2026-06-14T12:00:00
+ID Cm cm@x.com Cm cm@x.com; D 2026-06-14T12:00:00
 mkfn emptyMailFn > "$E/plain.cpp"
 git -C "$E" add -A >/dev/null
 git -C "$E" commit -qm "e1: empty-email author" --author="No Email <>" >/dev/null
