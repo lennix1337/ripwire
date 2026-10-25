@@ -16,9 +16,23 @@ no(){ echo "  FAIL  $1"; fail=1; }
 # inside JSON on stdin, and GNU stat reports an emulated mode instead of the real DACL.
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) win32=1 ;; *) win32=0 ;; esac
 native_path(){ if [ "$win32" = 1 ]; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
+# The DACL helper needs a native Windows Python: Cygwin's own python reports sys.platform "cygwin".
+WINPY=""
+if [ "$win32" = 1 ]; then
+    for candidate in python py python3; do
+        if command -v "$candidate" >/dev/null 2>&1 \
+            && "$candidate" -c 'import sys; sys.exit(sys.platform != "win32")' 2>/dev/null; then
+            WINPY="$candidate"; break
+        fi
+    done
+fi
+winpy(){
+    if [ -z "$WINPY" ]; then echo "no native Windows Python (python, py or python3 with sys.platform win32) on PATH"; return 1; fi
+    "$WINPY" "$( native_path "$ROOT/test/cache_ladder_windows.py" )" "$@"
+}
 check_private_mode(){
     if [ "$win32" = 1 ]; then
-        if sddl="$( python "$ROOT/test/cache_ladder_windows.py" --owner-only "$( native_path "$1" )" )"; then
+        if sddl="$( winpy --owner-only "$( native_path "$1" )" )"; then
             ok "private directory DACL is owner-only ($sddl)"
         else
             no "private directory DACL is not owner-only: $sddl"
@@ -62,7 +76,7 @@ if [ -f "$SHARED/not-ripwire" ]; then ok "unrelated TMPDIR content remains untou
 
 # The Win32 DACL repair is observable without a noisy wall-clock threshold.
 if [ "$win32" = 1 ]; then
-    if python "$ROOT/test/cache_ladder_windows.py" "$BIN"; then
+    if winpy "$( native_path "$BIN" )"; then
         ok "native Windows ACL repair, warm no-rewrite, and junction refusal"
     else
         no "native Windows cache ACL regression"

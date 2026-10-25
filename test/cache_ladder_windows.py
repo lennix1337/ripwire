@@ -71,19 +71,30 @@ def dacl_sddl(path):
         kernel.LocalFree(descriptor)
 
 
-OWNER_CLASS_TRUSTEES = {"OW", "BA", "SY"}
+# isOwnerClassSid in os_win32.cpp: OWNER RIGHTS, CREATOR OWNER, Administrators, SYSTEM and this user.
+OWNER_CLASS_TRUSTEES = {"OW", "CO", "BA", "SY"}
+
+
+def current_user_sid():
+    result = subprocess.run(["whoami.exe", "/user", "/fo", "csv", "/nh"],
+                            capture_output=True, text=True, check=True, timeout=30)
+    return result.stdout.strip().split(",")[-1].strip('"')
 
 
 def owner_only(path):
-    """Windows counterpart of mode 0700: protected DACL whose allowed ACEs name only
-    owner-class principals, the same rule os_win32.cpp readOwnerAndMode applies."""
+    """Windows counterpart of mode 0700: protected DACL whose allow ACEs name only
+    owner-class principals, the same rule os_win32.cpp readOwnerAndMode applies
+    (deny ACEs only take access away, so they never make a DACL less private)."""
     sddl = dacl_sddl(path)
     dacl = sddl[sddl.index("D:"):] if "D:" in sddl else ""
     if not dacl.startswith("D:P"):
         return False, sddl
+    trustees = OWNER_CLASS_TRUSTEES | {current_user_sid()}
     for ace in re.findall(r"\(([^)]*)\)", dacl):
         fields = ace.split(";")
-        if fields[0] != "A" or fields[-1] not in OWNER_CLASS_TRUSTEES:
+        if fields[0] == "D":
+            continue
+        if fields[0] != "A" or fields[-1] not in trustees:
             return False, sddl
     return True, sddl
 
@@ -139,8 +150,9 @@ class CacheLadderWindows(unittest.TestCase):
     def test_junction_cache_is_refused_without_touching_target(self):
         target = self.root / "target"
         target.mkdir()
-        subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(self.cache), str(target)],
-                       capture_output=True, text=True, check=True, timeout=30)
+        # No command shell: a temp path holding cmd.exe metacharacters (&, ^) stays one argument.
+        import _winapi  # Windows-only CPython module; the platform guard runs before the tests
+        _winapi.CreateJunction(str(target), str(self.cache))
         self.addCleanup(self.cache.rmdir)
         before = (change_time(target), dacl_sddl(target))
         result = self.query()
