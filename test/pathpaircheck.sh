@@ -28,6 +28,8 @@
 #   (L) the full legend carries the pairs clause exactly when pairs print; answers parse as XML (xmllint when present).
 #   (T) one site, two definitions: JS `compile: function compile` is the property and the function expression on ONE line — one
 #       pair, today's bytes (no pairs_reaching=, no <pair>); rv-trace-ep F1 printed two byte-identical pairs, pairs_reaching=2.
+#   (V) minified same-line SIBLINGS `class A{render(){}}class B{render(){}}` (disjoint spans) are TWO sites: pairs_reaching=2, two
+#       <pair>s; only NESTED same-line twins (T) fold (rv-delta-38 F1-b: the fold keyed on file+line+name folded these into one).
 #   (U) 17 to= definition groups (past the 16 walked): the one chain stays, DISCLOSED — pairs_unlisted="17" + next= + the legend
 #       clause, and no pairs_reaching=; a 16-group control lists its pairs (no pairs_unlisted=).
 #   (M) MCP path_between prints the CLI's <pair>/<alt>/<s> rows on A, B, C, J.
@@ -46,7 +48,7 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
 
-mkdir -p "$TMP/site" "$TMP/capd" "$TMP/capok" "$TMP/wide" "$TMP/two" "$TMP/hedge" "$TMP/many" "$TMP/one" "$TMP/none" "$TMP/join"
+mkdir -p "$TMP/min" "$TMP/site" "$TMP/capd" "$TMP/capok" "$TMP/wide" "$TMP/two" "$TMP/hedge" "$TMP/many" "$TMP/one" "$TMP/none" "$TMP/join"
 cat > "$TMP/two/m.go" <<'EOF'
 package m
 
@@ -85,6 +87,13 @@ cat > "$TMP/site/c.js" <<'EOF'
 const a = require('./a');
 function start(x) { return a.compile(x); }
 EOF
+cat > "$TMP/min/m.js" <<'EOF'
+class A{render(){return 1}}class B{render(){return 2}}
+function viaA(a){return a.render()}
+function viaB(b){return b.render()}
+function start(){const a=new A();const b=new B();viaA(a);viaB(b);a.render();b.render()}
+module.exports={A,B,start}
+EOF
 python3 - "$TMP" <<'PY'
 import sys
 t = sys.argv[1]
@@ -100,7 +109,7 @@ PY
 run(){ ( cd "$TMP/$1" || exit 1; "$BIN" "$TMP/$1" --no-cache "--path=$2" "${@:3}" </dev/null ); }
 run two  Run,leaf     > "$TMP/A.out"; run hedge go,target > "$TMP/B.out"; run many go,target > "$TMP/C.out"
 run one  go,target    > "$TMP/D.out"; run none  go,target > "$TMP/E.out"; run join go,target > "$TMP/J.out"
-run site start,compile > "$TMP/T.out"; run capd start,target > "$TMP/U.out"; run capok start,target > "$TMP/UK.out"
+run min start,render > "$TMP/V.out"; run site start,compile > "$TMP/T.out"; run capd start,target > "$TMP/U.out"; run capok start,target > "$TMP/UK.out"
 run many 'g*,target'  > "$TMP/G.out"; run wide go,target > "$TMP/W.out"
 
 python3 - "$TMP" "$BIN" <<'PY'
@@ -150,6 +159,9 @@ check( "G", "pairs_reaching" not in g and root( g ).get( "reachable" ) == "1", "
 t = rd( "T" ); rt = root( t )
 check( "T", "pairs_reaching" not in rt and "<pair" not in t and rt.get( "reachable" ) == "1" and rt.get( "to_defs" ) == "2",
        "one JS site = one pair, today's bytes: %r" % { k: rt.get( k ) for k in ( "pairs_reaching", "to_defs", "reachable" ) } )
+v = rd( "V" ); rv = root( v )
+check( "V", rv.get( "pairs_reaching" ) == "2" and len( pairs( v ) ) == 2 and rv.get( "to_defs" ) == "2",
+       "minified same-line siblings stay two pairs: %r" % { k: rv.get( k ) for k in ( "pairs_reaching", "to_defs", "reachable" ) } )
 u = rd( "U" ); ru = root( u )
 check( "U", ru.get( "pairs_unlisted" ) == "17" and "pairs_reaching" not in ru and "<pair" not in u and ru.get( "reachable" ) == "1" and ru.get( "next", "" ).startswith( "--path=" ),
        "17 to= groups: the one chain, disclosed with pairs_unlisted= + next=: %r" % { k: ru.get( k ) for k in ( "pairs_unlisted", "pairs_reaching", "next", "to_defs" ) } )
@@ -186,7 +198,7 @@ else
     no "(L) the pairs_unlisted clause rides wrongly"
 fi
 if command -v xmllint >/dev/null 2>&1; then
-    xb=0; for k in A B C J CL T U UL; do xmllint --noout "$TMP/$k.out" 2>/dev/null || { xb=1; echo "    $k.out is not well-formed"; }; done
+    xb=0; for k in A B C J CL T V U UL; do xmllint --noout "$TMP/$k.out" 2>/dev/null || { xb=1; echo "    $k.out is not well-formed"; }; done
     if [ $xb -eq 0 ]; then ok "(L) A B C J and the full-legend answer parse as XML"; else no "(L) malformed answer"; fi
 else
     echo "  SKIP  (L) xmllint absent"

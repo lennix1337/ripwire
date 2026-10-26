@@ -155,10 +155,27 @@ inline void pathPairReverseWalk( const Graph& g, std::span<const NodeId> dstMemb
 // Two definitions of one name on one line of one file (JS `compile: function compile()`: the property and the function
 // expression it binds) are one site to a reader: as separate groups their pairs print byte-identical rows and inflate
 // pairs_reaching=. Fold such groups into the first one (rv-trace-ep F1); the C-family decl+def tie stays defGroupsOf's.
+// The twins are NESTED (the property's span holds the function expression's); minified same-line SIBLINGS
+// `class A{render(){}}class B{render(){}}` have disjoint spans and stay two (rv-delta-38 F1-b). A symbol with no span
+// falls back to the same scope.
+inline bool pathPairSiteTwins( const Symbol& a, const Symbol& b ) noexcept
+{
+    if( a.fileId != b.fileId || a.line != b.line || a.name != b.name )
+    {
+        return false;
+    }
+    if( a.endByte <= a.sigStartByte || b.endByte <= b.sigStartByte )
+    {
+        return a.scope == b.scope;
+    }
+    const auto holds = []( const Symbol& o, const Symbol& i ) noexcept { return o.sigStartByte <= i.sigStartByte && i.endByte <= o.endByte; };
+    return holds( a, b ) || holds( b, a );
+}
 inline void pathPairFoldSiteTwins( const IngestResult& ing, DefGroups& gr )
 {
     std::vector<std::uint32_t> canon( gr.size() );
     std::vector<NodeId>        rep;
+    std::vector<std::size_t>   kept;   // per surviving group: the old group index it was (the side vectors follow it)
     for( std::size_t a = 0; a < gr.size(); ++a )
     {
         const Symbol& sa = ing.symbols[ gr.rep[a] ];
@@ -166,7 +183,7 @@ inline void pathPairFoldSiteTwins( const IngestResult& ing, DefGroups& gr )
         for( std::size_t b = 0; b < rep.size(); ++b )
         {
             const Symbol& sb = ing.symbols[ rep[b] ];
-            if( sa.fileId == sb.fileId && sa.line == sb.line && sa.name == sb.name )
+            if( pathPairSiteTwins( sa, sb ) )
             {
                 canon[a] = std::uint32_t( b );
                 break;
@@ -175,6 +192,7 @@ inline void pathPairFoldSiteTwins( const IngestResult& ing, DefGroups& gr )
         if( canon[a] == rep.size() )
         {
             rep.push_back( gr.rep[a] );
+            kept.push_back( a );
         }
     }
     if( rep.size() == gr.size() )
@@ -185,7 +203,21 @@ inline void pathPairFoldSiteTwins( const IngestResult& ing, DefGroups& gr )
     {
         m = canon[m];
     }
-    gr.rep = std::move( rep );   // pathReachingPairs reads only ofMatch and size()
+    // The survivor keeps its own flags (a folded twin is the same site); every side vector shrinks to the new group count.
+    const auto pick = [ & ]( std::vector<char>& v )
+    {
+        std::vector<char> out( kept.size() );
+        for( std::size_t i = 0; i < kept.size(); ++i )
+        {
+            out[i] = v[ kept[i] ];
+        }
+        v = std::move( out );
+    };
+    pick( gr.bodyless );
+    pick( gr.primaryOfSpec );
+    pick( gr.untied );
+    gr.rep = std::move( rep );
+    DASSERT( gr.bodyless.size() == gr.size() && gr.primaryOfSpec.size() == gr.size() && gr.untied.size() == gr.size(), "side vectors match the folded group count" );
 }
 
 // The reaching pairs of a reached --path answer, or none (inactive) when the answer keeps today's bytes. `today` is
