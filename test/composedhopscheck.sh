@@ -27,6 +27,9 @@
 #   (B1) a NARROW declined crossing (2 candidates) composes: declined + container + slot = crossings="3".
 #   (B2) a WIDE declined crossing (5 candidates) does not compose: the same 3-crossing pair has no bridge, while its 2-crossing
 #        prefix keeps one (the width, not the fixture, decides).
+#   (B3) the same width rule on a THIRD crossing: slot + slot + a container of 4 composes (crossings="3"), of 5 stays a gap.
+#   (P1) a called PARAMETER binds per call site (run( cb ) { cb(); }): a caller passing another function or NULL is no
+#        bridge into h0 and no hedged tail; the passer keeps its value crossing.
 #   (N1) namesake: two files each with a static `run` over its own table — ha's ring counts only its own run and caller,
 #        and the other file's main is no bridge into ha.
 #   (J1) JSON twin of a d=3 row; (M1) MCP impact twin; (L1) legends name the composition and parse as XML.
@@ -171,6 +174,27 @@ mkdir -p "$TMP/param"
     echo 'void cnull( void ) { run( NULL ); }'
     echo 'void topnull( void ) { cnull(); }'
 } > "$TMP/param/cb.c"
+# third crossing: slot + slot + a container called by index holding N functions (N=4 composes, N=5 stays a gap)
+for n in 4 5; do
+    mkdir -p "$TMP/third$n"
+    {
+        echo 'typedef void (*handler)( void );'
+        echo 'struct s1 { void (*go)( void ); };'
+        echo 'struct s2 { void (*run)( void ); };'
+        echo 'const struct s1 *g1( void );'
+        echo 'const struct s2 *g2( void );'
+        echo 'void dst( void ) { }'
+        i=1; while [ "$i" -lt "$n" ]; do printf 'void o%d( void ) { }\n' "$i"; i=$(( i + 1 )); done
+        printf 'static handler steps[] = { dst'
+        i=1; while [ "$i" -lt "$n" ]; do printf ', o%d' "$i"; i=$(( i + 1 )); done
+        echo ' };'
+        echo 'void cc( void ) { int i = 0; steps[i](); }'
+        echo 'const struct s2 S2 = { .run = cc };'
+        echo 'void bb( void ) { const struct s2 *x = g2(); x->run(); }'
+        echo 'const struct s1 S1 = { .go = bb };'
+        echo 'void aa( void ) { const struct s1 *x = g1(); x->go(); }'
+    } > "$TMP/third$n/t.c"
+done
 # namesake: two files, each a static run over its own table
 cat > "$TMP/ns/a.c" <<'EOF'
 typedef void (*handler)( void );
@@ -291,6 +315,12 @@ check( "(P1) the passer's chain keeps its value crossing: top0 -> c0 -> h0 via=\
 t, r = impact( tmp + "/param", "h0" )
 check( "(P1) --impact=h0: an argument is not a container hop, so run and its callers are no hedged tail (reaches_hedged absent; 9 before the fix)",
        t is not None and attr( r, "reaches_hedged" ) is None, r )
+t, r = path( tmp + "/third4", "aa", "dst" ); b3 = bridge( t )
+check( "(B3) slot + slot + a container of 4 as the THIRD crossing composes: crossings=\"3\", cands=\"4\"",
+       attr( b3, "crossings" ) == "3" and 'n="dst" p="t.c:6" via="container" cands="4"' in b3, b3 + " " + r )
+t, r = path( tmp + "/third5", "aa", "dst" ); b3w = bridge( t )
+check( "(B3) the same chain with a container of 5 as the third crossing: no bridge, reachable stays 0 (a wide third crossing stays a gap)",
+       t is not None and b3w == "" and attr( r, "reachable" ) == "0", b3w + " " + r )
 
 # ── N: no chain through an unrelated namesake ──────────────────────────────────────────────────────────────────────
 t, r = impact( tmp + "/ns", "ha" )
