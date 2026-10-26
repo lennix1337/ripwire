@@ -819,6 +819,12 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // path: src/verbs_navigate.h (the <path> root emit)
     { "from_p", "from_p=/to_p=: the definitions from= and to= were bound to", false, "path", MapHeaderRead::No, {}, "path" },   // also defines to_p=
     { "from_defs", "from_defs=/to_defs=: definitions of each name, all searched; above 1, qualify file:name", false, "path", MapHeaderRead::No, {}, "path" },   // also defines to_defs=
+    // TRACE-EP (src/pathpairs.h kPathPairsLegend), present only when several definition pairs reach: <pair> chains and <alt> rows
+    { "pairs_reaching", "pairs_reaching=N: N from=/to= definition pairs reach (call chains, then a hedged bridge per to= definition no chain reaches); the root's from_p=/to_p=/hops= are the first pair's", false, "path", MapHeaderRead::No, {}, "path" },
+    { "alt", "alt=N: N more reaching pairs, each an <alt> row; next= runs the first", false, "path", MapHeaderRead::No, {}, "path" },
+    { "hedged", "pair/alt from_p= to_p= hops= hedged=: one reaching pair, fewest hedged hops first (0 = all proven), then fewest hops; hedged= its via=/prov=split/anchor=missing rows (a bridge: crossings plus via=name), above 0 NOT proven and to_p= not bound", true, {}, MapHeaderRead::No, {}, "path" },
+    { "joins", "pair joins=J: from its last row the chain is pair J's, rows not repeated", true, "pair", MapHeaderRead::No, {}, "path" },
+    { "bridge", "pair bridge=1: a hedged bridge, NOT a path", true, "pair", MapHeaderRead::No, {}, "path" },
     // PATH-GAP (src/pathgaps.h kPathGapsLegend), present only on a reachable=0 answer whose search met a gap. Each says what it does NOT
     // mean in the same breath (checklist 3): not proof of no path, a row is never a hop, and which calls are not counted.
     { "searched", "searched=N: reachable=0, but the search from from= (N symbols over resolved call edges) is INCOMPLETE: not proof of no path", false, "path", MapHeaderRead::No, {}, "path" },

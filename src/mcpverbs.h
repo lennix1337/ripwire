@@ -42,6 +42,7 @@
 #include "fielduses.h"     // the member-variable round: the ONE --uses=Owner.field renderer (renderFieldUses — CLI ≡ MCP)
 #include "testmap.h"       // lane/t10-mcp-coverage: writeAffectedReport — the shared --affected / `affected` verb renderer
 #include "pathgaps.h"      // PATH-GAP: the shared gap analysis + clause of --path / path_between
+#include "pathpairs.h"     // TRACE-EP: the reaching definition pairs of --path / path_between
 
 #include <filesystem>      // §B6 M3: the shared root-path existence/directory check (mcpRootRefusal below)
 #include <optional>        // mcpAnswerText / usesText: nullopt is an answer buffer that failed, never an empty answer
@@ -3700,13 +3701,6 @@ inline McpAffectedResult affectedText( const std::string& root, std::string_view
     return { mcpAnswerText( stream ), false, {}, false };
 }
 
-inline std::string pathKindLegend( const Graph& g, std::span<const NodeId> path )
-{
-    return std::string( viaNameLegend( pathHasNameOnlyHop( g, path ) ) )
-         + viaLinkLegend( pathHasNameOnlyHop( g, path, kEdgeLink ) )
-         + anchorMissLegend( pathHasNameOnlyHop( g, path, 0 ) );
-}
-
 // `path` verb: the shortest directed CALL path from `from` to `to` (does A reach B, and how?). Reuses
 // resolveFocus + shortestPath, exactly as the CLI --path=A,B. Returns the <path>…</path> XML fragment (with
 // reachable="0" hops="0" and no <s> children when B is NOT reachable from A — a valid answer, not an error),
@@ -3734,8 +3728,6 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     }
 
     const std::vector<NodeId> pth     = shortestPathAny( g, srcDefs, dstDefs );
-    const NodeId              srcUsed = pth.empty() ? srcDefs.front() : pth.front();
-    const NodeId              dstUsed = pth.empty() ? dstDefs.front() : pth.back();
 
     std::vector<char> esc;
     const auto ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
@@ -3768,16 +3760,33 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     {
         ptBackHops.emplace( ing, g, valueRefIndexOf( ix ) );
     }
+    // TRACE-EP: the CLI's reaching definition pairs, by the same call (src/pathpairs.h)
+    const PathPairs ptPairs = pth.empty() || srcGlob || dstGlob ? PathPairs{}
+        : pathReachingPairs( ing, g, srcDefs, dstDefs, pth, [ & ]( std::span<const NodeId> dstMembers )
+          {
+              if( !ptBackHops )
+              {
+                  ptBackHops.emplace( ing, g, valueRefIndexOf( ix ) );
+              }
+              return pathBridge( ing, g, srcDefs, dstMembers, valueRefIndexOf( ix ), *ptBackHops );
+          } );
+    const std::vector<NodeId>& ptShown = ptPairs.active() ? ptPairs.pairs.front().chain : pth;
+    const NodeId               srcUsed = ptShown.empty() ? srcDefs.front() : ptShown.front();
+    const NodeId               dstUsed = ptShown.empty() ? dstDefs.front() : ptShown.back();
     const PathBridge          ptBridge     = pth.empty() ? pathBridge( ing, g, srcDefs, dstDefs, valueRefIndexOf( ix ), *ptBackHops ) : PathBridge{};      // ix2-slice, as on the CLI
     const std::string         ptSinkCallers = pth.empty() && ptGaps.any() && !dstGlob ? pathSinkCallersSelector( ing, *ptBackHops, dstDefs, to, ptSingleRoot, ptRootPrefix ) : std::string();   // HOP1 #6, as on the CLI
-    const std::string         ptKindLegend = pathKindLegend( g, pth );
-    const PathEndpointBinding ptBound      = pathEndpointBinding( g, endpointDefinitionCount( ing, srcDefs ), endpointDefinitionCount( ing, dstDefs ), pth );   // attrib-multidef, as on the CLI
-    const bool                ptHasSplit = ptBound.splitHop;
+    const auto ptAnyHop = [ & ]( auto&& has ) { return ptPairs.active() ? pathPairsAnyHop( ptPairs, has ) : has( std::span<const NodeId>( pth ) ); };
+    const std::string         ptKindLegend = std::string( viaNameLegend( ptAnyHop( [ & ]( std::span<const NodeId> c ) { return pathHasNameOnlyHop( g, c ); } ) ) )
+                                           + viaLinkLegend( ptAnyHop( [ & ]( std::span<const NodeId> c ) { return pathHasNameOnlyHop( g, c, kEdgeLink ); } ) )
+                                           + anchorMissLegend( ptAnyHop( [ & ]( std::span<const NodeId> c ) { return pathHasNameOnlyHop( g, c, 0 ); } ) );
+    const PathEndpointBinding ptBound      = pathEndpointBinding( g, endpointDefinitionCount( ing, srcDefs ), endpointDefinitionCount( ing, dstDefs ), ptShown );   // attrib-multidef, as on the CLI
+    const bool                ptHasSplit = ptAnyHop( [ & ]( std::span<const NodeId> c ) { return pathEndpointBinding( g, 1, 1, c ).splitHop; } );
     const std::vector<std::string_view> ptOwners = pathHopOwners( ing, pth );   // PATH-OWNERS, as on the CLI
+    const bool                ptHasOwner = ptAnyHop( [ & ]( std::span<const NodeId> c ) { return anyPathHopOwner( pathHopOwners( ing, c ) ); } );
     rw::emitTo( mem, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                        "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + ptKindLegend
                                                            + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to )
-                                                           + memberOwnerLegend( anyPathHopOwner( ptOwners ) ) ).c_str(),
+                                                           + memberOwnerLegend( ptHasOwner ) + std::string( pathPairsLegend( ptPairs.active() ) ) ).c_str(),
                   ( std::string( toValueRefsLegend( ptToValueRefs.count > 0 ) ) + valueRefsDepthLegend( ptToValueRefs.depthCut.files > 0 ) ).c_str(),
                   ( pathGapsLegend( ptGaps.any(), !ptSinkCallers.empty() ) + std::string( pathBridgeLegend( ptBridge.found() ) )
                     + std::string( nearSinkLegend( !ptNear.rows.empty() ) ) + std::string( pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
@@ -3786,7 +3795,8 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
                   ex( from ).c_str(), ex( to ).c_str(), ptBound.from ? " from_p=\"" + loc( srcUsed ) + "\"" : std::string(),
                   ptBound.to ? " to_p=\"" + loc( dstUsed ) + "\"" : std::string(),
                   srcDefs.size(), dstDefs.size(), ( unprovenDefsAttrXml( unprovenDefs ) + pathGlobAttrXml( srcGlob, dstGlob ) ).c_str(),   // H1: as the CLI root carries it; ix2-slice: a glob endpoint
-                  pth.empty() ? 0 : 1, pth.empty() ? std::size_t( 0 ) : pth.size() - 1, ptRootAttr.c_str(),
+                  pth.empty() ? 0 : 1, ptShown.empty() ? std::size_t( 0 ) : ptShown.size() - 1,
+                  ( pathPairsRootAttrs( ing, ptPairs, ptSingleRoot, ptRootPrefix ).rootAttrs + ptRootAttr ).c_str(),
                   graphCountFloorAttrXml( g ).c_str()  );   // M15: gauge + marker
     rw::emitTo( mem, "{}{}", countAttrXmlOrEmpty( "to_value_refs", ptToValueRefs.count ),   // absent at zero, as on the CLI
                   valueRefsDepthAttrXml( ing, ptToValueRefs.depthCut, VrRender{ ptSingleRoot, ptRootPrefix } ).c_str() );   // + the depth cut, as the CLI
@@ -3795,7 +3805,14 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
         : PathGapsXml{};
     rw::emitTo( mem, "{}>{}{}{}", ptUnreached.rootAttrs, ptUnreached.rows, pathBridgeXml( ing, g, ptBridge, ptSingleRoot, ptRootPrefix ),
                   pathNearSinkXml( ing, ptNear, ptSingleRoot, ptRootPrefix ) );
-    emitPathHopRows( mem, ing, g, pth, ptOwners, ptSingleRoot, ptRootPrefix );   // the CLI's own row emitter (defattrib.h)
+    if( ptPairs.active() )
+    {
+        emitPathPairs( mem, ing, g, ptPairs, ptSingleRoot, ptRootPrefix );   // TRACE-EP: the CLI's own pairs emitter (pathpairs.h)
+    }
+    else
+    {
+        emitPathHopRows( mem, ing, g, pth, ptOwners, ptSingleRoot, ptRootPrefix );   // the CLI's own row emitter (defattrib.h)
+    }
     rw::emitRaw( mem, "</path>" );
     return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }
