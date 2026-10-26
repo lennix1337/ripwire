@@ -1470,14 +1470,14 @@ inline constexpr std::string_view kPathBridgeLegend =
     "(a wide table is still crossed: K says how wide), container = the previous row calls through a container element (or a parameter's default) "
     "this row may be held in (cands= the functions it may hold) (via=name rows are proven edges bound by name). Fewest crossings first. It is NOT a path: reachable= and "
     "hops= on the root stay 0, no count includes it, and every crossing is a hedge. ";
-inline std::string pathBridgeLegend( bool on, bool queue = false )
+// The bridge clause rides with a bridge; the queue clause (present-only) when it crosses a queue hand-off.
+inline std::string pathBridgeLegend( const PathBridge& br )
 {
-    return std::string( on ? kPathBridgeLegend : std::string_view() ) + std::string( on && queue ? kQueueHopLegend : std::string_view() );
-}
-// Whether a bridge crosses a queue hand-off: the queue clause rides (present-only).
-inline bool pathBridgeHasQueue( const PathBridge& br ) noexcept
-{
-    return std::ranges::contains( br.via, BridgeVia::Queue );
+    if( !br.found() )
+    {
+        return {};
+    }
+    return std::string( kPathBridgeLegend ) + std::string( std::ranges::contains( br.via, BridgeVia::Queue ) ? kQueueHopLegend : std::string_view() );
 }
 
 inline std::string pathBridgeXml( const IngestResult& ing, const Graph& g, const PathBridge& br, bool singleRoot, std::string_view rootPrefix )
