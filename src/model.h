@@ -895,12 +895,18 @@ struct LocalNameFact
 // The prefix of a C++ call's memberPath that marks an ELEMENT-ACCESS receiver (Reference::memberPath, its C++ reading).
 inline constexpr std::string_view kCppElementMark = "[]";
 
-// A Python call's KEYWORD arguments, carried on its call reference's composeRel (a call is no compose record and no value-ref slot, so the
+// A Python queue call's KEYWORD arguments (isQueueCallName), carried on its call reference's composeRel (a call is no compose record and no value-ref slot, so the
 // field is free there): "" none, else "k<count>" and a trailing "o" when any keyword is spelled other than `timeout` / `block` (the two
 // keywords queue.Queue.put/get and asyncio.Queue take). argCount counts them too (the resolver's arity filter needs that), so
 // QueueHops (backhops.h) subtracts the count to read the positional arguments. Written by ingest_sidecap.h, read by pyKwArgsOf.
 inline constexpr std::uint8_t kCallKwCount = 0x7F;   // the count's mask in callArity's keyword byte (saturating)
 inline constexpr std::uint8_t kCallKwOther = 0x80;   // …and the flag: a keyword other than timeout / block
+// The four calls QueueHops reads (backhops.h): the only Python calls whose keyword arguments ingest records.
+inline bool isQueueCallName( std::string_view name ) noexcept
+{
+    static constexpr std::string_view kQueueCalls[] = { "get", "get_nowait", "put", "put_nowait" };
+    return std::ranges::contains( kQueueCalls, name );
+}
 inline std::string pyKwTag( std::uint8_t kw )
 {
     return "k" + std::to_string( unsigned( kw & kCallKwCount ) ) + ( ( kw & kCallKwOther ) != 0 ? "o" : "" );
