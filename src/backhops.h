@@ -308,25 +308,33 @@ inline std::vector<NodeId> containerHolds( const ValueRefIndex& values, std::uin
     return fns;
 }
 
-// The sink's CONTAINER hops (composed hops), appended to `out`: each function whose call through a container element or a called
-// parameter the sink's value-ref join names (the --callers <vr called_by=> row: calledBy / throughsFor), one per caller.
-inline void containerBackHops( const IngestResult& ing, const ValueRefIndex& values, NodeId sink, std::vector<BackHop>& out )
+// The hops one value-ref join yields for `sink`: `per( r, rows )` appends the rows of each value reference r to the sink; a row
+// whose caller is the sink itself or no symbol is dropped (a call made inside the sink is no way in), then one row per caller.
+template<class Per>
+inline void valueRefHops( const IngestResult& ing, const ValueRefIndex& values, NodeId sink, std::vector<BackHop>& out, Per&& per )
 {
-    std::vector<BackHop> container;
+    std::vector<BackHop> rows;
     for( const std::uint32_t r : values.valueRefsTo( std::span<const NodeId>( &sink, 1 ) ) )
     {
-        const std::size_t width = values.calledBy( r ).size();
+        per( r, rows );
+    }
+    std::erase_if( rows, [ & ]( const BackHop& h ) { return h.from == sink || h.from >= ing.symbols.size(); } );
+    keepOneHopPerCaller( rows );
+    out.insert( out.end(), rows.begin(), rows.end() );
+}
+
+// The sink's CONTAINER hops (composed hops): each function whose call through a container element or a called parameter the
+// sink's value-ref join names (the --callers <vr called_by=> row: calledBy / throughsFor); width = the callers that row names.
+inline void containerBackHops( const IngestResult& ing, const ValueRefIndex& values, NodeId sink, std::vector<BackHop>& out )
+{
+    valueRefHops( ing, values, sink, out, [ & ]( std::uint32_t r, std::vector<BackHop>& rows )
+    {
+        const std::uint32_t width = std::uint32_t( values.calledBy( r ).size() );
         for( const std::uint32_t t : values.throughsFor( r ) )
         {
-            const NodeId f = ing.references[ t ].fromSymbol;
-            if( f != sink && f < ing.symbols.size() )
-            {
-                container.push_back( BackHop{ f, BackHopVia::Container, std::uint32_t( width ), t } );
-            }
+            rows.push_back( BackHop{ ing.references[ t ].fromSymbol, BackHopVia::Container, width, t } );
         }
-    }
-    keepOneHopPerCaller( container );
-    out.insert( out.end(), container.begin(), container.end() );
+    } );
 }
 
 class BackwardHops
@@ -360,27 +368,20 @@ public:
 private:
     void slotHops( NodeId sink, std::vector<BackHop>& out ) const
     {
-        std::vector<BackHop> slot;
-        for( const std::uint32_t r : m_values.valueRefsTo( std::span<const NodeId>( &sink, 1 ) ) )
+        valueRefHops( m_ing, m_values, sink, out, [ & ]( std::uint32_t r, std::vector<BackHop>& rows )
         {
             if( !m_values.calledBy( r ).empty() )
             {
-                continue;   // a container/parameter join answers that row first (valueRefCallerRows' own rule): container hops, no slot callers
+                return;   // a container/parameter join answers that row first (valueRefCallerRows' own rule): container hops, no slot callers
             }
             bool                             typed    = false;
             std::uint32_t                    nameAlso = 0;
             const std::vector<std::uint32_t> calls    = slotCallers( m_ing, m_values.slots().callsFor( r ), typed, nameAlso );
             for( const std::uint32_t c : calls )
             {
-                const NodeId f = m_ing.references[ c ].fromSymbol;
-                if( f != sink && f < m_ing.symbols.size() )   // a call made inside the sink itself is no way in (defensive: the ring's `known` and the bridge's layer test hold the seeds too)
-                {
-                    slot.push_back( BackHop{ f, typed ? BackHopVia::Slot : BackHopVia::SlotName, std::uint32_t( calls.size() ), c } );
-                }
+                rows.push_back( BackHop{ m_ing.references[ c ].fromSymbol, typed ? BackHopVia::Slot : BackHopVia::SlotName, std::uint32_t( calls.size() ), c } );
             }
-        }
-        keepOneHopPerCaller( slot );
-        out.insert( out.end(), slot.begin(), slot.end() );
+        } );
     }
 
     void declinedHops( NodeId sink, std::vector<BackHop>& out ) const
