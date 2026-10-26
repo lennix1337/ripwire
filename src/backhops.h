@@ -446,9 +446,15 @@ private:
         NodeId        reader = kNoNode;
     };
 
+    // The languages whose `self.X.put/get` this rule reads (a per-kind table, as selfKeyword's: Go channels need an ingest record first).
+    static bool queueLang( Lang lang ) noexcept
+    {
+        static constexpr Lang kQueueLangs[] = { Lang::Python };
+        return std::ranges::contains( kQueueLangs, lang );
+    }
     static bool queueOp( const Reference& r, bool& put ) noexcept
     {
-        if( r.lang != Lang::Python || r.role != RefRole::Call || r.isInherit || r.recv != RecvKind::FieldOfThis || r.fieldName.empty() || !r.argCountKnown )
+        if( !queueLang( r.lang ) || r.role != RefRole::Call || r.isInherit || r.recv != RecvKind::FieldOfThis || r.fieldName.empty() || !r.argCountKnown )
         {
             return false;
         }
@@ -496,7 +502,7 @@ private:
         {
             const Reference& r   = m_ing.references[ i ];
             bool             put = false;
-            if( r.isInherit && r.lang == Lang::Python && r.fromSymbol < m_ing.symbols.size() )
+            if( r.isInherit && queueLang( r.lang ) && r.fromSymbol < m_ing.symbols.size() )
             {
                 std::vector<NodeId> bases;
                 m_rule.classesNamed( r.calleeName, bases );
