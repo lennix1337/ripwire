@@ -2554,8 +2554,13 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                     {
                         r.fieldName = rubyReceiverWrittenPath( nameNode, r.recvVar, src );   // parser version 137: a constant's path as written
                     }
-                    auto [ ac, ak ] = callArity( nameNode, le.lang, src );               // B2.2: call-site positional arg count
+                    std::uint8_t kw = 0;
+                    auto [ ac, ak ] = callArity( nameNode, le.lang, src, &kw );          // B2.2: call-site positional arg count
                     r.argCount = ac;  r.argCountKnown = ak;                              //   → arity filter in graph.h
+                    if( kw != 0 && le.lang == Lang::Python )
+                    {
+                        r.composeRel = pyKwTag( kw );                                    // the call's keyword arguments, for QueueHops (model.h pyKwTag)
+                    }
                 }
                 refs.push_back( std::move( r ) );
             }

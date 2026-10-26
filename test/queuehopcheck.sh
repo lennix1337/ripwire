@@ -13,6 +13,7 @@
 # lists a queue hop as a d=1 row (`<rh … via="queue" … d="1" cands=K/>`), counts it, and composes it like any hop within 16
 # producers; the --path bridge crosses it (`<s … via="queue" cands=K/>`).
 # A user `put( k, v )` / `get( k )` (a cache, a dict), a queue handed to a worker as an argument, and a local alias are no hop.
+# Floor (disclosed in the changelog): Python only; a call with any keyword other than timeout= / block= is read as no queue operation.
 # This is its own gate (not composedhopscheck): a hand-off is a new FAMILY of hop with its own pairing rule (attribute +
 # class family + arity) and its own negatives; the walks it rides are composedhopscheck's and unchanged.
 #
@@ -26,6 +27,12 @@
 #   (N4) escape: a queue passed to a worker function as an argument — the worker is no reader; a local alias put is no producer.
 #   (W1) width: 16 producers compose their 16 proven callers (32); 17 are counted (17) but compose nothing.
 #   (T1) a reader that re-puts onto its own queue terminates, and is not its own producer.
+#   (T2) the same with 16 producers: the sink's own put is no hop, so the 16 compose (reaches_hedged=32); it widens to 17 and composes
+#        nothing if the self-exclusion is dropped (mutant: delete `&& m_sites[ p.put ].fn != sink` in QueueHops::backHops).
+#   (N5) the class family is the RESOLVED class (graph.h's Proven base edges: a same-file declaration or an import), never the base
+#        name across files: an unrelated same-named Base in another file is no hop; a subclass through a proven import is.
+#   (K1-K3) timeout= / block= are the queue signature's own keywords (no argument); any other keyword, a second positional argument
+#        or a *args / **kw list is no queue operation.
 #   (J1) JSON twin spells via/d/cands; (M1) MCP impact + path_between twins equal the CLI; (L1) the queue clause rides only
 #        when a queue row is present and the answers parse as XML.
 #
@@ -39,7 +46,7 @@ echo "queuehopcheck: BIN=$BIN"
 command -v python3 >/dev/null 2>&1 || { echo "  FAIL  python3 required"; exit 2; }
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 
-mkdir -p "$TMP/pump" "$TMP/sib" "$TMP/cache" "$TMP/esc" "$TMP/w16" "$TMP/w17" "$TMP/req"
+mkdir -p "$TMP/pump" "$TMP/sib" "$TMP/cache" "$TMP/esc" "$TMP/w16" "$TMP/w17" "$TMP/req" "$TMP/ns" "$TMP/nsimp" "$TMP/m4" "$TMP/kw2" "$TMP/kw3" "$TMP/kwo"
 cat > "$TMP/pump/pump.py" <<'EOF'
 import queue
 
@@ -157,6 +164,113 @@ class Loop:
         self._r.put(m)
 EOF
 
+# (N5) an unrelated same-named Base in another file: X(Base).produce puts, the OTHER Base.consume gets — two classes, no hop.
+cat > "$TMP/ns/a.py" <<'EOF'
+class Base:
+    pass
+
+
+class X(Base):
+    def produce(self, v):
+        self.q.put(v)
+EOF
+cat > "$TMP/ns/b.py" <<'EOF'
+class Base:
+    def consume(self):
+        return self.q.get()
+EOF
+# (N5) …and the real cross-file subclass: Sub(Base) imports Base from a.py, so it IS a subclass of the Base that reads.
+cat > "$TMP/nsimp/a.py" <<'EOF'
+class Base:
+    def consume(self):
+        return self.q.get()
+EOF
+cat > "$TMP/nsimp/b.py" <<'EOF'
+from a import Base
+
+
+class Sub(Base):
+    def produce(self, v):
+        self.q.put(v)
+EOF
+cat > "$TMP/nsimp/c.py" <<'EOF'
+class Base:
+    pass
+
+
+class Lone(Base):
+    def produce2(self, v):
+        self.q.put(v)
+EOF
+# (T2) the self-exclusion: 16 producers with one proven caller each, and a reader that re-puts. The reader's own put is no way in
+# (QueueHops::backHops drops the sink's own put), so the producer hop stays 16 wide and composes its 16 callers: reaches_hedged=32.
+{
+    printf 'class P:\n'
+    for i in $( seq 1 16 ); do printf '    def p%s(self, v):\n        self.q.put(v)\n' "$i"; done
+    printf '    def r(self):\n        m = self.q.get()\n        self.q.put(m)\n'
+    for i in $( seq 1 16 ); do printf 'def c%s(o):\n    o.p%s(1)\n' "$i" "$i"; done
+} > "$TMP/m4/m.py"
+# (K) keyword arguments: timeout= / block= are the queue signature's own, so they are no argument; any other keyword is no queue op.
+cat > "$TMP/kw2/m.py" <<'EOF'
+class P:
+    def a(self, v):
+        self.q.put(v)
+
+    def r(self):
+        return self.q.get(timeout=2)
+
+    def r2(self):
+        return self.q.get(block=False)
+
+    def r3(self):
+        return self.q.get_nowait()
+EOF
+cat > "$TMP/kw3/m.py" <<'EOF'
+class P:
+    def a(self, v):
+        self.q.put(v, timeout=1)
+
+    def b(self, v):
+        self.q.put(v, block=False)
+
+    def c(self, v):
+        self.q.put_nowait(v)
+
+    def r(self):
+        return self.q.get()
+EOF
+cat > "$TMP/kwo/m.py" <<'EOF'
+class P:
+    def a(self, v):
+        self.q.put(v, priority=1)
+
+    def b(self, v):
+        self.q.put(item=v)
+
+    def c(self, *v):
+        self.q.put(*v)
+
+    def d(self, v):
+        self.q.put(v, True)
+
+    def r(self):
+        return self.q.get(default=0)
+
+    def r2(self):
+        return self.q.get(True)
+
+    def r3(self):
+        return self.q.get(timeout=1, default=0)
+
+
+class Q:
+    def a(self, v):
+        self.q.put(v)
+
+    def r(self):
+        return self.q.get(**opts)
+EOF
+
 python3 - "$BIN" "$TMP" <<'PY'
 import json, re, shutil, subprocess, sys
 binp, tmp = sys.argv[1], sys.argv[2]
@@ -234,6 +348,28 @@ check( "(W1) the d=1 rows are capped at 16 shown with total=17, next= present", 
 t8 = run( tmp + "/req", "--impact=requeue" ); r8 = root( t8, "impact" )
 check( "(T1) a reader that re-puts onto its own queue terminates; feed is its one producer, itself is not",
        r8 != "" and qrow( t8, "feed", "requeue" ) != "" and qrow( t8, "requeue", "requeue" ) == "" and attr( r8, "reaches_hedged" ) == "1", r8[:300] )
+
+# ── N5 / T2 / K: the family is the resolved class; the self-exclusion; keyword arguments ──────────────────────────────
+t9 = run( tmp + "/ns", "--impact=consume" ); r9 = root( t9, "impact" )
+check( "(N5) an unrelated same-named Base in another file is no family: --impact=consume has no queue row, no reaches_hedged",
+       r9 != "" and qrow( t9, "produce", "consume" ) == "" and attr( r9, "reaches_hedged" ) is None, repr( ring( t9 ) or r9 )[:400] )
+t10 = run( tmp + "/nsimp", "--impact=consume" ); r10 = root( t10, "impact" )
+check( "(N5) a real cross-file subclass through a proven import (Sub(Base) with `from a import Base`) is a producer: a queue row produce -> consume",
+       qrow( t10, "produce", "consume" ) != "", repr( ring( t10 ) or r10 )[:400] )
+check( "(N5) …but Lone(Base) in c.py, whose Base is its own file's, is no producer of a.py's Base queue",
+       qrow( t10, "produce2", "consume" ) == "", repr( ring( t10 ) )[:400] )
+t11 = run( tmp + "/m4", "--impact=r" ); r11 = root( t11, "impact" )
+check( "(T2) 16 producers and a re-putting reader: the sink's own put is not a hop, so the 16 compose: reaches_hedged=32 and no row called_by r",
+       attr( r11, "reaches_hedged" ) == "32" and not any( ( attr( x, "called_by" ) or "" ).split( "." )[ -1 ] == "r" for x in rows( t11 ) ), r11[:300] )
+t12 = run( tmp + "/kw2", "--impact=r" ); r12 = root( t12, "impact" )
+check( "(K1) put( v ) + get( timeout=2 ): a hop a -> r (and a -> r2 for get( block=False ), a -> r3 for get_nowait())",
+       qrow( t12, "a", "r" ) != "" and qrow( run( tmp + "/kw2", "--impact=r2" ), "a", "r2" ) != "" and qrow( run( tmp + "/kw2", "--impact=r3" ), "a", "r3" ) != "", repr( ring( t12 ) or r12 )[:400] )
+t13 = run( tmp + "/kw3", "--impact=r" ); r13 = root( t13, "impact" )
+check( "(K2) put( v, timeout=1 ), put( v, block=False ) and put_nowait( v ) + get(): all three produce a hop into r",
+       all( qrow( t13, n, "r" ) != "" for n in ( "a", "b", "c" ) ) and attr( r13, "reaches_hedged" ) == "3", repr( ring( t13 ) or r13 )[:400] )
+ro = [ run( tmp + "/kwo", "--impact=" + n ) for n in ( "r", "r2", "r3" ) ] + [ run( tmp + "/kwo", "--impact=Q.r" ) ]
+check( "(K3) any OTHER keyword (priority=, item=, default=), a positional second argument, a *args/**opts list: no queue hop",
+       all( t is not None and 'via="queue"' not in body( t ) and attr( root( t, "impact" ), "reaches_hedged" ) is None for t in ro ), repr( [ ring( t ) for t in ro ] )[:500] )
 
 # ── J / M / L: twins and legends ────────────────────────────────────────────────────────────────────────────────────
 tj = run( P, "--impact=_get", "--json" ) or "{}"

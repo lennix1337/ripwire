@@ -1684,7 +1684,12 @@ inline ParamShape cc_paramShape( TSNode defNode, Lang lang, SymKind kind, std::s
 // found for a supported language AND no spread/splat/apply/pack-expansion argument is present (which would make the count
 // unreliable). Any uncertainty → { 0, false } so the resolver never arity-filters that call (zero false
 // negatives). Pure-syntactic, deterministic, allocation-free. Languages: C++/Python/TS/JS/Java/Swift/C#.
-inline std::pair<std::uint16_t, bool> callArity( TSNode nameNode, Lang lang, std::string_view /*src*/ ) noexcept
+//
+// `kw` (optional, Python only; the resolver never reads it): how many of those counted arguments are KEYWORD arguments
+// (`timeout=2`), and whether any of them is spelled other than `timeout` / `block` (the two keywords queue.Queue.put/get and
+// asyncio.Queue take). Low 7 bits the count (saturating), kCallKwOther the other-keyword flag (model.h). QueueHops reads it
+// through the call reference's composeRel (pyKwTag / pyKwArgsOf).
+inline std::pair<std::uint16_t, bool> callArity( TSNode nameNode, Lang lang, std::string_view src, std::uint8_t* kw = nullptr ) noexcept
 {
     // walk up a bounded number of parents to the enclosing CALL node (the callee sits 1-2 levels below it).
     TSNode call{};
@@ -1743,8 +1748,16 @@ inline std::pair<std::uint16_t, bool> callArity( TSNode nameNode, Lang lang, std
             return false;
         }
         ++count;
+        if( kw != nullptr && lang == Lang::Python && kindIs( ct, "keyword_argument" ) )
+        {
+            const TSNode      nameN = fieldChild( c, NodeField::Name );
+            const std::uint32_t a   = ts_node_is_null( nameN ) ? 0 : ts_node_start_byte( nameN );
+            const std::uint32_t b   = ts_node_is_null( nameN ) ? 0 : ts_node_end_byte( nameN );
+            const std::string_view spelled = a < b && b <= src.size() ? src.substr( a, b - a ) : std::string_view();
+            const bool queueKw = spelled == "timeout" || spelled == "block";
+            *kw = std::uint8_t( std::min<unsigned>( ( *kw & kCallKwCount ) + 1u, kCallKwCount ) | ( *kw & kCallKwOther ) | ( queueKw ? 0u : kCallKwOther ) );
+        }
         return true; } );
-    (void)lang;
     return unreliable ? std::pair<std::uint16_t,bool>{ 0, false } : std::pair<std::uint16_t,bool>{ count, true };
 }
 }   // namespace — ingest_metrics.h section of ingest.cpp

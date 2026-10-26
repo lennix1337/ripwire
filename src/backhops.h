@@ -364,10 +364,12 @@ inline void containerBackHops( const IngestResult& ing, const ValueRefIndex& val
 
 // QUEUE-HOP: a hand-off through a queue field of one object (Python). A PUT site is a call `self.X.put( v )` / `self.X.put_nowait( v )`
 // with exactly one positional argument, a GET site `self.X.get()` / `self.X.get_nowait()` with none (a keyed `d.get( k )` or a two-
-// argument `cache.put( k, v )` is no queue operation), both on the receiver keyword `self` (receiverOf's FieldOfThis) and both with
-// a counted argument list. A put site and a get site PAIR when they name the same attribute X and their classes are one family:
-// the same class, or one is an in-tree base of the other by name (the Python inheritance refs, walked to the root; a sibling
-// class's get never reads this object's queue). The READERS of a get site are the function holding it and, one level up, its
+// argument `cache.put( k, v )` is no queue operation; the keywords `timeout=` and `block=` are no argument, any other keyword
+// makes the call no queue operation), both on the receiver keyword `self` (receiverOf's FieldOfThis) and both with a counted
+// argument list. A put site and a get site PAIR when they name the same attribute X and their classes are one family: the same
+// class, or one is a base of the other that the index PROVES (graph.h's Proven implementors edges: the same-file declaration or the
+// import that names it; a base written by name alone, or bound to another same-named class, is no family; walked to the root; a
+// sibling class's get never reads this object's queue). The READERS of a get site are the function holding it and, one level up, its
 // proven callers in that same family (`message = await self._get_message()`: the loop that dispatches the message reads it).
 // What it does NOT mean: no call edge; a reader is not proven to receive any given item. A queue the class hands out (a worker's
 // parameter, a local alias `q = self.q`) has readers this rule does not see: the readers listed are a floor, every hop a hedge.
@@ -452,18 +454,28 @@ private:
         static constexpr Lang kQueueLangs[] = { Lang::Python };
         return std::ranges::contains( kQueueLangs, lang );
     }
+    // A queue operation: `self.X.put( v )` / `put_nowait( v )` (one positional argument) or `get()` / `get_nowait()` (none). The Python
+    // queue and asyncio signatures also take the keywords `timeout=` and `block=` (`get( timeout=2 )`, `put( v, block=False )`): they
+    // are the same operations, so they do not count as arguments. Any OTHER keyword (`d.get( k, default=0 )`) is no queue operation,
+    // and an argument list the count could not read (`*args`, `**kw`) is none either.
     static bool queueOp( const Reference& r, bool& put ) noexcept
     {
         if( !queueLang( r.lang ) || r.role != RefRole::Call || r.isInherit || r.recv != RecvKind::FieldOfThis || r.fieldName.empty() || !r.argCountKnown )
         {
             return false;
         }
-        const std::string_view m = r.calleeName;
-        put                      = m == "put" || m == "put_nowait";
-        return ( put && r.argCount == 1 ) || ( ( m == "get" || m == "get_nowait" ) && r.argCount == 0 );
+        const PyKwArgs kw = pyKwArgsOf( r.composeRel );
+        if( kw.other || kw.count > r.argCount )
+        {
+            return false;
+        }
+        const std::uint32_t positional = r.argCount - kw.count;
+        const std::string_view m       = r.calleeName;
+        put                            = m == "put" || m == "put_nowait";
+        return ( put && positional == 1 ) || ( ( m == "get" || m == "get_nowait" ) && positional == 0 );
     }
 
-    // Whether class b is a or one of a's in-tree ancestors (by base name, every same-named class; visited once each).
+    // Whether class b is a or one of a's in-tree ancestors (the proven base edges, collectProvenBases; visited once each).
     bool derivesFrom( NodeId a, NodeId b ) const
     {
         std::vector<NodeId> todo{ a };
@@ -491,6 +503,26 @@ private:
     }
     bool oneFamily( NodeId a, NodeId b ) const { return a != kNoNode && b != kNoNode && ( derivesFrom( a, b ) || derivesFrom( b, a ) ); }
 
+    // The (class, base) pairs the index PROVES: the graph's implementors edges bound Proven (graph.h provenBasesOf: the same-file
+    // declaration the clause binds to, or an import that names the base). A base written by NAME alone binds to every same-named
+    // class; an edge the evidence leaves ByName or points at another same-named class (Other) is no family link, so an unrelated
+    // `Base` in another file never joins two classes' queues.
+    void collectProvenBases() const
+    {
+        for( NodeId base = 0; base < m_g.implementors.size() && base < m_g.implementorBound.size(); ++base )
+        {
+            const std::vector<NodeId>&      kids  = m_g.implementors[ base ];
+            const std::vector<std::uint8_t>& bound = m_g.implementorBound[ base ];
+            for( std::size_t k = 0; k < kids.size() && k < bound.size(); ++k )
+            {
+                if( bound[ k ] == std::uint8_t( BaseBound::Proven ) && kids[ k ] < m_ing.symbols.size() && queueLang( m_ing.symbols[ kids[ k ] ].lang ) )
+                {
+                    m_bases.emplace_back( kids[ k ], base );
+                }
+            }
+        }
+    }
+
     void build() const
     {
         if( m_built )
@@ -502,16 +534,7 @@ private:
         {
             const Reference& r   = m_ing.references[ i ];
             bool             put = false;
-            if( r.isInherit && queueLang( r.lang ) && r.fromSymbol < m_ing.symbols.size() )
-            {
-                std::vector<NodeId> bases;
-                m_rule.classesNamed( r.calleeName, bases );
-                for( const NodeId b : bases )
-                {
-                    m_bases.emplace_back( r.fromSymbol, b );
-                }
-            }
-            else if( r.fromSymbol < m_ing.symbols.size() && queueOp( r, put ) )
+            if( r.fromSymbol < m_ing.symbols.size() && queueOp( r, put ) )
             {
                 m_sites.push_back( Site{ r.fieldName, r.fromSymbol, m_rule.classOf( r.fromSymbol ), i, put } );
                 if( put )
@@ -522,6 +545,7 @@ private:
         }
         if( !m_sites.empty() )
         {
+            collectProvenBases();
             std::ranges::sort( m_bases );
             std::ranges::sort( m_putsByFn );
             pairSites();   // a tree with no queue operation pays one scan
@@ -570,7 +594,7 @@ private:
     const DeclinedCrossRule&                      m_rule;
     mutable bool                                  m_built = false;
     mutable std::vector<Site>                     m_sites;   // every put / get site, in reference order
-    mutable std::vector<std::pair<NodeId, NodeId>> m_bases;  // (class, in-tree base), sorted
+    mutable std::vector<std::pair<NodeId, NodeId>> m_bases;  // (class, base the index proves), sorted
     mutable std::vector<Pair>                     m_pairs;   // (put site, reader), sorted, distinct
     mutable std::vector<std::pair<NodeId, std::uint32_t>> m_putsByFn;   // (function, put reference), sorted
 };
@@ -1027,9 +1051,10 @@ inline constexpr std::string_view kImpactRingRowsLegend =
     "that container may hold (the forward width, not capped); first 16, next= the callers of the first unshown calls=. ";
 // QUEUE-HOP, present-only: rides beside the rows legend when a row is a queue hop (the --path bridge reads it too).
 inline constexpr std::string_view kQueueHopLegend =
-    "rh via=queue d=1 (bridge s via=queue): a HAND-OFF, not a call: called_by (the previous row) puts onto a queue field of its own object (self.X.put/put_nowait, one argument) and "
-    "calls= (this row) takes from it (self.X.get/get_nowait) in the same class or a base or subclass of it, or is a proven caller in that family of "
-    "such a function (one level); cands=K the readers of that put, a floor (a queue handed out of the class has readers not seen). ";
+    "rh via=queue d=1: a HAND-OFF, not a call: called_by= puts onto a queue field of its own object (self.X.put/put_nowait, one item; timeout=/block= allowed) and "
+    "calls= takes from it (self.X.get/get_nowait) in the same class or a base or subclass of it (a base the index proves), or is a proven caller in that family of "
+    "such a function (one level); cands=K the readers of that put, a floor (a queue handed out of the class has readers not seen). Python only. "
+    "In a path bridge, s via=queue is the same crossing: the previous row puts, this row takes. ";
 // Whether any ring row is a queue hop: the queue clause rides.
 inline bool impactRingHasQueue( const ImpactRing& ring ) noexcept
 {

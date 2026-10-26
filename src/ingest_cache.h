@@ -353,7 +353,10 @@ constexpr std::uint32_t kCacheVersion = 40;           // 40: train 34 — strict
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 226;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 228;          // bump on any grammar/.scm/extraction change
+                                                      // 228 = lane queue-hop fix 1 (the train renumbers): a Python call carrying keyword arguments now records them on its
+                                                      //   call reference's composeRel (model.h pyKwTag), so QueueHops reads `put( v, timeout=1 )` as one item. Strictly above
+                                                      //   226 and its rich file tag 227. No record format changed: kCacheVersion stays 40.
                                                       // 226 = 2026-10-24 (train 34: lean2b, fc2-lego-extparent, honest-lex, ind4b-k5-tighten-k5c, hop1, fc3-js-rebind):
                                                       //   strictly above every live number — main 224 (rich 225), #432 224, lane ind4b's placeholder 224 (it collided with
                                                       //   main's), lane ind5-glob-imports 222 (223, reserved), lane fc3-js-rebind 218, #426 216, #420 214. Rich file tag 227.
