@@ -907,6 +907,13 @@ inline bool isQueueCallName( std::string_view name ) noexcept
     static constexpr std::string_view kQueueCalls[] = { "get", "get_nowait", "put", "put_nowait" };
     return std::ranges::contains( kQueueCalls, name );
 }
+// The languages whose queue operations the hop rule reads (a per-kind table, as backhops.h selfKeyword's: Go channels need an ingest record first).
+// Ingest records the queue calls' keywords for these; QueueHops (backhops.h) pairs only their symbols.
+inline bool isQueueLang( Lang lang ) noexcept
+{
+    static constexpr Lang kQueueLangs[] = { Lang::Python };
+    return std::ranges::contains( kQueueLangs, lang );
+}
 inline std::string pyKwTag( std::uint8_t kw )
 {
     return "k" + std::to_string( unsigned( kw & kCallKwCount ) ) + ( ( kw & kCallKwOther ) != 0 ? "o" : "" );

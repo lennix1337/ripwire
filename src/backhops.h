@@ -448,19 +448,14 @@ private:
         NodeId        reader = kNoNode;
     };
 
-    // The languages whose `self.X.put/get` this rule reads (a per-kind table, as selfKeyword's: Go channels need an ingest record first).
-    static bool queueLang( Lang lang ) noexcept
-    {
-        static constexpr Lang kQueueLangs[] = { Lang::Python };
-        return std::ranges::contains( kQueueLangs, lang );
-    }
+    // The languages whose `self.X.put/get` this rule reads: model.h isQueueLang (the per-kind table ingest shares).
     // A queue operation: `self.X.put( v )` / `put_nowait( v )` (one positional argument) or `get()` / `get_nowait()` (none). The Python
     // queue and asyncio signatures also take the keywords `timeout=` and `block=` (`get( timeout=2 )`, `put( v, block=False )`): they
     // are the same operations, so they do not count as arguments. Any OTHER keyword (`d.get( k, default=0 )`) is no queue operation,
     // and an argument list the count could not read (`*args`, `**kw`) is none either.
     static bool queueOp( const Reference& r, bool& put ) noexcept
     {
-        if( !queueLang( r.lang ) || r.role != RefRole::Call || r.isInherit || r.recv != RecvKind::FieldOfThis || r.fieldName.empty() || !r.argCountKnown )
+        if( !isQueueLang( r.lang ) || r.role != RefRole::Call || r.isInherit || r.recv != RecvKind::FieldOfThis || r.fieldName.empty() || !r.argCountKnown )
         {
             return false;
         }
@@ -515,7 +510,7 @@ private:
             const std::vector<std::uint8_t>& bound = m_g.implementorBound[ base ];
             for( std::size_t k = 0; k < kids.size() && k < bound.size(); ++k )
             {
-                if( bound[ k ] == std::uint8_t( BaseBound::Proven ) && kids[ k ] < m_ing.symbols.size() && queueLang( m_ing.symbols[ kids[ k ] ].lang ) )
+                if( bound[ k ] == std::uint8_t( BaseBound::Proven ) && kids[ k ] < m_ing.symbols.size() && isQueueLang( m_ing.symbols[ kids[ k ] ].lang ) )
                 {
                     m_bases.emplace_back( kids[ k ], base );
                 }

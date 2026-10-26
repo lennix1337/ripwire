@@ -13,8 +13,9 @@ and `<bridge proven="0">` stays. The pairing reads the attribute name, the class
 `put( k, v )` or `get( k )` is no queue operation, and a sibling class or another class with the same attribute name never
 pairs. The family is the resolved class: a base counts only where the index proves it (the same-file declaration the clause
 binds to, or an import that names it), never a base spelled the same in another file. `timeout=` and `block=` are the queue
-signature's own keywords and count as no argument (`get( timeout=2 )`, `put( v, block=False )` pair); the one floor is that
-a call with any other keyword is read as no queue operation. A queue the class hands to a worker as an argument, or reads
+signature's own keywords and count as no argument (`get( timeout=2 )`, `put( v, block=False )` pair); the floors are that
+a call with any other keyword is read as no queue operation, and that a base imported under an alias (`from a import Base as B`)
+or by a star import draws no hop. A queue the class hands to a worker as an argument, or reads
 through a local alias, has readers this rule does not see, so the readers listed are a floor. The rule reads Python only:
 Go channels, Rust split handles (`mpsc::channel` sender and receiver) and JS/TS event emitters are not covered yet. Gate:
 `test/queuehopcheck.sh`.

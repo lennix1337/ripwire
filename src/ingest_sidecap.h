@@ -2556,7 +2556,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                     }
                     auto [ ac, ak ] = callArity( nameNode, le.lang, src );               // B2.2: call-site positional arg count
                     r.argCount = ac;  r.argCountKnown = ak;                              //   → arity filter in graph.h
-                    if( le.lang == Lang::Python && isQueueCallName( r.name ) )
+                    if( isQueueLang( le.lang ) && isQueueCallName( r.name ) )
                     {
                         if( const std::uint8_t kw = callKeywords( nameNode, src ); kw != 0 )
                         {

@@ -34,6 +34,10 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-26, lane queue-hop fix round 2 (the train renumbers; expect another re-pin then): RE-PINNED with UPDATE_GOLDEN=1
+#   (ec5455c6c9…ca188 -> f428b9f401…14915). The only watched text that moved is kParserVer 226 -> 228 (its rich file
+#   tag 227 with it; quality.h's kIngestParserVerMirror with it): the queue calls' keywords are a new ingest record.
+#   kCacheVersion stays 40 and kQSnapCacheScheme stays 22: no record format and no watched quality.h function moved.
 # 2026-10-24, train 34 (lean2b, fc2-lego-extparent, honest-lex, ind4b-k5-tighten-k5c, hop1, fc3-js-rebind merged onto main
 #   7abad955): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged tree (3e88ca157f…36842 -> ec5455c6c9…ca188). Watched text:
 #   kParserVer 224 -> 226 (rich file tag 227; above main / #432 224 / 225, lane ind4b's placeholder 224, lane ind5-glob-imports
