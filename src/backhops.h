@@ -23,6 +23,7 @@
 #include "graph.h"              // Graph — the declined records and their stored candidate lists
 #include "model.h"
 #include "nextverb.h"           // nextAttrXml / nextFlag — the ring's continuation
+#include "resolve.h"            // includerDir — the ring order's same-directory key
 #include "receiverevidence.h"   // ReceiverEvidence::chainOf / classLike — the receiver chain and the class kinds, one test each
 #include "serialize.h"          // escapeXml / jsonStr
 #include "valuerefindex.h"      // ValueRefIndex, slotCallers — the slot join and its tier rule
@@ -768,7 +769,7 @@ class ImpactRingOrder
 {
 public:
     ImpactRingOrder( const IngestResult& ing, const Graph& g, const ImpactRingLens& lens, std::span<const NodeId> seeds )
-        : m_ing( ing ), m_g( g ), m_lens( lens )
+        : m_ing( ing ), m_g( g ), m_lens( lens ), m_testReach( lens.testReach != nullptr ? *lens.testReach : kNoTestReach() )
     {
         for( const NodeId s : seeds )
         {
@@ -780,22 +781,16 @@ public:
         const auto ka = key( a ), kb = key( b );
         return ka != kb ? ka < kb : a < b;
     }
+    // certainty tier, then the backward and forward widths (narrow first), then the node lens
     bool rowLess( const ImpactRingRow& a, const ImpactRingRow& b ) const
     {
-        if( a.depth != b.depth ) { return a.depth < b.depth; }
-        if( a.width != b.width ) { return a.width < b.width; }
-        if( a.stored != b.stored ) { return a.stored < b.stored; }
-        return a.fn != b.fn ? nodeLess( a.fn, b.fn ) : a.ref < b.ref;
+        const auto ta = std::tie( a.depth, a.width, a.stored ), tb = std::tie( b.depth, b.width, b.stored );
+        return ta != tb ? ta < tb : ( a.fn != b.fn ? nodeLess( a.fn, b.fn ) : a.ref < b.ref );
     }
-    bool tested( NodeId n ) const noexcept { return m_lens.testReach != nullptr && isTestedByReach( m_ing, *m_lens.testReach, n ); }
+    bool tested( NodeId n ) const noexcept { return isTestedByReach( m_ing, m_testReach, n ); }
 
 private:
-    std::string_view dirOf( NodeId n ) const
-    {
-        const std::string_view p   = m_ing.files[ m_ing.symbols[ n ].fileId ];
-        const std::size_t      cut = p.rfind( '/' );
-        return cut == std::string_view::npos ? std::string_view() : p.substr( 0, cut );
-    }
+    std::string_view dirOf( NodeId n ) const { return includerDir( m_ing.files[ m_ing.symbols[ n ].fileId ] ); }
     // (untested, not an entry, another directory, -rank): smaller first
     std::tuple<bool, bool, bool, float> key( NodeId n ) const
     {
@@ -808,7 +803,13 @@ private:
 
     const IngestResult&           m_ing;
     const Graph&                  m_g;
+    static const std::vector<char>& kNoTestReach()
+    {
+        static const std::vector<char> none;
+        return none;
+    }
     const ImpactRingLens&         m_lens;
+    const std::vector<char>&      m_testReach;   // empty: no row is tested
     std::vector<std::string_view> m_seedDirs;
 };
 
@@ -955,6 +956,7 @@ inline std::string impactRingXml( const IngestResult& ing, const ImpactRing& rin
 }
 // The --json twin: `,"ring":{"d":2|3,"total":N,"shown":M[,"next":…],"rows":[{"called_by":…,"called_at":…,"via":…,"calls":…[,"d":3],"slot_fns"|"cands":K}]}`
 // then `,"hubs":[{"n":…,"via":…,"d":D,"behind":B,"tested":T,"sample":[…],"next":…}]`, each absent as its XML twin is.
+inline std::string impactHubsJson( const IngestResult& ing, const ImpactRing& ring, const VrRender& rr );
 inline std::string impactRingJson( const IngestResult& ing, const ImpactRing& ring, const VrRender& rr )
 {
     std::string out;
@@ -977,6 +979,11 @@ inline std::string impactRingJson( const IngestResult& ing, const ImpactRing& ri
         }
         out += "]}";
     }
+    return out + impactHubsJson( ing, ring, rr );
+}
+inline std::string impactHubsJson( const IngestResult& ing, const ImpactRing& ring, const VrRender& rr )
+{
+    std::string out;
     for( std::size_t i = 0; i < ring.hubsShown; ++i )
     {
         const ImpactHubRow& hub = ring.hubs[ i ];
