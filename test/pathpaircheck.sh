@@ -19,6 +19,7 @@
 #       the hedged one hedged=1 with its via="name" row; the via=name legend clause rides.
 #   (C) Python: five C<i>.go -> mid<i> -> target: pairs_reaching=5, 3 chains, alt=2 + 2 <alt> rows; next= replays the first alt
 #       as a one-definition answer (from_defs=1, reachable=1, from_p= the alt row's).
+#   (W) twenty C<i>.go: alt=17, 12 <alt> rows, alt_capped="1" (the row cap is disclosed, the count is whole).
 #   (D) exactly-one control: only A.go reaches: no pairs_reaching=, no <pair>, the hop rows sit under <path>.
 #   (E) none-reach control: reachable=0, no pairs_reaching=, no <pair>.
 #   (J) shared tail: B.go -> a_hop -> m1 -> m2 -> m3 -> target beside A.go -> m1 -> …: joins="1", 3 rows printed for pair 2.
@@ -41,7 +42,7 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
 
-mkdir -p "$TMP/two" "$TMP/hedge" "$TMP/many" "$TMP/one" "$TMP/none" "$TMP/join"
+mkdir -p "$TMP/wide" "$TMP/two" "$TMP/hedge" "$TMP/many" "$TMP/one" "$TMP/none" "$TMP/join"
 cat > "$TMP/two/m.go" <<'EOF'
 package m
 
@@ -73,6 +74,7 @@ python3 - "$TMP" <<'PY'
 import sys
 t = sys.argv[1]
 open( t + "/many/k.py", "w" ).write( "def target():\n    return 1\n\n" + "".join( "class C%d:\n    def go(self):\n        return mid%d()\n\ndef mid%d():\n    return target()\n\n" % ( i, i, i ) for i in range( 5 ) ) )
+open( t + "/wide/w.py", "w" ).write( "def target():\n    return 1\n\n" + "".join( "class C%d:\n    def go(self):\n        return target()\n\n" % i for i in range( 20 ) ) )
 open( t + "/one/o.py", "w" ).write( "def target():\n    return 1\n\nclass A:\n    def go(self):\n        return target()\n\nclass B:\n    def go(self):\n        return 2\n" )
 open( t + "/none/n.py", "w" ).write( "def target():\n    return 1\n\nclass A:\n    def go(self):\n        return 3\n\nclass B:\n    def go(self):\n        return 2\n" )
 open( t + "/join/j.py", "w" ).write( "def target():\n    return 1\n\ndef m3():\n    return target()\n\ndef m2():\n    return m3()\n\ndef m1():\n    return m2()\n\n"
@@ -81,7 +83,7 @@ PY
 run(){ ( cd "$TMP/$1" || exit 1; "$BIN" "$TMP/$1" --no-cache "--path=$2" "${@:3}" </dev/null ); }
 run two  Run,leaf     > "$TMP/A.out"; run hedge go,target > "$TMP/B.out"; run many go,target > "$TMP/C.out"
 run one  go,target    > "$TMP/D.out"; run none  go,target > "$TMP/E.out"; run join go,target > "$TMP/J.out"
-run many 'g*,target'  > "$TMP/G.out"
+run many 'g*,target'  > "$TMP/G.out"; run wide go,target > "$TMP/W.out"
 
 python3 - "$TMP" "$BIN" <<'PY'
 import re, shlex, subprocess, sys
@@ -113,6 +115,10 @@ if rc.get( "next" ):
     r2 = root( o )
     check( "C", r2.get( "reachable" ) == "1" and r2.get( "from_defs" ) == "1" and alts and r2.get( "from_p" ) == alts[0].get( "from_p" ) and "pairs_reaching" not in r2,
            "next= replays the first alt as one pair: %r" % { k: r2.get( k ) for k in ( "reachable", "from_defs", "from_p" ) } )
+w = rd( "W" ); rw_ = root( w )
+check( "W", rw_.get( "pairs_reaching" ) == "20" and rw_.get( "alt" ) == "17" and rw_.get( "alt_capped" ) == "1" and len( re.findall( r'<alt ', w ) ) == 12 and len( pairs( w ) ) == 3,
+       "20 pairs: 3 chains, alt=17, 12 rows, alt_capped=1: %r" % { k: rw_.get( k ) for k in ( "pairs_reaching", "alt", "alt_capped" ) } )
+check( "W", "alt_capped" not in root( rd( "C" ) ), "alt_capped= absent when every alt row prints" )
 d = rd( "D" ); rd_ = root( d )
 check( "D", "pairs_reaching" not in rd_ and "<pair" not in d and rd_.get( "reachable" ) == "1" and re.search( r'<path [^>]*><s ', d ) is not None,
        "exactly one reaching pair keeps the hop rows under <path>, no pairs_reaching=" )

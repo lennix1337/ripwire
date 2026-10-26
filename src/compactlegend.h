@@ -822,6 +822,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // TRACE-EP (src/pathpairs.h kPathPairsLegend), present only when several definition pairs reach: <pair> chains and <alt> rows
     { "pairs_reaching", "pairs_reaching=N: N from=/to= definition pairs reach (call chains, then a hedged bridge per to= definition no chain reaches); the root's from_p=/to_p=/hops= are the first pair's", false, "path", MapHeaderRead::No, {}, "path" },
     { "alt", "alt=N: N more reaching pairs, each an <alt> row; next= runs the first", false, "path", MapHeaderRead::No, {}, "path" },
+    { "alt_capped", "alt_capped=1: only the first 12 alt rows print; qualify from= or to= as file:name to list the rest", false, "path", MapHeaderRead::No, {}, "path" },
     { "hedged", "pair/alt from_p= to_p= hops= hedged=: one reaching pair, fewest hedged hops first (0 = all proven), then fewest hops; hedged= its via=/prov=split/anchor=missing rows (a bridge: crossings plus via=name), above 0 NOT proven and to_p= not bound", true, {}, MapHeaderRead::No, {}, "path" },
     { "joins", "pair joins=J: from its last row the chain is pair J's, rows not repeated", true, "pair", MapHeaderRead::No, {}, "path" },
     { "bridge", "pair bridge=1: a hedged bridge, NOT a path", true, "pair", MapHeaderRead::No, {}, "path" },

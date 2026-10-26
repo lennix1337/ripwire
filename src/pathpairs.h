@@ -49,6 +49,7 @@ namespace rw
 inline constexpr std::size_t kPathPairChains         = 3;    // knob (knob-census ADDENDUM): chains printed; the rest are alt= rows
 inline constexpr std::size_t kPathPairMaxDstGroups   = 16;   // knob: reverse walks per answer; more to= groups keep today's answer
 inline constexpr std::size_t kPathPairBridgeSearches = 4;    // knob: bridge searches for to= groups no chain reaches
+inline constexpr std::size_t kPathPairAltRows        = 12;   // knob: <alt> rows printed; alt= counts them all, alt_capped="1" says rows were cut
 inline constexpr std::size_t kPathPairJoinMin        = 3;    // a shared tail of fewer rows is printed whole (no joins=): joining must save two rows
 
 // A hop the answer hedges: by name alone (FE-B via="name"), a markdown link, a missing anchor, a split arm (prov="split") or the
@@ -317,7 +318,8 @@ inline constexpr std::string_view kPathPairsLegend =
     "proven), then fewest hops, then the definitions' order; hedged= counts its via=/prov=split/anchor=missing rows (a bridge: its "
     "crossings plus via=name edges), so hedged>0 is NOT a proven chain and its to_p= is not bound; the root's from_p=/to_p=/hops= "
     "are the first pair's. joins=J: from its last row the chain is pair J's (those rows are not repeated). bridge=1: a hedged "
-    "bridge, NOT a path. alt=N: N more reaching pairs, each an <alt from_p= to_p= hops= hedged=> row; next= runs the first. ";
+    "bridge, NOT a path. alt=N: N more reaching pairs, each an <alt from_p= to_p= hops= hedged=> row; next= runs the first; "
+    "alt_capped=1: only the first 12 rows print, qualify from= or to= as file:name to list the rest. ";
 inline std::string_view pathPairsLegend( bool on ) noexcept
 {
     return on ? kPathPairsLegend : std::string_view();
@@ -349,6 +351,7 @@ inline PathPairsXml pathPairsRootAttrs( const IngestResult& ing, const PathPairs
     {
         const PathPair& a = pp.pairs[ kPathPairChains ];
         out.rootAttrs += " alt=\"" + std::to_string( pp.pairs.size() - kPathPairChains ) + "\""
+                       + ( pp.pairs.size() - kPathPairChains > kPathPairAltRows ? " alt_capped=\"1\"" : "" )
                        + nextAttrXml( nextFlag( "--path=", pathPairSelector( ing, a.chain.front(), singleRoot, rootPrefix ) + ","
                                                            + pathPairSelector( ing, a.chain.back(), singleRoot, rootPrefix ) ) );
     }
@@ -373,6 +376,10 @@ inline void emitPathPairs( std::FILE* out, const IngestResult& ing, const Graph&
     for( std::size_t i = 0; i < pp.pairs.size(); ++i )
     {
         const PathPair& p = pp.pairs[i];
+        if( i >= kPathPairChains + kPathPairAltRows )
+        {
+            break;   // alt_capped="1" on the root says so; a file:name endpoint narrows the set
+        }
         if( i >= kPathPairChains )
         {
             emitTo( out, "<alt{}/>", head( p ) );
