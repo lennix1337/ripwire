@@ -35,6 +35,9 @@
 #   (H1) hub fold: a slot caller with 20 proven callers prints ONE <hub behind="20" next="--impact=t.c:hubf"/>, its tail is not
 #        listed (only the 3 sample names), reaches_hedged=21 unchanged, reaches_hedged_hubs=20, the root next= names the hub;
 #        16 proven callers: no <hub> (at the bound), next= stays --safe-delete=.
+#   (H2..H5) hub edges: 17 callers folds (one past the bound); two hubs sharing callers count each function once in
+#        reaches_hedged_hubs (never above reaches_hedged); the sample is led by a tested caller (not node id order); a member
+#        whose tail is only counted d=2 ring rows (17 wide callers) still folds (the early exit tests every counted function).
 #   (O1) ring order: a narrow forward width (slot_fns=1) before a wide one (3); a tested row before an untested entry point.
 #   (W1) page window: under --limit the proven <s> rows keep the page and the hub is cut first (ring_cut=1, next= the replay);
 #        the replay at the named limit shows it and has no ring_cut; no --limit: no ring_cut.
@@ -214,6 +217,48 @@ for n in 16 20; do
         [ "$n" = 20 ] && echo 'void p1( void ) { sink(); } void p2( void ) { sink(); } void p3( void ) { sink(); }'
     } > "$TMP/hub$n/t.c"
 done
+# hub bound edges: hub17 = one past the bound (17 proven callers); hub2 = hubA and hubB share the 18 callers c1..c18 (two hubs);
+# hubsmp = 18 callers, the LAST written one (c18) is reached by a test; hubskip = m (d=1) behind a field called by c1..c17 (width 17: wide,
+# so each ci is a d=2 ring row, not a composed tail), each ci also calling hubf (d=1) — 17 counted functions that are all wide d=2 rows
+mkdir -p "$TMP/hub17" "$TMP/hub2" "$TMP/hubsmp/tests" "$TMP/hubskip"
+{
+    echo 'struct ops { void (*run)( void ); };'
+    echo 'const struct ops *get( void );'
+    echo 'void sink( void ) { }'
+    echo 'const struct ops S = { .run = sink };'
+    echo 'void hubf( void ) { const struct ops *o = get(); o->run(); }'
+    i=1; while [ "$i" -le 17 ]; do printf 'void c%d( void ) { hubf(); }\n' "$i"; i=$(( i + 1 )); done
+} > "$TMP/hub17/t.c"
+{
+    echo 'struct ops { void (*run)( void ); };'
+    echo 'const struct ops *get( void );'
+    echo 'void sink( void ) { }'
+    echo 'const struct ops S = { .run = sink };'
+    echo 'void hubA( void ) { const struct ops *o = get(); o->run(); }'
+    echo 'void hubB( void ) { const struct ops *o = get(); o->run(); }'
+    i=1; while [ "$i" -le 18 ]; do printf 'void c%d( void ) { hubA(); hubB(); }\n' "$i"; i=$(( i + 1 )); done
+} > "$TMP/hub2/t.c"
+{
+    echo 'struct ops { void (*run)( void ); };'
+    echo 'const struct ops *get( void );'
+    echo 'void sink( void ) { }'
+    echo 'const struct ops S = { .run = sink };'
+    echo 'void hubf( void ) { const struct ops *o = get(); o->run(); }'
+    i=1; while [ "$i" -le 18 ]; do printf 'void c%d( void ) { hubf(); }\n' "$i"; i=$(( i + 1 )); done
+} > "$TMP/hubsmp/t.c"
+printf 'void c18( void );\nvoid test_c18( void ) { c18(); }\n' > "$TMP/hubsmp/tests/test_t.c"
+{
+    echo 'struct ops { void (*run)( void ); };'
+    echo 'struct W { void (*w)( void ); };'
+    echo 'const struct ops *get( void );'
+    echo 'const struct W *gw( void );'
+    echo 'void sink( void ) { }'
+    echo 'const struct ops S = { .run = sink };'
+    echo 'void m( void ) { const struct ops *o = get(); o->run(); }'
+    echo 'void hubf( void ) { const struct ops *o = get(); o->run(); }'
+    echo 'const struct W W1 = { .w = m };'
+    i=1; while [ "$i" -le 17 ]; do printf 'void c%d( void ) { const struct W *p = gw(); p->w(); hubf(); }\n' "$i"; i=$(( i + 1 )); done
+} > "$TMP/hubskip/t.c"
 # ring order: m (d=1) is called through a wide field (3 functions) by wcall and a narrow one (1) by ncall, written wide-first;
 # ucall (an entry point, untested) and tcall (a test reaches it) each through their own one-function field, written ucall-first
 mkdir -p "$TMP/ord/tests"
@@ -399,6 +444,18 @@ t16, r16 = impact( tmp + "/hub16", "sink" )
 check( "(H1) at the bound (16 proven callers): no <hub>, no reaches_hedged_hubs, reaches_hedged=17, next= stays --safe-delete=",
        t16 is not None and hubs( t16 ) == [] and attr( r16, "reaches_hedged_hubs" ) is None and attr( r16, "reaches_hedged" ) == "17"
        and attr( r16, "next" ) == "--safe-delete=sink", r16 + repr( hubs( t16 ) ) )
+t, r = impact( tmp + "/hub17", "sink" )
+check( "(H2) one past the bound (17 proven callers) folds: ONE <hub behind=\"17\">, reaches_hedged=18",
+       [ attr( h, "behind" ) for h in hubs( t ) ] == [ "17" ] and attr( r, "reaches_hedged" ) == "18", r + repr( hubs( t ) ) )
+t, r = impact( tmp + "/hub2", "sink" )
+check( "(H3) two hubs sharing 18 callers: reaches_hedged_hubs=18 (each function once), never above reaches_hedged=20, two <hub> rows",
+       len( hubs( t ) ) == 2 and attr( r, "reaches_hedged_hubs" ) == "18" and attr( r, "reaches_hedged" ) == "20", r )
+t, r = impact( tmp + "/hubsmp", "sink" )
+check( "(H4) a tested caller leads the hub sample (c18, written last, before c1..c3): the order is the ring's, never the node id",
+       ( ( attr( ( hubs( t ) or [ "" ] )[ 0 ], "sample" ) or "" ).split( "," ) or [ "" ] )[ 0 ] == "c18", r + repr( hubs( t ) ) )
+t, r = impact( tmp + "/hubskip", "sink" )
+check( "(H5) a member whose tail is made of counted d=2 ring rows still folds: 17 wide d=2 callers behind hubf = <hub behind=\"17\">",
+       [ attr( h, "behind" ) for h in hubs( t ) ] == [ "17" ], r + repr( hubs( t ) ) )
 t, r = impact( tmp + "/ord", "sink" ); rg = ring( t )
 order = re.findall( r'called_by="([^"]*)"', rg )
 check( "(O1) a narrow forward width before a wide one: ncall (slot_fns=1) is listed before wcall (slot_fns=3), written after it",

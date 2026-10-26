@@ -667,23 +667,22 @@ public:
         {
             std::ranges::copy_if( *members, std::back_inserter( m_composable ), [ & ]( NodeId n ) { return m_narrow[ n ] != 0; } );
         }
-        const std::size_t before = m_hedged;
         for( const NodeId n : m_composable.empty() ? std::vector<NodeId>() : transitiveCallers( m_hops.graph(), m_composable ) )
         {
             count( n );
         }
-        m_tailCounted = m_hedged - before;
     }
     // The hub fold: one proven-caller walk per composable member (attributeReachAnswer groups a reach by DEFINITION of of=,
     // not by ring member, so it cannot say which member a tail function sits behind). The walk is the tail's own
     // (expandCallers) with its visited marks reset per member over the nodes it touched, never re-allocated. Skipped
-    // whole when the tail itself is within the bound: no member's share of it can exceed it then.
+    // whole when every counted function together is within the bound: a member's tail is a subset of them (a tail may hold
+    // counted d=2/d=3 ring members, not only the tail walk's own share).
     // `tailOf(member, out)` receives each hub's counted tail before the row is kept (the caller orders the sample).
     template<class TailFn>
     void hubs( ImpactRing& out, TailFn&& tailOf ) const
     {
         std::size_t hubbed = 0;
-        if( m_tailCounted + m_composable.size() <= kBackHopWidth )
+        if( m_hedged <= kBackHopWidth )
         {
             return;
         }
@@ -758,7 +757,6 @@ private:
     const BackwardHops& m_hops;
     std::size_t         m_S;
     std::size_t         m_hedged = 0;
-    std::size_t         m_tailCounted = 0;            // the tail's own share of m_hedged
     std::vector<char>   m_known, m_counted, m_level, m_narrow, m_fieldNarrow;
     std::vector<BackHopVia> m_via;                    // the hop that joined each member (a hub row's via=)
     std::vector<NodeId> m_d1, m_d2, m_d3, m_composable;
@@ -1007,7 +1005,7 @@ inline constexpr std::string_view kImpactRingRowsLegend =
     "that container may hold (the forward width, not capped); first 16, next= the callers of the first unshown calls=. ";
 inline constexpr std::string_view kImpactHubLegend =
     "<hub n= via= d= behind= tested= sample= next=>: a ring member with more than 16 proven callers behind it, folded: those behind= functions are "
-    "in reaches_hedged= but not listed (tested= of them a test reaches, sample= the first 3, next= lists them as proven rows); reaches_hedged_hubs=K: "
+    "in reaches_hedged= but not listed (tested= of them a test reaches, sample= the first 3 by tested, no proven caller, same dir, rank; next= lists them as proven rows); reaches_hedged_hubs=K: "
     "K of reaches_hedged= sit behind a hub; ring_cut=N: the page limit cut N ring rows (hedged rows go first, proven rows keep the page), next= shows them. ";
 // `ring.hedged`: reaches_hedged= rides; `rowsForm`: the answer prints rows (XML/JSON; the columnar form carries the counts alone),
 // so the <ring> clause rides with a shown <rh> row; the hub clause rides with reaches_hedged_hubs= / ring_cut= in every form.
