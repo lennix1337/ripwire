@@ -718,7 +718,7 @@ inline constexpr std::string_view kImpactRingLegend =
     "Not counted in reaches= and not an answered definition. The one-hop set has NO width bound (a wide field's callers are all counted). "
     "A hedge: one hedged hop makes the whole chain hedged; never a proven caller, never in reaches=/by_depth=/radius_*. ";
 inline constexpr std::string_view kImpactRingRowsLegend =
-    "<ring d=2|3 total= shown=> lists the two- and three-hop ones: <rh called_by= called_at= via=slot|slot-name|container calls=> = called_by may call "
+    "<ring d=2 total= shown=> lists the two-hop ones (d=3 when a third field hop is listed too): <rh called_by= called_at= via=slot|slot-name|container calls=> = called_by may call "
     "calls= through a field or container at called_at=; d=3 the third field hop; slot_fns=K the functions that field holds, cands=K the functions "
     "that container may hold (the forward width, not capped); first 16, next= the callers of the first unshown calls=. ";
 // `on`: reaches_hedged= rides; `rows`: the <ring> element rides too (XML/JSON; the columnar form carries the count alone).
