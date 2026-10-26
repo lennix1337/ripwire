@@ -36,6 +36,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <numeric>
 #include <queue>
 #include <span>
 #include <string>
@@ -61,12 +62,9 @@ inline bool pathHopHedged( const Graph& g, NodeId from, NodeId to ) noexcept
 }
 inline std::uint32_t pathChainHedged( const Graph& g, std::span<const NodeId> chain ) noexcept
 {
-    std::uint32_t h = 0;
-    for( std::size_t i = 1; i < chain.size(); ++i )
-    {
-        h += pathHopHedged( g, chain[ i - 1 ], chain[i] ) ? 1u : 0u;
-    }
-    return h;
+    return chain.size() < 2 ? 0u
+                            : std::transform_reduce( chain.begin(), chain.end() - 1, chain.begin() + 1, 0u, std::plus<>(),
+                                                     [ & ]( NodeId a, NodeId b ) { return pathHopHedged( g, a, b ) ? 1u : 0u; } );
 }
 
 struct PathPair
@@ -413,6 +411,52 @@ inline bool pathPairsAnyHop( const PathPairs& pp, Pred&& pred )
         }
     }
     return false;
+}
+
+// THE hop rows of a reached --path answer: the listed pairs, else today's single path (defattrib.h emitPathHopRows).
+inline void emitPathAnswerRows( std::FILE* out, const IngestResult& ing, const Graph& g, const PathPairs& pp, std::span<const NodeId> path,
+                                std::span<const std::string_view> owners, bool singleRoot, std::string_view rootPrefix )
+{
+    if( pp.active() )
+    {
+        emitPathPairs( out, ing, g, pp, singleRoot, rootPrefix );
+        return;
+    }
+    emitPathHopRows( out, ing, g, path, owners, singleRoot, rootPrefix );
+}
+
+// What the answer's hop rows carry, for the legend: today's path, or every printed chain when pairs are listed — the CLI and
+// MCP path_between read their via=/link/anchor/split/owner clauses and the root's chain from here, one rule for both.
+struct PathShownMarks
+{
+    bool via = false, link = false, miss = false, split = false, owner = false;
+};
+inline PathShownMarks pathShownMarks( const IngestResult& ing, const Graph& g, const PathPairs& pp, std::span<const NodeId> path )
+{
+    PathShownMarks m;
+    const auto add = [ & ]( std::span<const NodeId> c )
+    {
+        m.via   = m.via || pathHasNameOnlyHop( g, c );
+        m.link  = m.link || pathHasNameOnlyHop( g, c, kEdgeLink );
+        m.miss  = m.miss || pathHasNameOnlyHop( g, c, 0 );
+        m.split = m.split || pathEndpointBinding( g, 1, 1, c ).splitHop;
+        m.owner = m.owner || anyPathHopOwner( pathHopOwners( ing, c ) );
+        return false;   // visit every printed chain
+    };
+    if( pp.active() )
+    {
+        pathPairsAnyHop( pp, add );
+    }
+    else
+    {
+        add( path );
+    }
+    return m;
+}
+// The chain the root's from_p=/to_p=/hops= describe: the first listed pair's, else today's path.
+inline const std::vector<NodeId>& pathShownChain( const PathPairs& pp, const std::vector<NodeId>& path ) noexcept
+{
+    return pp.active() ? pp.pairs.front().chain : path;
 }
 
 }   // namespace rw

@@ -3770,19 +3770,17 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
               }
               return pathBridge( ing, g, srcDefs, dstMembers, valueRefIndexOf( ix ), *ptBackHops );
           } );
-    const std::vector<NodeId>& ptShown = ptPairs.active() ? ptPairs.pairs.front().chain : pth;
+    const std::vector<NodeId>& ptShown = pathShownChain( ptPairs, pth );
     const NodeId               srcUsed = ptShown.empty() ? srcDefs.front() : ptShown.front();
     const NodeId               dstUsed = ptShown.empty() ? dstDefs.front() : ptShown.back();
     const PathBridge          ptBridge     = pth.empty() ? pathBridge( ing, g, srcDefs, dstDefs, valueRefIndexOf( ix ), *ptBackHops ) : PathBridge{};      // ix2-slice, as on the CLI
     const std::string         ptSinkCallers = pth.empty() && ptGaps.any() && !dstGlob ? pathSinkCallersSelector( ing, *ptBackHops, dstDefs, to, ptSingleRoot, ptRootPrefix ) : std::string();   // HOP1 #6, as on the CLI
-    const auto ptAnyHop = [ & ]( auto&& has ) { return ptPairs.active() ? pathPairsAnyHop( ptPairs, has ) : has( std::span<const NodeId>( pth ) ); };
-    const std::string         ptKindLegend = std::string( viaNameLegend( ptAnyHop( [ & ]( std::span<const NodeId> c ) { return pathHasNameOnlyHop( g, c ); } ) ) )
-                                           + viaLinkLegend( ptAnyHop( [ & ]( std::span<const NodeId> c ) { return pathHasNameOnlyHop( g, c, kEdgeLink ); } ) )
-                                           + anchorMissLegend( ptAnyHop( [ & ]( std::span<const NodeId> c ) { return pathHasNameOnlyHop( g, c, 0 ); } ) );
+    const PathShownMarks      ptMarks      = pathShownMarks( ing, g, ptPairs, pth );   // TRACE-EP: the CLI's legend marks, by the same call
+    const std::string         ptKindLegend = std::string( viaNameLegend( ptMarks.via ) ) + viaLinkLegend( ptMarks.link ) + anchorMissLegend( ptMarks.miss );
     const PathEndpointBinding ptBound      = pathEndpointBinding( g, endpointDefinitionCount( ing, srcDefs ), endpointDefinitionCount( ing, dstDefs ), ptShown );   // attrib-multidef, as on the CLI
-    const bool                ptHasSplit = ptAnyHop( [ & ]( std::span<const NodeId> c ) { return pathEndpointBinding( g, 1, 1, c ).splitHop; } );
+    const bool                ptHasSplit = ptMarks.split;
     const std::vector<std::string_view> ptOwners = pathHopOwners( ing, pth );   // PATH-OWNERS, as on the CLI
-    const bool                ptHasOwner = ptAnyHop( [ & ]( std::span<const NodeId> c ) { return anyPathHopOwner( pathHopOwners( ing, c ) ); } );
+    const bool                ptHasOwner = ptMarks.owner;
     rw::emitTo( mem, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                        "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + ptKindLegend
                                                            + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to )
@@ -3805,14 +3803,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
         : PathGapsXml{};
     rw::emitTo( mem, "{}>{}{}{}", ptUnreached.rootAttrs, ptUnreached.rows, pathBridgeXml( ing, g, ptBridge, ptSingleRoot, ptRootPrefix ),
                   pathNearSinkXml( ing, ptNear, ptSingleRoot, ptRootPrefix ) );
-    if( ptPairs.active() )
-    {
-        emitPathPairs( mem, ing, g, ptPairs, ptSingleRoot, ptRootPrefix );   // TRACE-EP: the CLI's own pairs emitter (pathpairs.h)
-    }
-    else
-    {
-        emitPathHopRows( mem, ing, g, pth, ptOwners, ptSingleRoot, ptRootPrefix );   // the CLI's own row emitter (defattrib.h)
-    }
+    emitPathAnswerRows( mem, ing, g, ptPairs, pth, ptOwners, ptSingleRoot, ptRootPrefix );   // the CLI's own row emitter (pathpairs.h / defattrib.h)
     rw::emitRaw( mem, "</path>" );
     return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }

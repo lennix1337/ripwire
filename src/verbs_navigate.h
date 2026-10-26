@@ -2591,7 +2591,7 @@ std::optional<int> runPath( const MainDispatch& d )
                   }
                   return rw::pathBridge( ing, g, srcDefs, dstMembers, *pthValueIdx, *pthBackHops );
               } );
-        const std::vector<NodeId>& pthShown = pthPairs.active() ? pthPairs.pairs.front().chain : path;   // the root's from_p=/to_p=/hops=
+        const std::vector<NodeId>& pthShown = rw::pathShownChain( pthPairs, path );   // the root's from_p=/to_p=/hops=
         const NodeId               srcUsed  = pthShown.empty() ? srcDefs.front() : pthShown.front();
         const NodeId               dstUsed  = pthShown.empty() ? dstDefs.front() : pthShown.back();
         // ix2-slice (IX-2 P1): the hedged bridge — the fewest-crossings chain over declined / value / closure / namesake / slot hops
@@ -2599,16 +2599,16 @@ std::optional<int> runPath( const MainDispatch& d )
         // HOP1 (#6): to= has a backward hop the provider follows → the root next= is the callers verb on to=, not the gap bodies
         const std::string        pthSinkCallers = path.empty() && pthGaps.any() && !dstGlob ? rw::pathSinkCallersSelector( ing, *pthBackHops, dstDefs, dstN, pthSingleRoot, pthRootPrefix )
                                                                                              : std::string();
-        // FE-B: exactly when a printed hop is via="name" (every printed chain when pairs are listed)
-        const auto pthAnyHop = [ & ]( auto&& has ) { return pthPairs.active() ? rw::pathPairsAnyHop( pthPairs, has ) : has( std::span<const NodeId>( path ) ); };
-        const bool pthHasVia  = pthAnyHop( [ & ]( std::span<const NodeId> c ) { return rw::pathHasNameOnlyHop( g, c ); } );
-        const bool pthHasLink = pthAnyHop( [ & ]( std::span<const NodeId> c ) { return rw::pathHasNameOnlyHop( g, c, rw::kEdgeLink ); } );
-        const bool pthHasMiss = pthAnyHop( [ & ]( std::span<const NodeId> c ) { return rw::pathHasNameOnlyHop( g, c, 0 ); } );
+        // FE-B: exactly when a printed hop is via="name" (every printed chain when pairs are listed); link, anchor, split, owner alike
+        const rw::PathShownMarks pthMarks = rw::pathShownMarks( ing, g, pthPairs, path );
+        const bool pthHasVia  = pthMarks.via;
+        const bool pthHasLink = pthMarks.link;
+        const bool pthHasMiss = pthMarks.miss;
         // attrib-multidef (defattrib.h): from_p=/to_p= only for an endpoint the path bound; prov="split" on a split-arm hop
         const rw::PathEndpointBinding pthBound = rw::pathEndpointBinding( g, rw::endpointDefinitionCount( ing, srcDefs ), rw::endpointDefinitionCount( ing, dstDefs ), pthShown );
-        const bool                    pthHasSplit = pthAnyHop( [ & ]( std::span<const NodeId> c ) { return rw::pathEndpointBinding( g, 1, 1, c ).splitHop; } );
+        const bool                    pthHasSplit = pthMarks.split;
         const std::vector<std::string_view> pthOwners = rw::pathHopOwners( ing, path );   // PATH-OWNERS: n="Owner.name" per hop
-        const bool pthHasOwner = pthAnyHop( [ & ]( std::span<const NodeId> c ) { return rw::anyPathHopOwner( rw::pathHopOwners( ing, c ) ); } );
+        const bool pthHasOwner = pthMarks.owner;
         rw::emitTo( stdout, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                      "graph holds none. {}{}{}{}-->{}", ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ) + rw::viaNameLegend( pthHasVia )
                                                          + rw::viaLinkLegend( pthHasLink ) + rw::anchorMissLegend( pthHasMiss )
@@ -2639,14 +2639,7 @@ std::optional<int> runPath( const MainDispatch& d )
         rw::emitTo( stdout, "{}>{}{}{}", pthUnreached.rootAttrs, pthUnreached.rows, rw::pathBridgeXml( ing, g, pthBridge, pthSingleRoot, pthRootPrefix ),
                      rw::pathNearSinkXml( ing, pthNear, pthSingleRoot, pthRootPrefix ) );
         // FE-B via="name", #409 via="link"/anchor="missing", attrib-multidef prov="split", PATH-OWNERS n="Owner.name": one emitter, shared with MCP path_between
-        if( pthPairs.active() )
-        {
-            rw::emitPathPairs( stdout, ing, g, pthPairs, pthSingleRoot, pthRootPrefix );   // TRACE-EP: one emitter, shared with MCP path_between
-        }
-        else
-        {
-            rw::emitPathHopRows( stdout, ing, g, path, pthOwners, pthSingleRoot, pthRootPrefix );
-        }
+        rw::emitPathAnswerRows( stdout, ing, g, pthPairs, path, pthOwners, pthSingleRoot, pthRootPrefix );   // TRACE-EP: pairs or today's rows, shared with MCP
         rw::emitTo( stdout, "</path>" );
         return 0;
     }
