@@ -32,6 +32,12 @@
 #        bridge into h0 and no hedged tail; the passer keeps its value crossing.
 #   (N1) namesake: two files each with a static `run` over its own table — ha's ring counts only its own run and caller,
 #        and the other file's main is no bridge into ha.
+#   (H1) hub fold: a slot caller with 20 proven callers prints ONE <hub behind="20" next="--impact=t.c:hubf"/>, its tail is not
+#        listed (only the 3 sample names), reaches_hedged=21 unchanged, reaches_hedged_hubs=20, the root next= names the hub;
+#        16 proven callers: no <hub> (at the bound), next= stays --safe-delete=.
+#   (O1) ring order: a narrow forward width (slot_fns=1) before a wide one (3); a tested row before an untested entry point.
+#   (W1) page window: under --limit the proven <s> rows keep the page and the hub is cut first (ring_cut=1, next= the replay);
+#        the replay at the named limit shows it and has no ring_cut; no --limit: no ring_cut.
 #   (J1) JSON twin of a d=3 row; (M1) MCP impact twin; (L1) legends name the composition and parse as XML.
 #
 # Usage: test/composedhopscheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
@@ -195,6 +201,53 @@ for n in 4 5; do
         echo 'void aa( void ) { const struct s1 *x = g1(); x->go(); }'
     } > "$TMP/third$n/t.c"
 done
+# hub fold: hubf calls sink through a field and has N proven callers (20: folded; 16: at the bound, not folded); hubp: 3 proven callers too
+for n in 16 20; do
+    mkdir -p "$TMP/hub$n"
+    {
+        echo 'struct ops { void (*run)( void ); };'
+        echo 'const struct ops *get( void );'
+        echo 'void sink( void ) { }'
+        echo 'const struct ops S = { .run = sink };'
+        echo 'void hubf( void ) { const struct ops *o = get(); o->run(); }'
+        i=1; while [ "$i" -le "$n" ]; do printf 'void c%d( void ) { hubf(); }\n' "$i"; i=$(( i + 1 )); done
+        [ "$n" = 20 ] && echo 'void p1( void ) { sink(); } void p2( void ) { sink(); } void p3( void ) { sink(); }'
+    } > "$TMP/hub$n/t.c"
+done
+# ring order: m (d=1) is called through a wide field (3 functions) by wcall and a narrow one (1) by ncall, written wide-first;
+# ucall (an entry point, untested) and tcall (a test reaches it) each through their own one-function field, written ucall-first
+mkdir -p "$TMP/ord/tests"
+cat > "$TMP/ord/o.c" <<'EOF'
+struct ops { void (*run)( void ); };
+struct W { void (*w)( void ); };
+struct N { void (*n)( void ); };
+struct U { void (*u)( void ); };
+struct T { void (*t)( void ); };
+const struct ops *get( void );
+const struct W *gw( void );
+const struct N *gn( void );
+const struct U *gu( void );
+const struct T *gt( void );
+void sink( void ) { }
+const struct ops S = { .run = sink };
+void m( void ) { const struct ops *o = get(); o->run(); }
+void x1( void ) { }
+void x2( void ) { }
+const struct W W1 = { .w = m };
+const struct W W2 = { .w = x1 };
+const struct W W3 = { .w = x2 };
+const struct N N1 = { .n = m };
+const struct U U1 = { .u = m };
+const struct T T1 = { .t = m };
+void wcall( void ) { const struct W *p = gw(); p->w(); }
+void ncall( void ) { const struct N *p = gn(); p->n(); }
+void ucall( void ) { const struct U *p = gu(); p->u(); }
+void tcall( void ) { const struct T *p = gt(); p->t(); }
+EOF
+cat > "$TMP/ord/tests/test_o.c" <<'EOF'
+void tcall( void );
+void test_tcall( void ) { tcall(); }
+EOF
 # namesake: two files, each a static run over its own table
 cat > "$TMP/ns/a.c" <<'EOF'
 typedef void (*handler)( void );
@@ -329,6 +382,58 @@ check( "(N1) ha's ring counts its own file's run and main_a only (reaches_hedged
 t, r = path( tmp + "/ns", "main_b", "ha" )
 check( "(N1) main_b -> ha: no bridge through b.c's same-named run and same-named table", t is not None and bridge( t ) == "" and attr( r, "reachable" ) == "0", bridge( t ) )
 
+# ── H / O / W: the hub fold, the ring order, the page window ──────────────────────────────────────────────────────
+def hubs( t ):
+    return re.findall( r'<hub [^>]*/>', body( t ) )
+t20, r20 = impact( tmp + "/hub20", "sink" ); h20 = hubs( t20 )
+check( "(H1) a slot caller with 20 proven callers folds to ONE <hub n=\"hubf\" via=\"slot\" d=\"1\" behind=\"20\" tested=\"0\"> with next=\"--impact=t.c:hubf\"",
+       len( h20 ) == 1 and all( attr( h20[ 0 ], k ) == v for k, v in ( ( "n", "hubf" ), ( "via", "slot" ), ( "d", "1" ), ( "behind", "20" ), ( "tested", "0" ), ( "next", "--impact=t.c:hubf" ) ) )
+       and len( ( attr( h20[ 0 ], "sample" ) or "" ).split( "," ) ) == 3, repr( h20 ) )
+named = set( re.findall( r'\bc\d+\b', body( t20 ) ) )
+check( "(H1) the hub's tail is not listed: only its 3 sample names appear (no <s>/<rh> row for c1..c20)",
+       t20 is not None and len( named ) == 3 and named == set( ( attr( h20[ 0 ], "sample" ) or "" ).split( "," ) ) if h20 else False, repr( sorted( named ) ) )
+check( "(H1) the fold changes rows, never counts: reaches=3 reaches_hedged=21 (hubf + its 20 callers), reaches_hedged_hubs=20",
+       attr( r20, "reaches" ) == "3" and attr( r20, "reaches_hedged" ) == "21" and attr( r20, "reaches_hedged_hubs" ) == "20", r20 )
+check( "(H1) the hub holds more than half of reaches_hedged: the root next= is the hub's --impact", attr( r20, "next" ) == "--impact=t.c:hubf", r20 )
+t16, r16 = impact( tmp + "/hub16", "sink" )
+check( "(H1) at the bound (16 proven callers): no <hub>, no reaches_hedged_hubs, reaches_hedged=17, next= stays --safe-delete=",
+       t16 is not None and hubs( t16 ) == [] and attr( r16, "reaches_hedged_hubs" ) is None and attr( r16, "reaches_hedged" ) == "17"
+       and attr( r16, "next" ) == "--safe-delete=sink", r16 + repr( hubs( t16 ) ) )
+t, r = impact( tmp + "/ord", "sink" ); rg = ring( t )
+order = re.findall( r'called_by="([^"]*)"', rg )
+check( "(O1) a narrow forward width before a wide one: ncall (slot_fns=1) is listed before wcall (slot_fns=3), written after it",
+       "ncall" in order and "wcall" in order and order.index( "ncall" ) < order.index( "wcall" ), repr( order ) )
+check( "(O1) a tested row before an untested entry point of the same width: tcall before ucall, written after it",
+       "tcall" in order and "ucall" in order and order.index( "tcall" ) < order.index( "ucall" ), repr( order ) )
+check( "(O1) the order moves rows, never counts: reaches_hedged=6 (m, wcall, ncall, ucall, tcall, test_tcall)", attr( r, "reaches_hedged" ) == "6", r )
+t, r = impact( tmp + "/hub20", "sink", "--limit=3" )
+check( "(W1) --limit=3: the 3 proven <s> rows keep the page, the hedged hub is cut first: ring_cut=1, next= the replay at --limit=4",
+       t is not None and len( re.findall( r'<s ', body( t ) ) ) == 3 and hubs( t ) == [] and attr( r, "ring_cut" ) == "1"
+       and attr( r, "next" ) == "--impact=sink --limit=4" and attr( r, "reaches_hedged" ) == "21", r )
+t, r = impact( tmp + "/hub20", "sink", "--limit=2" )
+check( "(W1) --limit=2: 2 proven rows, no hedged row (hedged rows are cut before proven ones), ring_cut=1",
+       t is not None and len( re.findall( r'<s ', body( t ) ) ) == 2 and hubs( t ) == [] and attr( r, "ring_cut" ) == "1", r )
+t, r = impact( tmp + "/hub20", "sink", "--limit=4" )
+check( "(W1) the replay at the named limit is not cut again: 3 <s> rows + the hub, no ring_cut",
+       t is not None and len( re.findall( r'<s ', body( t ) ) ) == 3 and len( hubs( t ) ) == 1 and attr( r, "ring_cut" ) is None, r )
+check( "(W1) no --limit: no ring_cut", attr( r20, "ring_cut" ) is None and len( h20 ) == 1, r20 )
+tj = run( tmp + "/hub20", "--impact=sink", "--json" ) or "{}"
+try:
+    jh = json.loads( tj )
+except ValueError:
+    jh = {}
+jhub = ( jh.get( "hubs" ) or [ {} ] )[ 0 ]
+check( "(H1) the JSON twin: reaches_hedged 21, reaches_hedged_hubs 20, one hub with the XML row's names and numbers",
+       jh.get( "reaches_hedged" ) == 21 and jh.get( "reaches_hedged_hubs" ) == 20 and len( jh.get( "hubs", [] ) ) == 1 and jhub.get( "n" ) == "hubf"
+       and jhub.get( "via" ) == "slot" and jhub.get( "d" ) == 1 and jhub.get( "behind" ) == 20 and jhub.get( "tested" ) == 0
+       and jhub.get( "next" ) == "--impact=t.c:hubf" and ",".join( jhub.get( "sample", [] ) ) == attr( h20[ 0 ] if h20 else "", "sample" ), repr( tj[ -400: ] ) )
+tjc = run( tmp + "/hub20", "--impact=sink", "--json", "--limit=3" ) or "{}"
+try:
+    jcut = json.loads( tjc )
+except ValueError:
+    jcut = {}
+check( "(W1) the JSON twin of the cut: ring_cut 1, no hubs key", jcut.get( "ring_cut" ) == 1 and "hubs" not in jcut, repr( tjc[ :300 ] ) )
+
 # ── J / M / L: twins and legends ───────────────────────────────────────────────────────────────────────────────────
 tj = run( tmp + "/c4", "--impact=cancel_cmd", "--json" ) or "{}"
 try:
@@ -348,7 +453,8 @@ check( "(J1) the JSON twin of a container row spells cands (no XML spelling insi
        { "called_by": "top", "called_at": "t.c:7", "via": "container", "calls": "run", "cands": 1 } in jc.get( "ring", {} ).get( "rows", [] ) and 'cands="' not in tjc, repr( tjc[:400] ) )
 reqs = [ { "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "g", "version": "1" } } },
          { "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "impact", "arguments": { "path": tmp + "/c4", "symbol": "cancel_cmd" } } },
-         { "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "path_between", "arguments": { "path": tmp + "/tbl", "from": "main", "to": "ha" } } } ]
+         { "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "path_between", "arguments": { "path": tmp + "/tbl", "from": "main", "to": "ha" } } },
+         { "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "impact", "arguments": { "path": tmp + "/hub20", "symbol": "sink" } } } ]
 p = subprocess.run( [ binp, "--mcp", "--mcp-legend=inline" ], input = "".join( json.dumps( x ) + "\n" for x in reqs ), capture_output = True, text = True, timeout = 300 )
 resp = {}
 for line in p.stdout.splitlines():
@@ -362,16 +468,25 @@ cli1 = run( tmp + "/c4", "--impact=cancel_cmd" ); cli2 = run( tmp + "/tbl", "--p
 check( "(M1) MCP impact: the same reaches_hedged= and <ring> (d=3) as the CLI",
        attr( root( resp.get( 1, "" ), "impact" ), "reaches_hedged" ) == "3" and ring( resp.get( 1, "" ) ) != "" and ring( resp.get( 1, "" ) ) == ring( cli1 ), repr( resp.get( 1, "" )[-300:] ) )
 check( "(M1) MCP path_between: the same container <bridge> as the CLI", bridge( resp.get( 2, "" ) ) != "" and bridge( resp.get( 2, "" ) ) == bridge( cli2 ), repr( resp.get( 2, "" )[-300:] ) )
+m3 = root( resp.get( 3, "" ), "impact" )
+check( "(M1) MCP impact: the same <hub> row, reaches_hedged_hubs= and root next= as the CLI",
+       hubs( resp.get( 3, "" ) ) == h20 and h20 != [] and attr( m3, "reaches_hedged_hubs" ) == "20" and attr( m3, "next" ) == attr( r20, "next" ), repr( resp.get( 3, "" )[-400:] ) )
 imf = run( tmp + "/c4", "--impact=cancel_cmd", "--legend=full" ) or ""
 pf = run( tmp + "/nar", "--path=Machine_run,Process_update", "--legend=full" ) or ""
 ti = run( tmp + "/c4", "--impact=cancel_cmd" ) or ""
+hf = run( tmp + "/hub20", "--impact=sink", "--legend=full", "--limit=3" ) or ""
+hfu = run( tmp + "/hub20", "--impact=sink", "--legend=full" ) or ""
+hc = run( tmp + "/hub20", "--impact=sink" ) or ""
+check( "(L1) the full legend defines <hub>, behind=, reaches_hedged_hubs= and ring_cut= (one clause, present-only: absent on c4)",
+       "<hub n= via= d= behind=" in hfu and "reaches_hedged_hubs=K" in hfu and "ring_cut=N" in hf and "reaches_hedged_hubs" not in imf )
+check( "(L1) the compact legend defines the hub row and reaches_hedged_hubs=", "hub n= via= d= behind=" in hc and "reaches_hedged_hubs=K" in hc, hc[ :200 ] )
 check( "(L1) the full impact legend says one hedged hop makes the chain hedged, names container, d=3 and the forward widths",
        "one hedged hop makes the whole chain hedged" in imf and "container" in imf and "d=3 the third field hop" in imf and "cands=K the functions" in imf )
 check( "(L1) the full bridge legend states the composition bound (4 candidates) and the container crossing",
        "a declined or container one of at most 4 candidates" in pf and "container = the previous row calls through a container element" in pf )
 check( "(L1) the compact impact legend defines the d=3 row and its forward width", "d=3 the third field hop; slot_fns=|cands=K" in ti )
 if shutil.which( "xmllint" ):
-    for label, doc in ( ( "impact full", imf ), ( "path full", pf ), ( "impact compact", ti ) ):
+    for label, doc in ( ( "impact full", imf ), ( "path full", pf ), ( "impact compact", ti ), ( "hub full + cut", hf ), ( "hub compact", hc ) ):
         x = subprocess.run( [ "xmllint", "--noout", "-" ], input = doc, capture_output = True, text = True )
         check( "(L1) the %s answer with the new clauses parses as XML (checklist 25)" % label, x.returncode == 0 and doc != "", x.stderr[:300] )
 else:

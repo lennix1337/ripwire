@@ -2842,7 +2842,7 @@ int emitImpactColumnar( const ImpactView& v )
                                  + ( v.imports.next.empty() ? " lens=\"shown_importers,importers_capped\""
                                                             : " lens=\"shown_importers,importers_capped,importers_next\"" )
                                  + rw::renderDisclosure( v.prD, rw::DiscloseAs::XmlAttrs )   // W2-F
-                                 + rw::nextAttrXml( rw::nextFlag( "--safe-delete=", v.sym ) );   // P3 (L7): the XML root's next=, same set
+                                 + rw::nextAttrXml( rw::impactRootNext( v.ing, *v.ring, rw::VrRender{ v.singleRoot, v.rootPrefix }, rw::nextFlag( "--safe-delete=", v.sym ) ) );   // P3 (L7); hub-fold: the XML root's next=, same rule
     const std::vector<char> via    = impactJsonVia( v );
     const std::vector<char> rowVia( via.begin() + v.page.begin, via.begin() + v.page.end );   // FE-B: in `rows` order
     std::vector<std::string> rowOfDef;   // attrib-multidef: of_def per row, only on a multi-group selector
@@ -2937,7 +2937,7 @@ int emitImpactXml( const ImpactView& v )
                  pageDisclosure( ipab, sizeof( ipab ), shownRows, v.show.size(), v.page.end,
                                  v.pageLimit, v.pageOffset, true ),
                  rw::graphCountFloorAttrXml( v.g ).c_str(), rw::renderDisclosure( v.prD, rw::DiscloseAs::XmlAttrs ).c_str(),
-                 rw::nextAttrXml( rw::nextFlag( "--safe-delete=", v.sym ) ).c_str() );   // P3 (L7): "is it safe to change" → "can it go"
+                 rw::nextAttrXml( rw::impactRootNext( v.ing, *v.ring, rw::VrRender{ v.singleRoot, v.rootPrefix }, rw::nextFlag( "--safe-delete=", v.sym ) ) ).c_str() );   // P3 (L7): "is it safe to change" → "can it go"; hub-fold: a ring cut / the widest hub first
     rw::emitRaw( stdout, rw::defTableXml( v.ing, v.attrib.groups, v.defListing, v.rootPrefix ).c_str() );   // attrib-multidef: the groups, by ix=
     rw::emitImpactFileRollupXml( stdout, v.ing, v.fileRollup, v.rootPrefix );   // idea #6: before the symbol window
     const rw::MemberOwners imOwners( v.ing );   // QUALNAME-1: n="Owner.name" on a member row (memberowner.h)
@@ -3003,7 +3003,7 @@ inline void emitImpactLegend( const rw::Config& cfg, const rw::IngestResult& ing
                    + rw::valueRefsDepthLegendFor( imValueRefs )
                    + rw::patternDispatchLegend( !imValueRefs.patternSites.empty() || !imValueRefs.patternWideSites.empty(), true )   // IX-3: exactly when pattern_dispatch=/pattern_too_wide= rides
                    + std::string( rw::slotJoinLegend( imValueRefs.slotCallers, true ) )   // IX-1: exactly when a <vr> row carries via=slot|slot-name
-                   + std::string( rw::impactRingLegend( imRing.hedged > 0, !imRing.rows.empty() && !cfg.columnar ) ) ).c_str(),   // HOP1: exactly when reaches_hedged= / <ring> ride
+                   + std::string( rw::impactRingLegend( imRing, !cfg.columnar ) ) ).c_str(),   // HOP1: exactly when reaches_hedged= / <ring> ride
                  rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
 }
 
@@ -3093,7 +3093,8 @@ std::optional<int> runImpact( const MainDispatch& d )
         const rw::ValueRefRows  imValueRefs = rw::withPatternRows( rw::valueRefCallerRows( ing, imVri, seeds ), rw::PatternIndex( ing, imVri ), seeds, true );
         // HOP1 (src/backhops.h): the hedged slot ring — one or two slot hops back from SYM, beside reaches=, never in it
         const rw::BackwardHops  imBackHops( ing, g, imVri );
-        const rw::ImpactRing    imRing      = rw::impactSlotRing( ing, imBackHops, seeds, reach );
+        rw::ImpactRing          imRing      = rw::impactSlotRing( ing, imBackHops, seeds, reach, rw::ImpactRingLens{ &imTestReach, rank } );
+        rw::sizeImpactRing( imRing, cfg.pageLimit, imPage.end - imPage.begin, show.size(), cfg.impactSym );   // hub-fold (c): proven rows keep the --limit page
         const std::vector<std::uint32_t>& imPatterns = imValueRefs.patternSites;   // IX-3: beside the radius, never in it
         // ix2-slice (IX-4, declinedsites.h): the <dc> rows of exactly the declines declined_calls= counts, cut as --callers cuts;
         // no cand= under any legend (as the MCP twin): --help promises the rows byte-identical across postures (legendcostcheck C)
