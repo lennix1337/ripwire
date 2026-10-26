@@ -397,34 +397,36 @@ public:
         out.insert( out.end(), rows.begin(), rows.end() );
     }
 
-    // The readers of put reference `ref` (distinct, ascending; the put's own function excluded).
+    // The readers of put reference `ref` (distinct, ascending — m_pairs is sorted by site, then reader; the put's own function
+    // excluded): one binary search for the site (m_sites is in reference order), one for its pairs.
     std::vector<NodeId> readersOf( std::uint32_t ref ) const
     {
         build();
         std::vector<NodeId> fns;
-        for( const Pair& p : m_pairs )
+        const auto site = std::ranges::lower_bound( m_sites, ref, {}, &Site::ref );
+        if( site == m_sites.end() || site->ref != ref || !site->put )
         {
-            if( m_sites[ p.put ].ref == ref && p.reader != m_sites[ p.put ].fn )
+            return fns;
+        }
+        const std::uint32_t idx = std::uint32_t( site - m_sites.begin() );
+        for( auto it = std::ranges::lower_bound( m_pairs, idx, {}, &Pair::put ); it != m_pairs.end() && it->put == idx; ++it )
+        {
+            if( it->reader != site->fn )
             {
-                fns.push_back( p.reader );
+                fns.push_back( it->reader );
             }
         }
-        std::ranges::sort( fns );
-        fns.erase( std::ranges::unique( fns ).begin(), fns.end() );
         return fns;
     }
 
-    // The put references made in u, ascending.
+    // The put references made in u, ascending (one sorted (function, reference) table, so a walk never rescans the sites per node).
     std::vector<std::uint32_t> putsIn( NodeId u ) const
     {
         build();
         std::vector<std::uint32_t> refs;
-        for( const Site& s : m_sites )
+        for( auto it = std::ranges::lower_bound( m_putsByFn, std::pair<NodeId, std::uint32_t>( u, 0u ) ); it != m_putsByFn.end() && it->first == u; ++it )
         {
-            if( s.put && s.fn == u )
-            {
-                refs.push_back( s.ref );
-            }
+            refs.push_back( it->second );
         }
         return refs;
     }
@@ -506,13 +508,24 @@ private:
             else if( r.fromSymbol < m_ing.symbols.size() && queueOp( r, put ) )
             {
                 m_sites.push_back( Site{ r.fieldName, r.fromSymbol, m_rule.classOf( r.fromSymbol ), i, put } );
+                if( put )
+                {
+                    m_putsByFn.emplace_back( r.fromSymbol, i );
+                }
             }
         }
-        if( m_sites.empty() )
+        if( !m_sites.empty() )
         {
-            return;   // a tree with no queue operation pays one scan
+            std::ranges::sort( m_bases );
+            std::ranges::sort( m_putsByFn );
+            pairSites();   // a tree with no queue operation pays one scan
         }
-        std::ranges::sort( m_bases );
+    }
+
+    // Each get site's readers (its function + one level of same-family proven callers) paired with every same-attribute,
+    // same-family put site; sorted and distinct.
+    void pairSites() const
+    {
         const std::size_t N  = m_g.inEdges.rows();
         const auto*       ro = m_g.inEdges.rowOffsets();
         const auto*       ci = m_g.inEdges.colIndices();
@@ -553,6 +566,7 @@ private:
     mutable std::vector<Site>                     m_sites;   // every put / get site, in reference order
     mutable std::vector<std::pair<NodeId, NodeId>> m_bases;  // (class, in-tree base), sorted
     mutable std::vector<Pair>                     m_pairs;   // (put site, reader), sorted, distinct
+    mutable std::vector<std::pair<NodeId, std::uint32_t>> m_putsByFn;   // (function, put reference), sorted
 };
 
 class BackwardHops
@@ -796,8 +810,8 @@ public:
     }
 
     // d=1: each answered definition's ring hops (all of them counted, whatever their width); a kind with no <vr> row of its own
-    // (atOne: queue) is listed as a d=1 row
-    void depthOne( std::span<const NodeId> seeds, ImpactRing& out )
+    // (atOne: queue) is kept as a d=1 row, listed first by depthTwo
+    void depthOne( std::span<const NodeId> seeds )
     {
         for( const NodeId s : seeds )
         {
@@ -807,7 +821,7 @@ public:
                 {
                     if( hopKind( h.via ).atOne && m_known[ h.from ] == 0 && m_level[ h.from ] == 0 )
                     {
-                        out.rows.push_back( ImpactRingRow{ h.from, s, h.via, h.ref, 1, 0 } );
+                        m_atOne.push_back( ImpactRingRow{ h.from, s, h.via, h.ref, 1, 0 } );
                     }
                     join( h.from, 1, m_d1 );
                     carry( h.from, h, true, true );
@@ -822,6 +836,7 @@ public:
     // d=2: each d=1 function's ring hops; a proven member, an answered definition or a d=1 function already speaks for itself
     void depthTwo( ImpactRing& out )
     {
+        out.rows.insert( out.rows.end(), m_atOne.begin(), m_atOne.end() );
         for( const NodeId f : m_d1 )
         {
             for( const BackHop& h : m_hops.backwardHops( f ) )
@@ -902,6 +917,7 @@ private:
     std::size_t         m_hedged = 0;
     std::vector<char>   m_known, m_counted, m_level, m_narrow, m_fieldNarrow;
     std::vector<NodeId> m_d1, m_d2, m_d3;
+    std::vector<ImpactRingRow> m_atOne;   // the d=1 rows of an atOne kind (queue)
 };
 
 inline ImpactRing impactSlotRing( const IngestResult& ing, const BackwardHops& hops, std::span<const NodeId> seeds, std::span<const NodeId> reach )
@@ -909,7 +925,7 @@ inline ImpactRing impactSlotRing( const IngestResult& ing, const BackwardHops& h
     static_assert( kImpactRingSlotDepth == 3, "the walk below takes d=1, d=2 and exactly one more field hop" );
     ImpactRing     out;
     ImpactRingWalk walk( ing, hops, seeds, reach );
-    walk.depthOne( seeds, out );
+    walk.depthOne( seeds );
     walk.depthTwo( out );
     walk.depthThree( out );
     walk.tail();
@@ -934,12 +950,7 @@ inline std::string impactRingNext( const IngestResult& ing, const ImpactRing& ri
 // The deepest row listed: 3, 2, or 1 (only queue d=1 rows).
 inline std::uint32_t impactRingDepth( const ImpactRing& ring )
 {
-    std::uint32_t d = 1;
-    for( const ImpactRingRow& r : ring.rows )
-    {
-        d = std::max( d, r.depth );
-    }
-    return d;
+    return ring.rows.empty() ? 1u : std::ranges::max( ring.rows, {}, &ImpactRingRow::depth ).depth;
 }
 // A ring row's d= attribute: printed for d=1 (a queue hop) and d=3; a d=2 row stays bare (byte-identity of the older rows).
 inline bool impactRingRowPrintsDepth( const ImpactRingRow& row ) noexcept { return row.depth != 2; }
@@ -1016,7 +1027,7 @@ inline constexpr std::string_view kQueueHopLegend =
 // Whether any ring row is a queue hop: the queue clause rides.
 inline bool impactRingHasQueue( const ImpactRing& ring ) noexcept
 {
-    return std::ranges::any_of( ring.rows, [ ]( const ImpactRingRow& r ) { return r.via == BackHopVia::Queue; } );
+    return std::ranges::contains( ring.rows, BackHopVia::Queue, &ImpactRingRow::via );
 }
 // `on`: reaches_hedged= rides; `rows`: the <ring> element rides too (XML/JSON; the columnar form carries the count alone); `queue`:
 // a listed row is a queue hop.

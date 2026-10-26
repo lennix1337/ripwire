@@ -1477,7 +1477,7 @@ inline std::string pathBridgeLegend( bool on, bool queue = false )
 // Whether a bridge crosses a queue hand-off: the queue clause rides (present-only).
 inline bool pathBridgeHasQueue( const PathBridge& br ) noexcept
 {
-    return std::ranges::find( br.via, BridgeVia::Queue ) != br.via.end();
+    return std::ranges::contains( br.via, BridgeVia::Queue );
 }
 
 inline std::string pathBridgeXml( const IngestResult& ing, const Graph& g, const PathBridge& br, bool singleRoot, std::string_view rootPrefix )
