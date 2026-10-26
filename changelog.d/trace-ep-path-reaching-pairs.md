@@ -11,4 +11,6 @@ never reads as proven. A to= definition no chain reaches may add one hedged brid
 it meets it (`joins=J`). The chain the old answer printed is always among the printed ones. One reaching pair, no reaching
 pair and a glob endpoint keep their old bytes; MCP `path_between` prints the same rows. What it does NOT mean: the order is
 not a claim that the first pair is the one meant — it lists, it does not pick. Measured on the 163 non-sealed rows: see
-the lane report; 9 of the 15 stored `--path` argvs change.
+the lane report; 7 of the 15 stored `--path` argvs change. Two definitions on one line (JS `compile: function compile`) are one
+site, not two pairs. A `to=` name with more than 16 definition groups keeps its one chain and now says so: `pairs_unlisted=G` and
+`next=` to another definition.

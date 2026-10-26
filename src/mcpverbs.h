@@ -3784,7 +3784,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     rw::emitTo( mem, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                        "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + ptKindLegend
                                                            + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to )
-                                                           + memberOwnerLegend( ptHasOwner ) + std::string( pathPairsLegend( ptPairs.active() ) ) ).c_str(),
+                                                           + memberOwnerLegend( ptHasOwner ) + std::string( pathPairsLegend( ptPairs ) ) ).c_str(),
                   ( std::string( toValueRefsLegend( ptToValueRefs.count > 0 ) ) + valueRefsDepthLegend( ptToValueRefs.depthCut.files > 0 ) ).c_str(),
                   ( pathGapsLegend( ptGaps.any(), !ptSinkCallers.empty() ) + std::string( pathBridgeLegend( ptBridge.found() ) )
                     + std::string( nearSinkLegend( !ptNear.rows.empty() ) ) + std::string( pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),

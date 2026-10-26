@@ -84,7 +84,12 @@ struct PathPair
 struct PathPairs
 {
     std::vector<PathPair> pairs;   // ordered; empty ⇒ inactive (the caller prints today's answer)
+    // N4 (rv-trace-ep): to= groups past kPathPairMaxDstGroups are not walked; the answer says so (pairs_unlisted= + next=) instead of
+    // printing today's one chain as if it were the only pair. 0 = not capped. nextFrom/nextTo: the continuation's endpoints.
+    std::size_t unlistedDstGroups = 0;
+    NodeId      nextFrom = kNoNode, nextTo = kNoNode;
     bool active() const noexcept { return pairs.size() >= 2; }
+    bool unlisted() const noexcept { return unlistedDstGroups > 0 && !active(); }
 };
 
 // One reverse walk from the members of one to= group: per node, the lexicographic (hedged, hops) cost to reach the group and the
@@ -147,6 +152,42 @@ inline void pathPairReverseWalk( const Graph& g, std::span<const NodeId> dstMemb
     }
 }
 
+// Two definitions of one name on one line of one file (JS `compile: function compile()`: the property and the function
+// expression it binds) are one site to a reader: as separate groups their pairs print byte-identical rows and inflate
+// pairs_reaching=. Fold such groups into the first one (rv-trace-ep F1); the C-family decl+def tie stays defGroupsOf's.
+inline void pathPairFoldSiteTwins( const IngestResult& ing, DefGroups& gr )
+{
+    std::vector<std::uint32_t> canon( gr.size() );
+    std::vector<NodeId>        rep;
+    for( std::size_t a = 0; a < gr.size(); ++a )
+    {
+        const Symbol& sa = ing.symbols[ gr.rep[a] ];
+        canon[a]         = std::uint32_t( rep.size() );
+        for( std::size_t b = 0; b < rep.size(); ++b )
+        {
+            const Symbol& sb = ing.symbols[ rep[b] ];
+            if( sa.fileId == sb.fileId && sa.line == sb.line && sa.name == sb.name )
+            {
+                canon[a] = std::uint32_t( b );
+                break;
+            }
+        }
+        if( canon[a] == rep.size() )
+        {
+            rep.push_back( gr.rep[a] );
+        }
+    }
+    if( rep.size() == gr.size() )
+    {
+        return;
+    }
+    for( std::uint32_t& m : gr.ofMatch )
+    {
+        m = canon[m];
+    }
+    gr.rep = std::move( rep );   // pathReachingPairs reads only ofMatch and size()
+}
+
 // The reaching pairs of a reached --path answer, or none (inactive) when the answer keeps today's bytes. `today` is
 // shortestPathAny's chain (non-empty: the caller asks only on a reached answer). `bridgeFor( dstMembers )` runs the caller's
 // bridge search from every from= definition to those to= members (the caller owns the value and backward-hop indexes).
@@ -160,12 +201,10 @@ inline PathPairs pathReachingPairs( const IngestResult& ing, const Graph& g, std
     {
         return out;
     }
-    const DefGroups srcG = defGroupsOf( ing, srcDefs );
-    const DefGroups dstG = defGroupsOf( ing, dstDefs );
-    if( ( srcG.size() < 2 && dstG.size() < 2 ) || dstG.size() > kPathPairMaxDstGroups )
-    {
-        return out;   // one pair at most (nothing to list), or past the walk bound: today's answer
-    }
+    DefGroups srcG = defGroupsOf( ing, srcDefs );
+    DefGroups dstG = defGroupsOf( ing, dstDefs );
+    pathPairFoldSiteTwins( ing, srcG );
+    pathPairFoldSiteTwins( ing, dstG );
     const auto groupOf = []( const DefGroups& gr, std::span<const NodeId> defs, NodeId n ) -> std::size_t
     {
         const auto it = std::find( defs.begin(), defs.end(), n );
@@ -173,6 +212,21 @@ inline PathPairs pathReachingPairs( const IngestResult& ing, const Graph& g, std
     };
     const std::size_t todaySrc = groupOf( srcG, srcDefs, today.front() );
     const std::size_t todayDst = groupOf( dstG, dstDefs, today.back() );
+    if( dstG.size() > kPathPairMaxDstGroups )
+    {
+        // past the walk bound: today's answer, DISCLOSED (N4) — the first to= definition of another group is the continuation
+        out.unlistedDstGroups = dstG.size();
+        out.nextFrom          = today.front();
+        for( std::size_t i = 0; i < dstDefs.size() && out.nextTo == kNoNode; ++i )
+        {
+            out.nextTo = dstG.ofMatch[i] != todayDst ? dstDefs[i] : kNoNode;
+        }
+        return out;
+    }
+    if( srcG.size() < 2 && dstG.size() < 2 )
+    {
+        return out;   // one pair at most: nothing to list
+    }
 
     std::vector<PathPair>      chains;
     std::vector<std::uint64_t> dist;
@@ -272,6 +326,10 @@ inline PathPairs pathReachingPairs( const IngestResult& ing, const Graph& g, std
         out.pairs.clear();   // exactly one pair reaches: today's answer, byte for byte
         return out;
     }
+    // N5: the pair shortestPathAny found must be among the pairs (the reverse walk reads the same edges as the forward search);
+    // a future out-only edge the walk cannot see would otherwise drop it silently
+    DASSERT( std::any_of( out.pairs.begin(), out.pairs.end(), []( const PathPair& p ) { return p.today; } ),
+             "today's chain is among the reaching pairs: the reverse walk and shortestPathAny read the same edges" );
     // today's chain stays printed: past the K-th slot it takes the K-th (the others keep their order)
     const auto todayIt = std::find_if( out.pairs.begin(), out.pairs.end(), []( const PathPair& p ) { return p.today; } );
     if( todayIt != out.pairs.end() && std::size_t( todayIt - out.pairs.begin() ) >= kPathPairChains )
@@ -314,13 +372,17 @@ inline constexpr std::string_view kPathPairsLegend =
     "pairs_reaching=N: N from=/to= definition pairs reach each other (directed call chains, then at most one hedged bridge per to= "
     "definition no chain reaches); each <pair from_p= to_p= hops= hedged=> is one pair's chain, fewest hedged hops first (0 = all "
     "proven), then fewest hops, then the definitions' order; hedged= counts its via=/prov=split/anchor=missing rows (a bridge: its "
-    "crossings plus via=name edges), so hedged>0 is NOT a proven chain and its to_p= is not bound; the root's from_p=/to_p=/hops= "
-    "are the first pair's. joins=J: from its last row the chain is pair J's (those rows are not repeated). bridge=1: a hedged "
+    "crossings plus via=name edges), so hedged>0 is NOT a proven chain and its to_p= is a candidate, not a proven binding; the root's from_p=/to_p=/hops= "
+    "are the first pair's. joins=J: from its last row the chain is pair J's (those rows are not repeated; hops=/hedged= still count the whole chain, tail included). bridge=1: a hedged "
     "bridge, NOT a path. alt=N: N more reaching pairs, each an <alt from_p= to_p= hops= hedged=> row; next= runs the first; "
     "alt_capped=1: only the first 12 rows print, qualify from= or to= as file:name to list the rest. ";
-inline std::string_view pathPairsLegend( bool on ) noexcept
+static_assert( kPathPairMaxDstGroups == 16, "kPathPairUnlistedLegend names the walk bound" );
+inline constexpr std::string_view kPathPairUnlistedLegend =
+    "pairs_unlisted=G: to= names G definition groups, more than the 16 this answer walks, so only the one chain found is printed and "
+    "other reaching pairs are NOT listed; next= runs the same from= to another to= definition, or qualify to= as file:name. ";
+inline std::string_view pathPairsLegend( const PathPairs& pp ) noexcept
 {
-    return on ? kPathPairsLegend : std::string_view();
+    return pp.active() ? kPathPairsLegend : pp.unlisted() ? kPathPairUnlistedLegend : std::string_view();
 }
 
 // One definition's selector for a continuation: `p::Scope::name` when it has a scope (the canonical-id grammar --path takes),
@@ -340,6 +402,16 @@ struct PathPairsXml
 inline PathPairsXml pathPairsRootAttrs( const IngestResult& ing, const PathPairs& pp, bool singleRoot, std::string_view rootPrefix )
 {
     PathPairsXml out;
+    if( pp.unlisted() )
+    {
+        out.rootAttrs = " pairs_unlisted=\"" + std::to_string( pp.unlistedDstGroups ) + "\"";
+        if( pp.nextTo != kNoNode )
+        {
+            out.rootAttrs += nextAttrXml( nextFlag( "--path=", pathPairSelector( ing, pp.nextFrom, singleRoot, rootPrefix ) + ","
+                                                               + pathPairSelector( ing, pp.nextTo, singleRoot, rootPrefix ) ) );
+        }
+        return out;
+    }
     if( !pp.active() )
     {
         return out;

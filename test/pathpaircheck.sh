@@ -26,6 +26,10 @@
 #   (G) glob endpoint (g*): no pairs_reaching= (a glob already means any of these).
 #   (X) every printed non-joined pair's hedged= equals its marked rows; hedged=0 pairs carry no via=/prov= row.
 #   (L) the full legend carries the pairs clause exactly when pairs print; answers parse as XML (xmllint when present).
+#   (T) one site, two definitions: JS `compile: function compile` is the property and the function expression on ONE line — one
+#       pair, today's bytes (no pairs_reaching=, no <pair>); rv-trace-ep F1 printed two byte-identical pairs, pairs_reaching=2.
+#   (U) 17 to= definition groups (past the 16 walked): the one chain stays, DISCLOSED — pairs_unlisted="17" + next= + the legend
+#       clause, and no pairs_reaching=; a 16-group control lists its pairs (no pairs_unlisted=).
 #   (M) MCP path_between prints the CLI's <pair>/<alt>/<s> rows on A, B, C, J.
 #
 # Usage: test/pathpaircheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
@@ -42,7 +46,7 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
 
-mkdir -p "$TMP/wide" "$TMP/two" "$TMP/hedge" "$TMP/many" "$TMP/one" "$TMP/none" "$TMP/join"
+mkdir -p "$TMP/site" "$TMP/capd" "$TMP/capok" "$TMP/wide" "$TMP/two" "$TMP/hedge" "$TMP/many" "$TMP/one" "$TMP/none" "$TMP/join"
 cat > "$TMP/two/m.go" <<'EOF'
 package m
 
@@ -70,9 +74,22 @@ class Gold:
     def go(self, x):
         return x.relay()
 EOF
+cat > "$TMP/site/a.js" <<'EOF'
+function sink() { return 1; }
+function helper() { return sink(); }
+module.exports = {
+  compile: function compile(src) { return helper(); }
+};
+EOF
+cat > "$TMP/site/c.js" <<'EOF'
+const a = require('./a');
+function start(x) { return a.compile(x); }
+EOF
 python3 - "$TMP" <<'PY'
 import sys
 t = sys.argv[1]
+for d, n in ( ( "capd", 17 ), ( "capok", 16 ) ):
+    open( t + "/" + d + "/k.py", "w" ).write( "".join( "class C%d:\n    def target(self):\n        return 1\n\n" % i for i in range( n ) ) + "def start(x):\n    return x.target()\n" )
 open( t + "/many/k.py", "w" ).write( "def target():\n    return 1\n\n" + "".join( "class C%d:\n    def go(self):\n        return mid%d()\n\ndef mid%d():\n    return target()\n\n" % ( i, i, i ) for i in range( 5 ) ) )
 open( t + "/wide/w.py", "w" ).write( "def target():\n    return 1\n\n" + "".join( "class C%d:\n    def go(self):\n        return target()\n\n" % i for i in range( 20 ) ) )
 open( t + "/one/o.py", "w" ).write( "def target():\n    return 1\n\nclass A:\n    def go(self):\n        return target()\n\nclass B:\n    def go(self):\n        return 2\n" )
@@ -83,6 +100,7 @@ PY
 run(){ ( cd "$TMP/$1" || exit 1; "$BIN" "$TMP/$1" --no-cache "--path=$2" "${@:3}" </dev/null ); }
 run two  Run,leaf     > "$TMP/A.out"; run hedge go,target > "$TMP/B.out"; run many go,target > "$TMP/C.out"
 run one  go,target    > "$TMP/D.out"; run none  go,target > "$TMP/E.out"; run join go,target > "$TMP/J.out"
+run site start,compile > "$TMP/T.out"; run capd start,target > "$TMP/U.out"; run capok start,target > "$TMP/UK.out"
 run many 'g*,target'  > "$TMP/G.out"; run wide go,target > "$TMP/W.out"
 
 python3 - "$TMP" "$BIN" <<'PY'
@@ -129,6 +147,19 @@ check( "J", len( pj ) == 2 and attrs( pj[1][0] ).get( "joins" ) == "1" and len( 
        "shared tail: pair 2 joins=1 after 3 rows, hops=5 counts the whole chain: %r" % [ p[0] for p in pj ] )
 g = rd( "G" )
 check( "G", "pairs_reaching" not in g and root( g ).get( "reachable" ) == "1", "a glob endpoint keeps today's answer" )
+t = rd( "T" ); rt = root( t )
+check( "T", "pairs_reaching" not in rt and "<pair" not in t and rt.get( "reachable" ) == "1" and rt.get( "to_defs" ) == "2",
+       "one JS site = one pair, today's bytes: %r" % { k: rt.get( k ) for k in ( "pairs_reaching", "to_defs", "reachable" ) } )
+u = rd( "U" ); ru = root( u )
+check( "U", ru.get( "pairs_unlisted" ) == "17" and "pairs_reaching" not in ru and "<pair" not in u and ru.get( "reachable" ) == "1" and ru.get( "next", "" ).startswith( "--path=" ),
+       "17 to= groups: the one chain, disclosed with pairs_unlisted= + next=: %r" % { k: ru.get( k ) for k in ( "pairs_unlisted", "pairs_reaching", "next", "to_defs" ) } )
+if ru.get( "next" ):
+    argv = shlex.split( ru[ "next" ].replace( "&apos;", "'" ) )
+    o = subprocess.run( [ binp, tmp + "/capd", "--no-cache" ] + argv, capture_output = True, text = True, cwd = tmp + "/capd", stdin = subprocess.DEVNULL ).stdout
+    r2 = root( o )
+    check( "U", r2.get( "to_defs" ) == "1" and "pairs_unlisted" not in r2, "next= narrows to one to= definition: %r" % { k: r2.get( k ) for k in ( "to_defs", "reachable", "pairs_unlisted" ) } )
+uk = rd( "UK" ); ruk = root( uk )
+check( "U", "pairs_unlisted" not in ruk and ruk.get( "pairs_reaching", "" ) != "", "16 to= groups are walked and listed (no pairs_unlisted=): %r" % { k: ruk.get( k ) for k in ( "pairs_unlisted", "pairs_reaching" ) } )
 xbad = []
 for k in ( "A", "B", "C", "J" ):
     for at, body in pairs( rd( k ) ):
@@ -148,8 +179,14 @@ if grep -q 'pairs_reaching=N: N from=/to= definition pairs reach each other' "$T
 else
     no "(L) the pairs clause rides wrongly (with pairs: $(grep -c 'pairs_reaching=N' "$TMP/CL.out"), without: $(grep -c 'pairs_reaching=N' "$TMP/DL.out"))"
 fi
+run capd start,target --legend=full > "$TMP/UL.out"
+if grep -q 'pairs_unlisted=G: to= names G definition groups' "$TMP/UL.out" && ! grep -q 'pairs_unlisted=G' "$TMP/DL.out"; then
+    ok "(L) the full legend carries the pairs_unlisted clause exactly when a cap disclosure prints"
+else
+    no "(L) the pairs_unlisted clause rides wrongly"
+fi
 if command -v xmllint >/dev/null 2>&1; then
-    xb=0; for k in A B C J CL; do xmllint --noout "$TMP/$k.out" 2>/dev/null || { xb=1; echo "    $k.out is not well-formed"; }; done
+    xb=0; for k in A B C J CL T U UL; do xmllint --noout "$TMP/$k.out" 2>/dev/null || { xb=1; echo "    $k.out is not well-formed"; }; done
     if [ $xb -eq 0 ]; then ok "(L) A B C J and the full-legend answer parse as XML"; else no "(L) malformed answer"; fi
 else
     echo "  SKIP  (L) xmllint absent"

@@ -2613,7 +2613,7 @@ std::optional<int> runPath( const MainDispatch& d )
                      "graph holds none. {}{}{}{}-->{}", ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ) + rw::viaNameLegend( pthHasVia )
                                                          + rw::viaLinkLegend( pthHasLink ) + rw::anchorMissLegend( pthHasMiss )
                                                          + rw::splitArmLegend( pthHasSplit ) + rw::pathUnboundLegend( !pthBound.from || !pthBound.to )
-                                                         + rw::memberOwnerLegend( pthHasOwner ) + std::string( rw::pathPairsLegend( pthPairs.active() ) ) ).c_str(),
+                                                         + rw::memberOwnerLegend( pthHasOwner ) + std::string( rw::pathPairsLegend( pthPairs ) ) ).c_str(),
                      ( std::string( rw::toValueRefsLegend( pthToValueRefs.count > 0 ) ) + rw::valueRefsDepthLegend( pthToValueRefs.depthCut.files > 0 ) ).c_str(),
                      ( rw::pathGapsLegend( pthGaps.any(), !pthSinkCallers.empty() ) + std::string( rw::pathBridgeLegend( pthBridge.found() ) )
                        + std::string( rw::nearSinkLegend( !pthNear.rows.empty() ) ) + std::string( rw::pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
