@@ -162,6 +162,15 @@ EOF
 cp "$TMP/nar/core/machine.c" "$TMP/wide/core/machine.c"
 mkdir -p "$TMP/wide/linux"; cp "$TMP/nar/linux/scan.c" "$TMP/wide/linux/scan.c"
 for p in darwin freebsd netbsd openbsd; do mkdir -p "$TMP/wide/$p"; echo 'void Machine_scan( void ) { }' > "$TMP/wide/$p/scan.c"; done
+# a called PARAMETER: run( cb ) { cb(); } binds per call site — c1 passes h1, never h0; a NULL caller and an unrelated fn bind nothing to h0
+mkdir -p "$TMP/param"
+{
+    echo 'typedef void (*cbt)( void );'
+    echo 'void run( cbt cb ) { cb(); }'
+    for i in 0 1 2; do printf 'void h%d( void ) { }\nvoid c%d( void ) { run( h%d ); }\nvoid top%d( void ) { c%d(); }\n' "$i" "$i" "$i" "$i" "$i"; done
+    echo 'void cnull( void ) { run( NULL ); }'
+    echo 'void topnull( void ) { cnull(); }'
+} > "$TMP/param/cb.c"
 # namesake: two files, each a static run over its own table
 cat > "$TMP/ns/a.c" <<'EOF'
 typedef void (*handler)( void );
@@ -270,6 +279,18 @@ check( "(B2) the same chain with a 5-candidate declined crossing: no bridge (a w
 t, r = path( tmp + "/wide", "Machine_run", "scan_step" ); bw2 = bridge( t )
 check( "(B2) its 2-crossing prefix keeps a bridge (declined cands=\"5\" + container): the width, not the fixture, refuses the third",
        attr( bw2, "crossings" ) == "2" and 'via="declined" cands="5"' in bw2 and 'via="container"' in bw2, bw2 )
+
+t, r = path( tmp + "/param", "top1", "h0" )
+check( "(P1) a called parameter binds per call site: top1 -> c1 -> run never reaches h0 (c1 passes h1): no bridge",
+       t is not None and bridge( t ) == "" and attr( r, "reachable" ) == "0", bridge( t ) + " " + r )
+t, r = path( tmp + "/param", "topnull", "h0" )
+check( "(P1) a caller passing NULL to the called parameter never reaches h0: no bridge",
+       t is not None and bridge( t ) == "" and attr( r, "reachable" ) == "0", bridge( t ) + " " + r )
+t, r = path( tmp + "/param", "top0", "h0" )
+check( "(P1) the passer's chain keeps its value crossing: top0 -> c0 -> h0 via=\"value\"", 'n="h0" p="cb.c:3" via="value"' in bridge( t ), bridge( t ) )
+t, r = impact( tmp + "/param", "h0" )
+check( "(P1) --impact=h0: an argument is not a container hop, so run and its callers are no hedged tail (reaches_hedged absent; 9 before the fix)",
+       t is not None and attr( r, "reaches_hedged" ) is None, r )
 
 # ── N: no chain through an unrelated namesake ──────────────────────────────────────────────────────────────────────
 t, r = impact( tmp + "/ns", "ha" )

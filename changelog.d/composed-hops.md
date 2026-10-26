@@ -3,8 +3,8 @@
 `--impact`'s `reaches_hedged=` (the functions that MAY reach the answer through a call the graph holds no edge for) now
 composes. It adds every function that reaches one of those hedged callers through ordinary proven calls (only past hops
 whose join names at most 16 calling functions), takes a third struct-field hop when every hop on the chain is a field call
-(`<ring d="3">`, `<rh … d="3">`), and follows a new hop kind, `container`: a call through a table element or a called
-parameter (`handlers[i]()`), the caller that `--callers` already printed as `called_by=`. Each `<rh>` row now prints its
+(`<ring d="3">`, `<rh … d="3">`), and follows a new hop kind, `container`: a call through a table element
+(`handlers[i]()`, or a parameter's default), the caller that `--callers` already printed as `called_by=`. Each `<rh>` row now prints its
 call's forward width (`slot_fns=` for a field, `cands=` for a container). On tmux, `--impact=cmd_split_window_exec` went
 from `reaches_hedged="1"` to `"10"` (cmdq_fire_command and its 9 proven callers) and `--impact=window_copy_cmd_cancel`
 from 2 to 12; `reaches=` did not change on any of the 235 slot-bound functions measured. `--path`'s hedged `<bridge>` crosses

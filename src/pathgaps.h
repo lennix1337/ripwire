@@ -1128,7 +1128,7 @@ inline std::string pathGlobAttrXml( bool fromGlob, bool toGlob )
 //             field-name tier), only while that join names at most kBridgeFanOut calling functions (slot_callers=). That bound is
 //             on the BACKWARD width only; how many functions the field holds (slot_fns=, the forward width) is printed, never
 //             capped — a cap would delete the gold hop through a wide table (tmux's 92-entry cmd_entry.exec).
-//   container (composed hops) from a function that calls through a container element or a called parameter (`handlers[i]()`)
+//   container (composed hops) from a function that calls through a container element (or a parameter's default) (`handlers[i]()`)
 //             to each function that container may hold (backhops.h forwardHops: the --callers <vr called_by=> join read
 //             forward), only while it may hold at most kBridgeFanOut (cands=) and its join names at most kBridgeFanOut callers.
 // A chain whose EVERY crossing is COMPOSABLE may take kBridgeSlotCrossings of them (tmux's send-keys chain is three field
@@ -1466,7 +1466,7 @@ inline constexpr std::string_view kPathBridgeLegend =
     "else whose class owns something the chain's earlier layers reached or derives from the bound definition's class in a file that imports "
     "that one, slot = the previous row calls through a struct field this row is stored in (same declared struct "
     "type; slot-name = field name only), slot_callers=N the functions that field join names, at most 16, and slot_fns=K the functions the field holds, NOT capped "
-    "(a wide table is still crossed: K says how wide), container = the previous row calls through a container element or a called parameter "
+    "(a wide table is still crossed: K says how wide), container = the previous row calls through a container element (or a parameter's default) "
     "this row may be held in (cands= the functions it may hold) (via=name rows are proven edges bound by name). Fewest crossings first. It is NOT a path: reachable= and "
     "hops= on the root stay 0, no count includes it, and every crossing is a hedge. ";
 inline std::string_view pathBridgeLegend( bool on ) noexcept

@@ -245,8 +245,8 @@ private:
 // kImpactRingSlotDepth), and whether the --impact ring follows it (a declined hop is spoken for by declined_calls= / <dc>).
 // A new indirection shape (QUEUE-HOP's put/get pairing) is an appended enum value, a row here and one producer in
 // backwardHops / forwardHops; every walk then reads it through the same span with no walk-side change.
-//   container  (composed hops) a call through a container element or a called parameter (`handlers[i]()`, `cb()` on a
-//              parameter) whose value-ref join names the sink: the --callers <vr called_by=> row (valuerefindex.h calledBy,
+//   container  (composed hops) a call through a container element (`handlers[i]()`) or a parameter's default
+//              (`cb()` where `cb = fn`) whose value-ref join names the sink: the --callers <vr called_by=> row (valuerefindex.h calledBy,
 //              throughsFor); width = the calling functions that row names. slotHops skipped it: it answers first there.
 enum class BackHopVia : std::uint8_t { Slot, SlotName, Declined, Container };
 
@@ -294,7 +294,7 @@ inline void keepOneHopPerCaller( std::vector<BackHop>& v )
     v.erase( std::ranges::unique( v, [ ]( const BackHop& a, const BackHop& b ) { return a.from == b.from; } ).begin(), v.end() );
 }
 
-// The distinct functions a container/parameter call may reach: every value reference its join lands (valuesThrough), resolved.
+// The distinct functions a container call may reach: every value reference its join lands (valuesThrough), resolved.
 inline std::vector<NodeId> containerHolds( const ValueRefIndex& values, std::uint32_t through )
 {
     std::vector<NodeId> fns;
@@ -323,12 +323,16 @@ inline void valueRefHops( const IngestResult& ing, const ValueRefIndex& values, 
     out.insert( out.end(), rows.begin(), rows.end() );
 }
 
-// The sink's CONTAINER hops (composed hops): each function whose call through a container element or a called parameter the
+// The sink's CONTAINER hops (composed hops): each function whose call through a container element (or a parameter's default) the
 // sink's value-ref join names (the --callers <vr called_by=> row: calledBy / throughsFor); width = the callers that row names.
 inline void containerBackHops( const IngestResult& ing, const ValueRefIndex& values, NodeId sink, std::vector<BackHop>& out )
 {
     valueRefHops( ing, values, sink, out, [ & ]( std::uint32_t r, std::vector<BackHop>& rows )
     {
+        if( ValueRefIndex::scopeOf( ing.references[ r ] ) == 'a' )
+        {
+            return;   // an ARGUMENT binds per call site: the callee's other callers pass other functions (rv-composed-hops F1); the bridge's value crossing names the passer
+        }
         const std::uint32_t width = std::uint32_t( values.calledBy( r ).size() );
         for( const std::uint32_t t : values.throughsFor( r ) )
         {
@@ -372,7 +376,7 @@ private:
         {
             if( !m_values.calledBy( r ).empty() )
             {
-                return;   // a container/parameter join answers that row first (valueRefCallerRows' own rule): container hops, no slot callers
+                return;   // a container join answers that row first (valueRefCallerRows' own rule): container hops, no slot callers
             }
             bool                             typed    = false;
             std::uint32_t                    nameAlso = 0;
@@ -421,7 +425,7 @@ inline std::uint32_t backHopStoredWidth( const IngestResult& ing, const ValueRef
 // Direction::Forward (composed hops, rv-hop1 correction 2): the functions `u`'s calls through a struct field or a container
 // MAY reach, each confirmed from the other side (that function's backward hops name u by the same kind) so the two
 // directions never disagree. Slot rows come from slotSiteRows (the --callees <vs> rows: same-type tier alone when it has any, a
-// site the container join answers left to it), container rows from each call through a container or called parameter in u
+// site the container join answers left to it), container rows from each call through a container (or a parameter's default) in u
 // (valuesThrough). stored = how many functions that call may reach. Slot rows first, then container; memoised per u. No
 // declined rows: a declined call's candidates are the graph's stored list (pathgaps.h bridgeDeclinedCrossings reads it).
 class ForwardHops
@@ -469,7 +473,7 @@ private:
         }
     }
 
-    // The calls through a container element or a called parameter made in u (role Through), in reference order: one sorted
+    // The calls through a container element (or a parameter's default) made in u (role Through), in reference order: one sorted
     // (caller, reference) table built on first use, so a walk never rescans the index per node.
     std::span<const std::uint32_t> throughsIn( NodeId u ) const
     {
@@ -756,7 +760,7 @@ inline std::string impactRingJson( const IngestResult& ing, const ImpactRing& ri
 
 inline constexpr std::string_view kImpactRingLegend =
     "reaches_hedged=N (absent when 0): N functions MAY reach of= through a HEDGED hop: a call through a struct FIELD (the IX-1 slot "
-    "join) or through a container element or called parameter (container), one or two such hops back (three when every hop is a field "
+    "join) or through a container element or a parameter's default (container), one or two such hops back (three when every hop is a field "
     "call within 16 callers), plus every function that reaches one of those through proven calls (only past hops within 16 callers). "
     "Not counted in reaches= and not an answered definition. The one-hop set has NO width bound (a wide field's callers are all counted). "
     "A hedge: one hedged hop makes the whole chain hedged; never a proven caller, never in reaches=/by_depth=/radius_*. ";
