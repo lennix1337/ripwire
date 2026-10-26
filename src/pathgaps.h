@@ -1148,15 +1148,16 @@ inline constexpr std::size_t   kBridgeNarrowFan     = 4;   // composed hops: a d
 static_assert( kImpactRingSlotDepth == kBridgeSlotCrossings, "the --impact ring's field-only depth mirrors the bridge's composable allowance" );
 inline constexpr std::size_t   kBridgeMaxHops       = 8;   // a longer chain is no answer a reader would follow: none is printed
 
-enum class BridgeVia : std::uint8_t { Edge, Declined, Value, Closure, Namesake, Slot, SlotName, Container };
+enum class BridgeVia : std::uint8_t { Edge, Declined, Value, Closure, Namesake, Container, Slot, SlotName };   // composed hops: Container before the slot pair
 inline constexpr std::size_t kBridgeViaCount = 8;
 static_assert( enumCountIsExact<BridgeVia, kBridgeViaCount>(), "kBridgeViaCount must equal the BridgeVia count — raise it with the append" );
 inline constexpr std::array      kBridgeViaNames = { std::string_view( "" ), std::string_view( "declined" ), std::string_view( "value" ), std::string_view( "closure" ),
-                                                     std::string_view( "namesake" ), std::string_view( "slot" ), std::string_view( "slot-name" ), std::string_view( "container" ) };   // indexed by BridgeVia
+                                                     std::string_view( "namesake" ), std::string_view( "container" ), std::string_view( "slot" ), std::string_view( "slot-name" ) };   // indexed by BridgeVia
 static_assert( kBridgeViaNames.size() == kBridgeViaCount, "one name per BridgeVia value (the extent is deduced from the names)" );
+static_assert( std::size_t( BridgeVia::SlotName ) + 1 == kBridgeViaCount && std::size_t( BridgeVia::Slot ) + 2 == kBridgeViaCount, "the two slot crossings close the enum" );
 inline bool bridgeViaIsSlot( BridgeVia v ) noexcept
 {
-    return v == BridgeVia::Slot || v == BridgeVia::SlotName;
+    return v >= BridgeVia::Slot;   // Slot or SlotName, the enum's last two (static_assert above)
 }
 // Whether a crossing composes past kBridgeCrossings (composed hops): a slot one (already bounded on its callers), or a declined /
 // container one fanning out to at most kBridgeNarrowFan.
@@ -1181,9 +1182,9 @@ struct PathBridge
 // decides whether the target is new. A slot crossing is bounded on its callers (width) and prints its forward width
 // (slot_fns=, never capped); a container crossing is bounded on both and prints its forward width as cands=.
 template<class Cross>
-inline void bridgeHopCrossings( const BackwardHops& backHops, NodeId u, bool fieldCalls, Cross&& cross )
+inline void bridgeHopCrossings( const ForwardHops& fwdHops, NodeId u, bool fieldCalls, Cross&& cross )
 {
-    for( const ForwardHop& h : backHops.forwardHops( u ) )
+    for( const ForwardHop& h : fwdHops.forwardHops( u ) )
     {
         if( hopKind( h.via ).fieldCall != fieldCalls || h.width > kBridgeFanOut || ( !fieldCalls && h.stored > kBridgeFanOut ) )
         {
@@ -1201,10 +1202,10 @@ inline void bridgeHopCrossings( const BackwardHops& backHops, NodeId u, bool fie
 }
 
 // DECLINED crossings of record `site`: each candidate of its stored list, unless the list is missing or wider than kBridgeFanOut,
-// or the call reads as the builtin method it spells (DeclinedCrossRule, HOP1 #11). maxFan: kBridgeFanOut, or kBridgeNarrowFan past
-// the general crossing bound (composed hops).
+// or the call reads as the builtin method it spells (DeclinedCrossRule, HOP1 #11). `cross( to, via, fan )` sees the fan, so a walk
+// may narrow it further (composed hops: past the general crossing bound only fan <= kBridgeNarrowFan composes).
 template<class Cross>
-inline void bridgeDeclinedCrossings( const Graph& g, const DeclinedCrossRule& rule, std::uint32_t site, std::size_t maxFan, Cross&& cross )
+inline void bridgeDeclinedCrossings( const Graph& g, const DeclinedCrossRule& rule, std::uint32_t site, Cross&& cross )
 {
     const std::uint32_t list = g.declinedSiteList[ site ];
     if( list == kNoDeclinedList || list + 1 >= g.declinedListOff.size() || rule.builtinSpelled( site ) )
@@ -1212,7 +1213,7 @@ inline void bridgeDeclinedCrossings( const Graph& g, const DeclinedCrossRule& ru
         return;   // a call with no stored candidate list names nothing to cross to; a builtin-spelled one is no hand-off
     }
     const std::size_t fan = g.declinedListOff[ list + 1 ] - g.declinedListOff[ list ];
-    for( std::uint32_t slot = g.declinedListOff[ list ]; fan <= maxFan && slot < g.declinedListOff[ list + 1 ]; ++slot )
+    for( std::uint32_t slot = g.declinedListOff[ list ]; fan <= kBridgeFanOut && slot < g.declinedListOff[ list + 1 ]; ++slot )
     {
         cross( g.declinedListCand[ slot ], BridgeVia::Declined, fan );
     }
@@ -1300,6 +1301,7 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
             isDst[t] = 1;
         }
     }
+    const ForwardHops     fwdHops( ing, backHops );   // composed hops: the provider read forward (slot + container crossings), memoised per answer
     const ByNameCallSites byNameSites( ing, {} );   // K5 rule 1: a namesake crossing needs a call of the name not builtin-spelled
     NamesakeRule          ownerReach( ing, g );     // K5 rule 2 (2b/2c): the owners of every symbol layers 0..k reached
     std::vector<NodeId> frontier;
@@ -1367,27 +1369,18 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
                 continue;
             }
             const auto crossTo = [ & ]( NodeId to, BridgeVia via, std::size_t fan, std::size_t fwd ) { cross( u, to, via, fan, fwd ); };
-            bridgeHopCrossings( backHops, u, /*fieldCalls=*/true, crossTo );   // HOP1: slot crossings
+            bridgeHopCrossings( fwdHops, u, /*fieldCalls=*/true, crossTo );   // HOP1: slot crossings
             const std::pair<NodeId, std::uint32_t> lo( u, 0u ), hi( u, std::numeric_limits<std::uint32_t>::max() );
-            if( composeOnly )
-            {
-                // composed hops: past the general bound, a narrow declined or container crossing composes like a slot one
-                for( auto it = std::ranges::lower_bound( declinedBy, lo ); it != declinedBy.end() && *it <= hi; ++it )
-                {
-                    bridgeDeclinedCrossings( g, backHops.declinedRule(), it->second, kBridgeNarrowFan, [ & ]( NodeId to, BridgeVia via, std::size_t fan ) { cross( u, to, via, fan ); } );
-                }
-                bridgeHopCrossings( backHops, u, /*fieldCalls=*/false, [ & ]( NodeId to, BridgeVia via, std::size_t fan, std::size_t fwd )
-                {
-                    if( fan <= kBridgeNarrowFan )
-                    {
-                        cross( u, to, via, fan, fwd );
-                    }
-                } );
-                continue;
-            }
+            // composed hops: past the general bound, only a narrow declined or container crossing composes like a slot one
+            const auto crossNarrow = [ & ]( NodeId to, BridgeVia via, std::size_t fan, std::size_t fwd = 0 ) { if( fan <= kBridgeNarrowFan ) { crossTo( to, via, fan, fwd ); } };
             for( auto it = std::ranges::lower_bound( declinedBy, lo ); it != declinedBy.end() && *it <= hi; ++it )
             {
-                bridgeDeclinedCrossings( g, backHops.declinedRule(), it->second, kBridgeFanOut, [ & ]( NodeId to, BridgeVia via, std::size_t fan ) { cross( u, to, via, fan ); } );
+                bridgeDeclinedCrossings( g, backHops.declinedRule(), it->second, [ & ]( NodeId to, BridgeVia via, std::size_t fan ) { composeOnly ? crossNarrow( to, via, fan ) : crossTo( to, via, fan, 0 ); } );
+            }
+            if( composeOnly )
+            {
+                bridgeHopCrossings( fwdHops, u, /*fieldCalls=*/false, crossNarrow );
+                continue;
             }
             for( auto it = std::ranges::lower_bound( valueBy, lo ); it != valueBy.end() && *it <= hi; ++it )
             {
@@ -1427,7 +1420,7 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
                     }
                 }
             }
-            bridgeHopCrossings( backHops, u, /*fieldCalls=*/false, crossTo );   // composed hops: container crossings, after every older kind
+            bridgeHopCrossings( fwdHops, u, /*fieldCalls=*/false, crossTo );   // composed hops: container crossings, after every older kind
         }
         // the next layer's seeds in id order — a composable seed first (HOP1, composed hops), so a symbol both kinds of chain reach
         // keeps the one that may still cross past the general bound; with no composable crossing anywhere this is the plain id order.

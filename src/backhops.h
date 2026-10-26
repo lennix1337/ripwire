@@ -281,6 +281,54 @@ struct ForwardHop
     std::uint32_t ref    = 0;   // the call
 };
 
+// One row per calling function: the stronger kind (slot before slot-name), then the narrowest width, then the first call.
+inline void keepOneHopPerCaller( std::vector<BackHop>& v )
+{
+    std::ranges::sort( v, [ ]( const BackHop& a, const BackHop& b )
+    {
+        if( a.from != b.from ) { return a.from < b.from; }
+        if( a.via != b.via ) { return a.via < b.via; }
+        if( a.width != b.width ) { return a.width < b.width; }
+        return a.ref < b.ref;
+    } );
+    v.erase( std::ranges::unique( v, [ ]( const BackHop& a, const BackHop& b ) { return a.from == b.from; } ).begin(), v.end() );
+}
+
+// The distinct functions a container/parameter call may reach: every value reference its join lands (valuesThrough), resolved.
+inline std::vector<NodeId> containerHolds( const ValueRefIndex& values, std::uint32_t through )
+{
+    std::vector<NodeId> fns;
+    for( const std::uint32_t v : values.valuesThrough( through ) )
+    {
+        const std::vector<NodeId> t = values.targetsOf( v );
+        fns.insert( fns.end(), t.begin(), t.end() );
+    }
+    std::ranges::sort( fns );
+    fns.erase( std::ranges::unique( fns ).begin(), fns.end() );
+    return fns;
+}
+
+// The sink's CONTAINER hops (composed hops), appended to `out`: each function whose call through a container element or a called
+// parameter the sink's value-ref join names (the --callers <vr called_by=> row: calledBy / throughsFor), one per caller.
+inline void containerBackHops( const IngestResult& ing, const ValueRefIndex& values, NodeId sink, std::vector<BackHop>& out )
+{
+    std::vector<BackHop> container;
+    for( const std::uint32_t r : values.valueRefsTo( std::span<const NodeId>( &sink, 1 ) ) )
+    {
+        const std::size_t width = values.calledBy( r ).size();
+        for( const std::uint32_t t : values.throughsFor( r ) )
+        {
+            const NodeId f = ing.references[ t ].fromSymbol;
+            if( f != sink && f < ing.symbols.size() )
+            {
+                container.push_back( BackHop{ f, BackHopVia::Container, std::uint32_t( width ), t } );
+            }
+        }
+    }
+    keepOneHopPerCaller( container );
+    out.insert( out.end(), container.begin(), container.end() );
+}
+
 class BackwardHops
 {
 public:
@@ -288,6 +336,7 @@ public:
 
     const DeclinedCrossRule& declinedRule() const noexcept { return m_rule; }
     const Graph&             graph() const noexcept { return m_g; }
+    const ValueRefIndex&     values() const noexcept { return m_values; }
 
     // The sink's backward hops: slot rows first (the stronger tier first per calling function), then declined, then container,
     // each kind by caller id then reference — one row per (from, kind), the narrowest width kept. Memoised per sink.
@@ -302,84 +351,21 @@ public:
             return it->second;
         }
         std::vector<BackHop> out;
-        std::vector<BackHop> container;
-        slotHops( sink, out, container );
+        slotHops( sink, out );
         declinedHops( sink, out );
-        keepOnePerCaller( container );
-        out.insert( out.end(), container.begin(), container.end() );
+        containerBackHops( m_ing, m_values, sink, out );
         return m_memo.try_emplace( sink, std::move( out ) ).first->second;
     }
 
-    // Direction::Forward (composed hops): the functions `u`'s calls through a struct field or a container MAY reach, each
-    // confirmed from the other side (that function's backward hops name u by the same kind) so the two directions never
-    // disagree. Slot rows come from slotSiteRows (the --callees <vs> rows: same-type tier alone when it has any, a site the
-    // container join answers left to it), container rows from each call through a container or called parameter in u
-    // (valuesThrough). stored = how many functions that call may reach. Slot rows first, then container; memoised per u.
-    // No declined rows: a declined call's candidates are the graph's stored list (bridgeDeclinedCrossings reads it).
-    std::span<const ForwardHop> forwardHops( NodeId u ) const
-    {
-        if( u >= m_ing.symbols.size() )
-        {
-            return {};
-        }
-        if( const auto it = m_fwdMemo.find( u ); it != m_fwdMemo.end() )
-        {
-            return it->second;
-        }
-        std::vector<ForwardHop> out;
-        for( const SlotSiteRow& site : slotSiteRows( m_ing, m_values, std::span<const NodeId>( &u, 1 ) ) )
-        {
-            for( const NodeId f : site.targets )
-            {
-                if( const BackHop* h = hopFrom( f, u, true ); h != nullptr )
-                {
-                    out.push_back( ForwardHop{ f, h->via, h->width, std::uint32_t( site.targets.size() ), site.ref } );
-                }
-            }
-        }
-        for( const std::uint32_t t : throughsIn( u ) )
-        {
-            const std::vector<NodeId> fns = containerHolds( t );
-            for( const NodeId f : fns )
-            {
-                if( const BackHop* h = hopFrom( f, u, false ); h != nullptr )
-                {
-                    out.push_back( ForwardHop{ f, h->via, h->width, std::uint32_t( fns.size() ), t } );
-                }
-            }
-        }
-        return m_fwdMemo.try_emplace( u, std::move( out ) ).first->second;
-    }
-
-    // The forward width of a backward hop's call: the functions that field (slot) or container may hold; 0 for a declined hop.
-    std::uint32_t storedWidth( const BackHop& h ) const
-    {
-        if( hopKind( h.via ).fieldCall )
-        {
-            return std::uint32_t( slotSiteOf( m_ing, m_values, h.ref ).targets.size() );
-        }
-        return h.via == BackHopVia::Container ? std::uint32_t( containerHolds( h.ref ).size() ) : 0u;
-    }
-
 private:
-    void slotHops( NodeId sink, std::vector<BackHop>& out, std::vector<BackHop>& container ) const
+    void slotHops( NodeId sink, std::vector<BackHop>& out ) const
     {
         std::vector<BackHop> slot;
         for( const std::uint32_t r : m_values.valueRefsTo( std::span<const NodeId>( &sink, 1 ) ) )
         {
-            if( const std::vector<NodeId> by = m_values.calledBy( r ); !by.empty() )
+            if( !m_values.calledBy( r ).empty() )
             {
-                // a container/parameter join answers that row first (valueRefCallerRows' own rule): its calling functions are
-                // container hops (composed hops), and the row has no slot callers
-                for( const std::uint32_t t : m_values.throughsFor( r ) )
-                {
-                    const NodeId f = m_ing.references[ t ].fromSymbol;
-                    if( f != sink && f < m_ing.symbols.size() )
-                    {
-                        container.push_back( BackHop{ f, BackHopVia::Container, std::uint32_t( by.size() ), t } );
-                    }
-                }
-                continue;
+                continue;   // a container/parameter join answers that row first (valueRefCallerRows' own rule): container hops, no slot callers
             }
             bool                             typed    = false;
             std::uint32_t                    nameAlso = 0;
@@ -393,7 +379,7 @@ private:
                 }
             }
         }
-        keepOnePerCaller( slot );
+        keepOneHopPerCaller( slot );
         out.insert( out.end(), slot.begin(), slot.end() );
     }
 
@@ -410,84 +396,107 @@ private:
             }
             dc.push_back( BackHop{ from, BackHopVia::Declined, m_g.declinedListOff[ list + 1 ] - m_g.declinedListOff[ list ], m_g.declinedSiteRef[ site ] } );
         }
-        keepOnePerCaller( dc );
+        keepOneHopPerCaller( dc );
         out.insert( out.end(), dc.begin(), dc.end() );
     }
 
-    // f's backward hop from u of the field kinds (slot, slot-name) or of the container kind, or null.
-    const BackHop* hopFrom( NodeId f, NodeId u, bool fieldCall ) const
+    const IngestResult&                          m_ing;
+    const Graph&                                 m_g;
+    const ValueRefIndex&                         m_values;
+    DeclinedCrossRule                            m_rule;
+    mutable HashMap<NodeId, std::vector<BackHop>> m_memo;
+};
+
+// The forward width of a backward hop's call: the functions that field (slot) or container may hold; 0 for a declined hop.
+inline std::uint32_t backHopStoredWidth( const IngestResult& ing, const ValueRefIndex& values, const BackHop& h )
+{
+    if( hopKind( h.via ).fieldCall )
     {
-        const std::span<const BackHop> hops = backwardHops( f );
-        const auto it = std::ranges::find_if( hops, [ & ]( const BackHop& h )
+        return std::uint32_t( slotSiteOf( ing, values, h.ref ).targets.size() );
+    }
+    return h.via == BackHopVia::Container ? std::uint32_t( containerHolds( values, h.ref ).size() ) : 0u;
+}
+
+// Direction::Forward (composed hops, rv-hop1 correction 2): the functions `u`'s calls through a struct field or a container
+// MAY reach, each confirmed from the other side (that function's backward hops name u by the same kind) so the two
+// directions never disagree. Slot rows come from slotSiteRows (the --callees <vs> rows: same-type tier alone when it has any, a
+// site the container join answers left to it), container rows from each call through a container or called parameter in u
+// (valuesThrough). stored = how many functions that call may reach. Slot rows first, then container; memoised per u. No
+// declined rows: a declined call's candidates are the graph's stored list (pathgaps.h bridgeDeclinedCrossings reads it).
+class ForwardHops
+{
+public:
+    ForwardHops( const IngestResult& ing, const BackwardHops& back ) : m_ing( ing ), m_back( back ) {}
+
+    std::span<const ForwardHop> forwardHops( NodeId u ) const
+    {
+        if( u >= m_ing.symbols.size() )
         {
-            return h.from == u && ( fieldCall ? hopKind( h.via ).fieldCall : h.via == BackHopVia::Container );
-        } );
-        return it != hops.end() ? &*it : nullptr;
+            return {};
+        }
+        if( const auto it = m_memo.find( u ); it != m_memo.end() )
+        {
+            return it->second;
+        }
+        std::vector<ForwardHop> out;
+        for( const SlotSiteRow& site : slotSiteRows( m_ing, m_back.values(), std::span<const NodeId>( &u, 1 ) ) )
+        {
+            confirm( u, site.targets, site.ref, true, out );
+        }
+        for( const std::uint32_t t : throughsIn( u ) )
+        {
+            confirm( u, containerHolds( m_back.values(), t ), t, false, out );
+        }
+        return m_memo.try_emplace( u, std::move( out ) ).first->second;
     }
 
-    // The calls through a container element or a called parameter made in u (role Through, not a struct-field call), in
-    // reference order: one sorted (caller, reference) table built on first use, so a walk never rescans the index per node.
+private:
+    // Each of `fns` whose backward hops name u by a field kind (fieldCall) or the container kind becomes a forward row.
+    void confirm( NodeId u, const std::vector<NodeId>& fns, std::uint32_t call, bool fieldCall, std::vector<ForwardHop>& out ) const
+    {
+        for( const NodeId f : fns )
+        {
+            const std::span<const BackHop> hops = m_back.backwardHops( f );
+            const auto it = std::ranges::find_if( hops, [ & ]( const BackHop& h )
+            {
+                return h.from == u && ( fieldCall ? hopKind( h.via ).fieldCall : h.via == BackHopVia::Container );
+            } );
+            if( it != hops.end() )
+            {
+                out.push_back( ForwardHop{ f, it->via, it->width, std::uint32_t( fns.size() ), call } );
+            }
+        }
+    }
+
+    // The calls through a container element or a called parameter made in u (role Through), in reference order: one sorted
+    // (caller, reference) table built on first use, so a walk never rescans the index per node.
     std::span<const std::uint32_t> throughsIn( NodeId u ) const
     {
-        if( !m_throughsBuilt )
+        if( !m_built )
         {
-            m_throughsBuilt = true;
-            const std::size_t S = m_ing.symbols.size();
+            m_built = true;
             for( std::uint32_t i = 0; i < m_ing.references.size(); ++i )
             {
-                if( m_ing.references[ i ].role == RefRole::Through && m_ing.references[ i ].fromSymbol < S )
+                if( m_ing.references[ i ].role == RefRole::Through && m_ing.references[ i ].fromSymbol < m_ing.symbols.size() )
                 {
-                    m_throughsBy.emplace_back( m_ing.references[ i ].fromSymbol, i );
+                    m_by.emplace_back( m_ing.references[ i ].fromSymbol, i );
                 }
             }
-            std::ranges::sort( m_throughsBy );
-            m_throughRefs.reserve( m_throughsBy.size() );
-            for( const auto& [ from, ref ] : m_throughsBy )
-            {
-                m_throughRefs.push_back( ref );
-            }
+            std::ranges::sort( m_by );
+            m_refs.reserve( m_by.size() );
+            std::ranges::transform( m_by, std::back_inserter( m_refs ), [ ]( const std::pair<NodeId, std::uint32_t>& e ) { return e.second; } );
         }
-        const auto lo = std::ranges::lower_bound( m_throughsBy, std::pair<NodeId, std::uint32_t>( u, 0u ) );
-        const auto hi = std::ranges::lower_bound( m_throughsBy, std::pair<NodeId, std::uint32_t>( u + 1, 0u ) );
-        return std::span<const std::uint32_t>( m_throughRefs ).subspan( std::size_t( lo - m_throughsBy.begin() ), std::size_t( hi - lo ) );
+        const auto lo = std::ranges::lower_bound( m_by, std::pair<NodeId, std::uint32_t>( u, 0u ) );
+        const auto hi = std::ranges::lower_bound( m_by, std::pair<NodeId, std::uint32_t>( u + 1, 0u ) );
+        return std::span<const std::uint32_t>( m_refs ).subspan( std::size_t( lo - m_by.begin() ), std::size_t( hi - lo ) );
     }
 
-    // The distinct functions a container/parameter call may reach: every value reference its join lands (valuesThrough), resolved.
-    std::vector<NodeId> containerHolds( std::uint32_t through ) const
-    {
-        std::vector<NodeId> fns;
-        for( const std::uint32_t v : m_values.valuesThrough( through ) )
-        {
-            const std::vector<NodeId> t = m_values.targetsOf( v );
-            fns.insert( fns.end(), t.begin(), t.end() );
-        }
-        std::ranges::sort( fns );
-        fns.erase( std::ranges::unique( fns ).begin(), fns.end() );
-        return fns;
-    }
-
-    // One row per calling function: the stronger kind (slot before slot-name), then the narrowest width, then the first call.
-    static void keepOnePerCaller( std::vector<BackHop>& v )
-    {
-        std::ranges::sort( v, [ ]( const BackHop& a, const BackHop& b )
-        {
-            if( a.from != b.from ) { return a.from < b.from; }
-            if( a.via != b.via ) { return a.via < b.via; }
-            if( a.width != b.width ) { return a.width < b.width; }
-            return a.ref < b.ref;
-        } );
-        v.erase( std::ranges::unique( v, [ ]( const BackHop& a, const BackHop& b ) { return a.from == b.from; } ).begin(), v.end() );
-    }
-
-    const IngestResult&                             m_ing;
-    const Graph&                                    m_g;
-    const ValueRefIndex&                            m_values;
-    DeclinedCrossRule                               m_rule;
-    mutable HashMap<NodeId, std::vector<BackHop>>    m_memo;
-    mutable HashMap<NodeId, std::vector<ForwardHop>> m_fwdMemo;
-    mutable std::vector<std::pair<NodeId, std::uint32_t>> m_throughsBy;   // (caller, Through reference), sorted
-    mutable std::vector<std::uint32_t>              m_throughRefs;       // parallel: the reference alone (throughsIn's span)
-    mutable bool                                    m_throughsBuilt = false;
+    const IngestResult&                                   m_ing;
+    const BackwardHops&                                   m_back;
+    mutable HashMap<NodeId, std::vector<ForwardHop>>      m_memo;
+    mutable std::vector<std::pair<NodeId, std::uint32_t>> m_by;     // (caller, Through reference), sorted
+    mutable std::vector<std::uint32_t>                    m_refs;   // parallel: the reference alone (throughsIn's span)
+    mutable bool                                          m_built = false;
 };
 
 // Whether any of `sinks` has a backward hop a consumer follows (width within kBackHopWidth): --path's root next= swap.
@@ -540,105 +549,138 @@ struct ImpactRing
     std::vector<ImpactRingRow> rows;         // d=2 in d=1 order, then d=3 in d=2 order
 };
 
-inline ImpactRing impactSlotRing( const IngestResult& ing, const BackwardHops& hops, std::span<const NodeId> seeds, std::span<const NodeId> reach )
+// The ring's walk state (one answer): which depth each function joined at, whether some chain to it stayed narrow, and whether
+// such a chain is also field-only. Each step is one method so impactSlotRing reads as the contract above.
+class ImpactRingWalk
 {
-    ImpactRing           out;
-    const std::size_t    S = ing.symbols.size();
-    std::vector<char>    known( S, 0 );   // an answered definition or a proven reach member: never counted here
-    std::vector<char>    counted( S, 0 );
-    std::vector<char>    level( S, 0 );   // 1..3: the ring depth a function joined at (a member never rejoins deeper)
-    std::vector<char>    narrow( S, 0 );  // some chain to it keeps every hop within kBackHopWidth: its proven callers compose
-    std::vector<char>    fieldNarrow( S, 0 );   // ... and every hop on that chain is a field call: it may take one more field hop
-    for( const NodeId n : seeds ) { if( n < S ) { known[ n ] = 1; } }
-    for( const NodeId n : reach ) { if( n < S ) { known[ n ] = 1; } }
-    const auto count = [ & ]( NodeId n )
+public:
+    ImpactRingWalk( const IngestResult& ing, const BackwardHops& hops, std::span<const NodeId> seeds, std::span<const NodeId> reach )
+        : m_hops( hops ), m_S( ing.symbols.size() ), m_known( m_S, 0 ), m_counted( m_S, 0 ), m_level( m_S, 0 ), m_narrow( m_S, 0 ), m_fieldNarrow( m_S, 0 )
     {
-        if( n < S && known[ n ] == 0 && counted[ n ] == 0 )
+        for( const std::span<const NodeId> set : { seeds, reach } )
         {
-            counted[ n ] = 1;
-            ++out.hedged;
+            for( const NodeId n : set ) { if( n < m_S ) { m_known[ n ] = 1; } }
         }
-    };
-    const auto carry = [ & ]( NodeId to, const BackHop& h, bool narrowIn, bool fieldIn )
+    }
+
+    // d=1: each answered definition's ring hops (all of them counted, whatever their width)
+    void depthOne( std::span<const NodeId> seeds )
     {
-        const bool w = h.width <= kBackHopWidth;
-        narrow[ to ]      = char( narrow[ to ] != 0 || ( narrowIn && w ) );
-        fieldNarrow[ to ] = char( fieldNarrow[ to ] != 0 || ( fieldIn && w && hopKind( h.via ).fieldCall ) );
-    };
-    std::vector<NodeId> d1;
-    for( const NodeId s : seeds )
-    {
-        for( const BackHop& h : hops.backwardHops( s ) )
+        for( const NodeId s : seeds )
         {
-            if( hopKind( h.via ).ring && h.from < S )
+            for( const BackHop& h : m_hops.backwardHops( s ) )
             {
-                if( level[ h.from ] == 0 )
+                if( hopKind( h.via ).ring && h.from < m_S )
                 {
-                    level[ h.from ] = 1;
-                    d1.push_back( h.from );
+                    join( h.from, 1, m_d1 );
+                    carry( h.from, h, true, true );
                 }
-                carry( h.from, h, true, true );
+            }
+        }
+        for( const NodeId f : m_d1 )
+        {
+            count( f );
+        }
+    }
+    // d=2: each d=1 function's ring hops; a proven member, an answered definition or a d=1 function already speaks for itself
+    void depthTwo( ImpactRing& out )
+    {
+        for( const NodeId f : m_d1 )
+        {
+            for( const BackHop& h : m_hops.backwardHops( f ) )
+            {
+                if( hopKind( h.via ).ring && fresh( f, h, 1 ) )
+                {
+                    count( h.from );
+                    out.rows.push_back( ImpactRingRow{ h.from, f, h.via, h.ref, 2, 0 } );
+                    join( h.from, 2, m_d2 );
+                    carry( h.from, h, m_narrow[ f ] != 0, m_fieldNarrow[ f ] != 0 );
+                }
             }
         }
     }
-    for( const NodeId f : d1 )
+    // d=3: only off a field-only, narrow chain, only by a narrow field hop, never back onto a member the ring already holds
+    void depthThree( ImpactRing& out )
     {
-        count( f );
-    }
-    std::vector<NodeId> d2;
-    for( const NodeId f : d1 )
-    {
-        for( const BackHop& h : hops.backwardHops( f ) )
+        for( const NodeId f : m_d2 )
         {
-            if( !hopKind( h.via ).ring || h.from == f || h.from >= S || known[ h.from ] != 0 || level[ h.from ] == 1 )
+            for( const BackHop& h : m_hops.backwardHops( f ) )
             {
-                continue;   // a proven member, an answered definition or a d=1 function already speaks for itself
+                if( m_fieldNarrow[ f ] != 0 && hopKind( h.via ).fieldCall && h.width <= kBackHopWidth && fresh( f, h, 0 ) )
+                {
+                    join( h.from, 3, m_d3 );
+                    m_narrow[ h.from ] = 1;
+                    count( h.from );
+                    out.rows.push_back( ImpactRingRow{ h.from, f, h.via, h.ref, 3, 0 } );
+                }
             }
-            count( h.from );
-            out.rows.push_back( ImpactRingRow{ h.from, f, h.via, h.ref, 2, 0 } );
-            if( level[ h.from ] == 0 )
-            {
-                level[ h.from ] = 2;
-                d2.push_back( h.from );
-            }
-            carry( h.from, h, narrow[ f ] != 0, fieldNarrow[ f ] != 0 );
-        }
-    }
-    static_assert( kImpactRingSlotDepth == 3, "the ring walks d=1 and d=2 above and exactly one more field hop below" );
-    std::vector<NodeId> d3;
-    for( const NodeId f : d2 )
-    {
-        for( const BackHop& h : hops.backwardHops( f ) )
-        {
-            if( fieldNarrow[ f ] == 0 || !hopKind( h.via ).fieldCall || h.width > kBackHopWidth || h.from == f || h.from >= S || known[ h.from ] != 0
-                || level[ h.from ] != 0 )
-            {
-                continue;   // only a field-only, narrow chain goes one deeper, and never back onto a member it already holds
-            }
-            level[ h.from ]  = 3;
-            narrow[ h.from ] = 1;
-            d3.push_back( h.from );
-            count( h.from );
-            out.rows.push_back( ImpactRingRow{ h.from, f, h.via, h.ref, 3, 0 } );
         }
     }
     // the tail: the proven callers of every member whose chain stayed narrow (one walk over all of them)
-    std::vector<NodeId> composable;
-    for( const std::vector<NodeId>* members : { &d1, &d2, &d3 } )
+    void tail()
     {
-        std::ranges::copy_if( *members, std::back_inserter( composable ), [ & ]( NodeId n ) { return narrow[ n ] != 0; } );
-    }
-    if( !composable.empty() )
-    {
-        for( const NodeId n : transitiveCallers( hops.graph(), composable ) )
+        std::vector<NodeId> composable;
+        for( const std::vector<NodeId>* members : { &m_d1, &m_d2, &m_d3 } )
+        {
+            std::ranges::copy_if( *members, std::back_inserter( composable ), [ & ]( NodeId n ) { return m_narrow[ n ] != 0; } );
+        }
+        for( const NodeId n : composable.empty() ? std::vector<NodeId>() : transitiveCallers( m_hops.graph(), composable ) )
         {
             count( n );
         }
     }
+    std::size_t hedged() const noexcept { return m_hedged; }
+
+private:
+    void count( NodeId n )
+    {
+        if( n < m_S && m_known[ n ] == 0 && m_counted[ n ] == 0 )
+        {
+            m_counted[ n ] = 1;
+            ++m_hedged;
+        }
+    }
+    void join( NodeId n, char depth, std::vector<NodeId>& at )
+    {
+        if( m_level[ n ] == 0 )
+        {
+            m_level[ n ] = depth;
+            at.push_back( n );
+        }
+    }
+    void carry( NodeId to, const BackHop& h, bool narrowIn, bool fieldIn )
+    {
+        const bool w         = h.width <= kBackHopWidth;
+        m_narrow[ to ]       = char( m_narrow[ to ] != 0 || ( narrowIn && w ) );
+        m_fieldNarrow[ to ]  = char( m_fieldNarrow[ to ] != 0 || ( fieldIn && w && hopKind( h.via ).fieldCall ) );
+    }
+    // h.from is a new ring function for member f: not f, not known, and (maxLevel 1) not at d=1 / (maxLevel 0) at no depth yet
+    bool fresh( NodeId f, const BackHop& h, char maxLevel ) const
+    {
+        return h.from != f && h.from < m_S && m_known[ h.from ] == 0 && ( maxLevel == 0 ? m_level[ h.from ] == 0 : m_level[ h.from ] != 1 );
+    }
+
+    const BackwardHops& m_hops;
+    std::size_t         m_S;
+    std::size_t         m_hedged = 0;
+    std::vector<char>   m_known, m_counted, m_level, m_narrow, m_fieldNarrow;
+    std::vector<NodeId> m_d1, m_d2, m_d3;
+};
+
+inline ImpactRing impactSlotRing( const IngestResult& ing, const BackwardHops& hops, std::span<const NodeId> seeds, std::span<const NodeId> reach )
+{
+    static_assert( kImpactRingSlotDepth == 3, "the walk below takes d=1, d=2 and exactly one more field hop" );
+    ImpactRing     out;
+    ImpactRingWalk walk( ing, hops, seeds, reach );
+    walk.depthOne( seeds );
+    walk.depthTwo( out );
+    walk.depthThree( out );
+    walk.tail();
+    out.hedged = walk.hedged();
     for( std::size_t i = 0; i < out.rows.size() && i < kImpactRingRowCap; ++i )
     {
         ImpactRingRow& row = out.rows[ i ];
-        row.stored         = hops.storedWidth( BackHop{ row.fn, row.via, 0, row.ref } );
+        row.stored         = backHopStoredWidth( ing, hops.values(), BackHop{ row.fn, row.via, 0, row.ref } );
     }
     return out;
 }
