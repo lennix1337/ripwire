@@ -82,11 +82,12 @@ for n in 16 17; do
         i=0; while [ "$i" -lt "$n" ]; do printf 'void f%d( void ) { const struct ops *o = get(); o->run(); }\nvoid c%d( void ) { f%d(); }\n' "$i" "$i" "$i"; i=$(( i + 1 )); done
     } > "$TMP/w$n/w.c"
 done
-# mixed: sink <- mid (slot, d1) <- outer (container, d2) <- top (slot: would be d3, but the chain is not field-only)
+# mixed: sink <- mid (slot, d1) <- outer (container, d2) <- top (slot through U.go: would be d3, but the chain is not field-only);
+# outer_wrap is outer's proven caller (the tail)
 cat > "$TMP/mixd/m.c" <<'EOF'
 typedef void (*handler)( void );
 struct ops { void (*run)( void ); };
-struct up { void (*go)( void ); };
+struct up { void (*go)( int ); };
 const struct ops *get( void );
 const struct up *gu( void );
 void sink( void ) { }
@@ -95,7 +96,7 @@ void mid( void ) { const struct ops *o = get(); o->run(); }
 static handler table[] = { mid };
 void outer( int i ) { table[i](); }
 void outer_wrap( void ) { outer( 0 ); }
-const struct up U = { .go = outer_wrap };
+const struct up U = { .go = outer };
 void top( void ) { const struct up *u = gu(); u->go(); }
 EOF
 cat > "$TMP/ringcyc/r.c" <<'EOF'
