@@ -1148,11 +1148,12 @@ inline constexpr std::size_t   kBridgeNarrowFan     = 4;   // composed hops: a d
 static_assert( kImpactRingSlotDepth == kBridgeSlotCrossings, "the --impact ring's field-only depth mirrors the bridge's composable allowance" );
 inline constexpr std::size_t   kBridgeMaxHops       = 8;   // a longer chain is no answer a reader would follow: none is printed
 
-enum class BridgeVia : std::uint8_t { Edge, Declined, Value, Closure, Namesake, Container, Slot, SlotName };   // composed hops: Container before the slot pair
-inline constexpr std::size_t kBridgeViaCount = 8;
+enum class BridgeVia : std::uint8_t { Edge, Declined, Value, Closure, Namesake, Container, Queue, Slot, SlotName };   // Container, Queue before the slot pair
+inline constexpr std::size_t kBridgeViaCount = 9;
 static_assert( enumCountIsExact<BridgeVia, kBridgeViaCount>(), "kBridgeViaCount must equal the BridgeVia count — raise it with the append" );
 inline constexpr std::array      kBridgeViaNames = { std::string_view( "" ), std::string_view( "declined" ), std::string_view( "value" ), std::string_view( "closure" ),
-                                                     std::string_view( "namesake" ), std::string_view( "container" ), std::string_view( "slot" ), std::string_view( "slot-name" ) };   // indexed by BridgeVia
+                                                     std::string_view( "namesake" ), std::string_view( "container" ), std::string_view( "queue" ), std::string_view( "slot" ),
+                                                     std::string_view( "slot-name" ) };   // indexed by BridgeVia
 static_assert( kBridgeViaNames.size() == kBridgeViaCount, "one name per BridgeVia value (the extent is deduced from the names)" );
 static_assert( std::size_t( BridgeVia::SlotName ) + 1 == kBridgeViaCount && std::size_t( BridgeVia::Slot ) + 2 == kBridgeViaCount, "the two slot crossings close the enum" );
 inline bool bridgeViaIsSlot( BridgeVia v ) noexcept
@@ -1163,7 +1164,7 @@ inline bool bridgeViaIsSlot( BridgeVia v ) noexcept
 // container one fanning out to at most kBridgeNarrowFan.
 inline bool bridgeCrossingComposes( BridgeVia v, std::size_t fan ) noexcept
 {
-    return bridgeViaIsSlot( v ) || ( ( v == BridgeVia::Declined || v == BridgeVia::Container ) && fan <= kBridgeNarrowFan );
+    return bridgeViaIsSlot( v ) || ( ( v == BridgeVia::Declined || v == BridgeVia::Container || v == BridgeVia::Queue ) && fan <= kBridgeNarrowFan );
 }
 
 struct PathBridge
@@ -1196,7 +1197,7 @@ inline void bridgeHopCrossings( const ForwardHops& fwdHops, NodeId u, bool field
         }
         else
         {
-            cross( h.to, BridgeVia::Container, h.stored, 0 );
+            cross( h.to, h.via == BackHopVia::Queue ? BridgeVia::Queue : BridgeVia::Container, h.stored, 0 );   // QUEUE-HOP: a queue's readers, as a container's
         }
     }
 }
@@ -1469,9 +1470,14 @@ inline constexpr std::string_view kPathBridgeLegend =
     "(a wide table is still crossed: K says how wide), container = the previous row calls through a container element (or a parameter's default) "
     "this row may be held in (cands= the functions it may hold) (via=name rows are proven edges bound by name). Fewest crossings first. It is NOT a path: reachable= and "
     "hops= on the root stay 0, no count includes it, and every crossing is a hedge. ";
-inline std::string_view pathBridgeLegend( bool on ) noexcept
+inline std::string pathBridgeLegend( bool on, bool queue = false )
 {
-    return on ? kPathBridgeLegend : std::string_view();
+    return std::string( on ? kPathBridgeLegend : std::string_view() ) + std::string( on && queue ? kQueueHopLegend : std::string_view() );
+}
+// Whether a bridge crosses a queue hand-off: the queue clause rides (present-only).
+inline bool pathBridgeHasQueue( const PathBridge& br ) noexcept
+{
+    return std::ranges::find( br.via, BridgeVia::Queue ) != br.via.end();
 }
 
 inline std::string pathBridgeXml( const IngestResult& ing, const Graph& g, const PathBridge& br, bool singleRoot, std::string_view rootPrefix )
