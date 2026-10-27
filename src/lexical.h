@@ -2236,22 +2236,12 @@ struct GraphSubject
 
 namespace detail
 {
-inline std::string graphSubjectLower( std::string_view w )
-{
-    std::string out( w );
-    for( char& c : out )
-    {
-        c = ( c >= 'A' && c <= 'Z' ) ? char( c - 'A' + 'a' ) : c;
-    }
-    return out;
-}
-
 // a keyword word, case-folded, after its LEADING quote/bracket punctuation only (parse.py's `\b` before the keyword;
 // the keyword must still end at whitespace, so `callers,` is not the form)
 inline bool graphSubjectWordIs( std::string_view w, std::initializer_list<std::string_view> any )
 {
     while( !w.empty() && std::string_view( "`'\"([{" ).find( w.front() ) != std::string_view::npos ) { w.remove_prefix( 1 ); }
-    const std::string lw = graphSubjectLower( w );
+    const std::string lw = routeLower( w );
     return std::find( any.begin(), any.end(), std::string_view( lw ) ) != any.end();
 }
 
@@ -2360,7 +2350,7 @@ inline std::optional<GraphSubject> parseGraphSubject( std::string_view task )
     {
         for( std::size_t k = from + 1; k + 1 < w.size(); ++k )
         {
-            if( detail::graphSubjectLower( w[k] ) == word )
+            if( routeLower( w[k] ) == word )
             {
                 return k;
             }
@@ -2370,7 +2360,7 @@ inline std::optional<GraphSubject> parseGraphSubject( std::string_view task )
     for( std::size_t i = 0; i + 3 < w.size(); ++i )   // common callers of A and B
     {
         if( detail::graphSubjectWordIs( w[i], { "common" } ) && detail::graphSubjectWordIs( w[i + 1], { "caller", "callers" } )
-            && detail::graphSubjectLower( w[i + 2] ) == "of" )
+            && routeLower( w[i + 2] ) == "of" )
         {
             const std::size_t a = sep( i + 3, "and" );
             if( a < w.size() )
@@ -2381,7 +2371,7 @@ inline std::optional<GraphSubject> parseGraphSubject( std::string_view task )
     }
     for( std::size_t i = 0; i + 3 < w.size(); ++i )   // [call] path from A to B
     {
-        if( detail::graphSubjectWordIs( w[i], { "path" } ) && detail::graphSubjectLower( w[i + 1] ) == "from" )
+        if( detail::graphSubjectWordIs( w[i], { "path" } ) && routeLower( w[i + 1] ) == "from" )
         {
             const std::size_t t = sep( i + 2, "to" );
             if( t < w.size() )
@@ -2392,7 +2382,7 @@ inline std::optional<GraphSubject> parseGraphSubject( std::string_view task )
     }
     for( std::size_t i = 0; i + 2 < w.size(); ++i )   // callers of X
     {
-        if( detail::graphSubjectWordIs( w[i], { "caller", "callers" } ) && detail::graphSubjectLower( w[i + 1] ) == "of" )
+        if( detail::graphSubjectWordIs( w[i], { "caller", "callers" } ) && routeLower( w[i + 1] ) == "of" )
         {
             return fill( GraphSubjectForm::Callers, { { i + 2, w.size() } } );
         }
