@@ -16,6 +16,10 @@
 #   (n4) a task that is not a graph question: no block
 #   (j1) --json carries no block (one document per dialect)
 #   (x1) MCP `for`: the same <graph_verb …> opening tag and the same path answer element
+# FIX ROUND 1 (review B1/S1-S5, mutants):
+#   (n5)(n6)(n7)(c3) a span ends at a sentence stop, a comma or a clause word: a LATER clause's symbol never becomes an endpoint
+#   (n5b) a `*` token is never an endpoint (a glob --path the task did not write)
+#   (s4a)(s4b)(s4c) `dict()`, «guillemets», full-width ？ endpoints are read
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"
@@ -53,6 +57,14 @@ tail = s.endswith( '</graph_verb></ctx>' )
 leg = re.search( r'<!-- ripwire for graph_verb:(.*?)-->', s, re.S )
 legdash = '--' in leg.group( 1 ) if leg else False
 print( f"n={n} endpoints={g('endpoints')} verb={g('verb')} from={g('from_span')} to={g('to_span')} of={g('of_span')} and={g('and_span')} tried={g('tried')} tail={int(tail)} legdash={int(legdash)}" )
+PY
+}
+attr(){ python3 - "$1" "$2" <<'PY'
+import re, sys
+s = open( sys.argv[1], encoding="utf8", errors="replace" ).read()
+m = re.search( r'<graph_verb ([^>]*)>', s )
+r = re.search( r'\b' + sys.argv[2] + r'="([^"]*)"', m.group( 1 ) ) if m else None
+print( r.group( 1 ) if r else '-' )
 PY
 }
 xmlok(){ if command -v xmllint >/dev/null 2>&1; then xmllint --noout "$1" 2>/dev/null; else return 0; fi; }
@@ -103,6 +115,7 @@ run --for="path from startEntry to leaf_sink notReal_xq" >"$TMP/t1.xml"
 f="$( facts "$TMP/t1.xml" )"
 case "$f" in *"verb=--path=startEntry,leaf_sink "*"tried=2 "*) ok "(t1) the unresolved last-first candidate falls through, tried=2: $f";; *) no "(t1) $f";; esac
 
+
 for arm in "n1|path from startEntry to serialising a dict" "n2|path from startEntry to spawning ripgrep" \
            "n3|path from startEntry to notReal_xq" "n4|how does startEntry reach leaf_sink"
 do
@@ -111,6 +124,31 @@ do
     if [ -s "$TMP/$id.xml" ] && ! grep -q 'graph_verb' "$TMP/$id.xml" && ! grep -qi 'not found' "$TMP/$id.xml"
     then ok "($id) no block for \"$q\""
     else no "($id) a block (or a refusal) for \"$q\": $( facts "$TMP/$id.xml" )"; fi
+done
+
+# B1: a later clause's symbol never binds (each is a task whose LAST code-like word names a real symbol in another clause)
+for arm in "n5|path from startEntry to leaf_sink. Afterwards summarise other_caller|--path=startEntry,leaf_sink|from_span=startEntry|to_span=leaf_sink." \
+           "n7|path from startEntry to leaf_sink and then other_caller|--path=startEntry,leaf_sink|from_span=startEntry|to_span=leaf_sink" \
+           "c3|callers of leaf_sink, mid_hop and other_caller|--callers=leaf_sink|of_span=leaf_sink,|-" \
+           "s4a|callers of \`dict()\`|--callers=dict|of_span=\`dict()\`|-" \
+           "s4b|callers of «leaf_sink»|--callers=leaf_sink|of_span=«leaf_sink»|-" \
+           "s4c|callers of leaf_sink？ nothing else|--callers=leaf_sink|of_span=leaf_sink|-"
+do
+    IFS='|' read -r id q want sp1 sp2 <<<"$arm"
+    run --for="$q" >"$TMP/$id.xml"
+    v="$( attr "$TMP/$id.xml" verb )"; a1="$( attr "$TMP/$id.xml" "${sp1%%=*}" )"; a2="-"
+    [ "$sp2" != "-" ] && a2="$( attr "$TMP/$id.xml" "${sp2%%=*}" )"
+    if [ "$v" = "$want" ] && [ "$a1" = "${sp1#*=}" ] && { [ "$sp2" = "-" ] || [ "$a2" = "${sp2#*=}" ]; } && [ "$( grep -c '<graph_verb ' "$TMP/$id.xml" )" = 1 ]
+    then ok "($id) \"$q\" -> $v ($sp1)"
+    else no "($id) \"$q\": verb=[$v] want=[$want] span1=[$a1] span2=[$a2]"; fi
+done
+for arm in "n6|callers of plain and how mid_hop works" "n5b|path from startEntry to leaf_*"
+do
+    id="${arm%%|*}"; q="${arm#*|}"
+    run --for="$q" >"$TMP/$id.xml"
+    if [ -s "$TMP/$id.xml" ] && ! grep -q 'graph_verb' "$TMP/$id.xml"
+    then ok "($id) no block for \"$q\""
+    else no "($id) a block for \"$q\": $( facts "$TMP/$id.xml" )"; fi
 done
 
 run --for="path from startEntry to leaf_sink" --json >"$TMP/j1.json"
