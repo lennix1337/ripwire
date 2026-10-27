@@ -71,24 +71,93 @@ inline bool vrBindLess( const IngestResult& ing, const Reference& a, const Refer
 // ── IX1-V2: the byFieldName languages' side of the slot join (model.h kVrSlotLangs) ──────────────────────────────────
 namespace slot_join
 {
-// The package name a Go file's directory stands for (its last path segment; "" at the root).
-inline std::string goPackageOf( std::string_view path )
+// fix1 F-2: a byFieldName (Go) slot type's key — the package DIRECTORY the type is declared in (a Go package is a directory:
+// x/types.Cmd and y/types.Cmd are two types though both packages are named `types`) joined to the type name. The ONE spelling
+// the store side (SlotIndex) and --for's struct rows (forslots.h) both key by.
+inline std::string goTypeKeyIn( std::string_view dir, std::string_view name )
 {
-    const std::string_view dir = includerDir( path );
-    const std::size_t      sl  = dir.rfind( '/' );
-    return std::string( sl == std::string_view::npos ? dir : dir.substr( sl + 1 ) );
+    return std::string( dir ) + ":" + std::string( name );
 }
-// A byFieldName language's slot type, package-qualified: `batcheval.Command` as written, or `Command` written inside a package
-// directory named batcheval (the last path segment stands for the package name: a package whose name differs from its directory
-// is a floor). "" stays unknown (the name tier).
-inline std::string goTypeKey( const IngestResult& ing, const Reference& r )
+inline std::string goTypeKeyOf( const IngestResult& ing, const Symbol& s )
 {
-    if( r.memberCtor.empty() || r.memberCtor.find( '.' ) != std::string::npos )
+    return goTypeKeyIn( includerDir( ing.files[ s.fileId ] ), s.name );
+}
+// The key of the type a byFieldName store writes (Reference::memberCtor): `T` → the writing file's directory; `pkg.T` → the
+// directory of the file's import bound to `pkg`, when exactly one in-tree Go directory is that import path's tail; "" (unknown:
+// the name tier) otherwise — an out-of-tree package, an unmatched or ambiguous path. The import and directory tables are built
+// on the first qualified type.
+class GoTypeKeys
+{
+public:
+    std::string keyOf( const IngestResult& ing, const Reference& r )
     {
-        return r.memberCtor;
+        const std::string_view t   = r.memberCtor;
+        const std::size_t      dot = t.find( '.' );
+        if( t.empty() || dot == std::string_view::npos )
+        {
+            return t.empty() ? std::string() : goTypeKeyIn( includerDir( ing.files[ r.fileId ] ), t );
+        }
+        build( ing );
+        const auto imp = m_imports.find( jsImportKey( r.fileId, t.substr( 0, dot ) ) );
+        if( imp == m_imports.end() || imp->second == kConflict )
+        {
+            return {};
+        }
+        const std::string dir = dirOfImport( imp->second );
+        return dir.empty() ? std::string() : goTypeKeyIn( dir, t.substr( dot + 1 ) );
     }
-    return goPackageOf( ing.files[ r.fileId ] ) + "." + r.memberCtor;
-}
+
+private:
+    static constexpr std::string_view kConflict = "\x01";
+    void build( const IngestResult& ing )
+    {
+        if( m_built )
+        {
+            return;
+        }
+        m_built = true;
+        for( const Binding& b : ing.bindings )
+        {
+            if( b.kind == LocalBindKind::ModuleAlias && !b.var.empty() && !b.typeName.empty() )
+            {
+                std::string& have = m_imports[ jsImportKey( b.fileId, b.var ) ];
+                have = have.empty() || have == b.typeName ? b.typeName : std::string( kConflict );
+            }
+        }
+        HashMap<std::string, char> seen;
+        for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+        {
+            const std::string_view full = includerDir( ing.files[f] );
+            if( ing.files[f].ends_with( ".go" ) && seen.try_emplace( std::string( full ), char( 1 ) ).second )
+            {
+                m_dirs.emplace_back( std::string( includerDir( rootRelPath( ing, f ) ) ), std::string( full ) );
+            }
+        }
+    }
+    // the ONE in-tree Go directory whose root-relative path is the tail of import path `path`, "" when none or several
+    std::string dirOfImport( const std::string& path )
+    {
+        if( const auto it = m_dirOf.find( path ); it != m_dirOf.end() )
+        {
+            return it->second;
+        }
+        std::string hit;
+        int         n = 0;
+        for( const auto& [ rel, full ] : m_dirs )
+        {
+            if( !rel.empty() && ( path == rel || ( path.size() > rel.size() && path.ends_with( rel ) && path[ path.size() - rel.size() - 1 ] == '/' ) ) )
+            {
+                hit = full;
+                ++n;
+            }
+        }
+        return m_dirOf[ path ] = n == 1 ? hit : std::string();
+    }
+    bool                                             m_built = false;
+    HashMap<std::string, std::string>                m_imports;   // "fileId#alias" → import path (kConflict: two paths)
+    std::vector<std::pair<std::string, std::string>> m_dirs;      // (root-relative dir, dir as the files spell it), one per Go dir
+    HashMap<std::string, std::string>                m_dirOf;     // import path → its directory ("" none or ambiguous)
+};
 // The member calls `x.F( … )` of a byFieldName language whose field F holds a stored function somewhere (`holds`), as calls
 // through that slot, in reference order. Not when that language defines a METHOD named F anywhere in the tree: the call may
 // then be that method, and the receiver's type is not read here (a named floor, never a guess).
@@ -121,42 +190,60 @@ std::vector<std::uint32_t> memberCalls( const IngestResult& ing, const Holds& ho
     return out;
 }
 // The registrars' parameters stored into field slots (model.h kValueRefSlotParamScope facts): an ARGUMENT row of a bare call
-// `Reg( … )` (scope 'a', key "#k") lands in the slot parameter k of Reg is stored into, when exactly one slot is recorded for
-// (Reg, k) — two same-named registrars, or one storing it in two fields, decide nothing.
+// `Reg( … )` (scope 'a', key "#k") lands in the slot parameter k of Reg is stored into. fix1 F-1: a fact is keyed by the
+// registrar's DEFINITION (the symbol it is recorded in), and the argument row by the definitions its bare callee resolves to
+// (ValueRefIndex::resolveName, the same rule the parameter join uses) — so a same-named function of another package that stores
+// nothing, or a METHOD (a bare call never calls one), never feeds the slot. Every resolved definition must record the one same
+// slot; one storing the parameter in two fields decides nothing.
 class ParamSlots
 {
 public:
     void take( std::uint32_t refIdx ) { m_refs.push_back( refIdx ); }
-    void build( const IngestResult& ing )
+    void build( const IngestResult& ing, GoTypeKeys& keys )
     {
         for( const std::uint32_t q : m_refs )
         {
-            const Reference& r    = ing.references[q];
-            const std::string to  = goTypeKey( ing, r ) + "#" + r.memberPath;
-            std::string&      have = m_slot[ r.recvVar + "#" + std::to_string( r.argCount ) ];
+            const Reference& r = ing.references[q];
+            if( r.fromSymbol >= ing.symbols.size() || ing.symbols[ r.fromSymbol ].kind != SymKind::Function
+                || ing.symbols[ r.fromSymbol ].name != r.recvVar )
+            {
+                continue;   // a method registrar (no bare call reaches it), or a fact outside its own function's definition
+            }
+            const std::string to   = keys.keyOf( ing, r ) + "#" + r.memberPath;
+            std::string&      have = m_slot[ jsImportKey( r.fromSymbol, std::to_string( r.argCount ) ) ];
             have = have.empty() || have == to ? to : std::string( kConflict );
         }
     }
-    // (type, field) of argument row `v`'s slot, or nothing.
-    std::optional<std::pair<std::string, std::string>> slotOf( const Reference& v ) const
+    // (type, field) of argument row `v`'s slot, or nothing; `ownersOf( v )` = the registrar definitions its bare callee resolves to.
+    template<class OwnersOf>
+    std::optional<std::pair<std::string, std::string>> slotOf( const Reference& v, const OwnersOf& ownersOf ) const
     {
         if( m_slot.empty() || !v.argCountKnown || v.recvVar.empty() || v.qualifier.empty() || v.qualifier[0] != 'a' )
         {
             return std::nullopt;
         }
-        const auto it = m_slot.find( v.recvVar + "#" + std::to_string( v.argCount ) );
-        if( it == m_slot.end() || it->second == kConflict )
+        std::optional<std::string_view> to;
+        for( const NodeId o : ownersOf( v ) )
+        {
+            const auto it = m_slot.find( jsImportKey( o, std::to_string( v.argCount ) ) );
+            if( it == m_slot.end() || it->second == kConflict || ( to.has_value() && *to != it->second ) )
+            {
+                return std::nullopt;   // a resolved definition that stores nothing there, or two that disagree
+            }
+            to = it->second;
+        }
+        if( !to.has_value() )
         {
             return std::nullopt;
         }
-        const std::size_t hash = it->second.rfind( '#' );
-        return std::pair{ it->second.substr( 0, hash ), it->second.substr( hash + 1 ) };
+        const std::size_t hash = to->rfind( '#' );
+        return std::pair{ std::string( to->substr( 0, hash ) ), std::string( to->substr( hash + 1 ) ) };
     }
 
 private:
     static constexpr std::string_view kConflict = "\x01";
-    std::vector<std::uint32_t>        m_refs;   // the facts, keyed in build() (the type is package-qualified by its file)
-    HashMap<std::string, std::string> m_slot;   // "fn#k" → "Type#field" (kConflict: two different slots)
+    std::vector<std::uint32_t>        m_refs;   // the facts, keyed in build() (the type key by its file, GoTypeKeys)
+    HashMap<std::string, std::string> m_slot;   // "registrarId#k" → "TypeKey#field" (kConflict: two different slots)
 };
 // `extra` (ascending) merged into the slot calls and their per-function lists, all kept in reference order (join() and callsIn()
 // binary-search them).
@@ -218,9 +305,11 @@ public:
         return false;
     }
     // After every take: keys the slot values (`values`, ascending, with their resolved `targets`) and the calls by field.
-    void build( const IngestResult& ing, std::span<const std::uint32_t> values, std::span<const std::vector<NodeId>> targets )
+    // `ownersOf( v )`: the definitions argument row v's bare callee resolves to (the registrars, ParamSlots).
+    template<class OwnersOf>
+    void build( const IngestResult& ing, std::span<const std::uint32_t> values, std::span<const std::vector<NodeId>> targets, const OwnersOf& ownersOf )
     {
-        m_params.build( ing );
+        m_params.build( ing, m_goKeys );
         for( std::size_t k = 0; k < values.size(); ++k )
         {
             if( targets[k].empty() )
@@ -232,12 +321,17 @@ public:
             {
                 m_values.push_back( endOf( ing, values[k] ) );
             }
-            else if( const auto ps = m_params.slotOf( v ) )
+            else if( const auto ps = m_params.slotOf( v, ownersOf ) )
             {
-                m_values.push_back( { values[k], ps->first, ps->second } );   // IX1-V2: `Reg( Put )`, Reg storing that parameter in a field
+                m_values.push_back( { values[k], ps->first, ps->second, valueRefFamily( v.lang ) } );   // IX1-V2: `Reg( Put )`, Reg storing that parameter in a field
             }
             else
             {
+                continue;
+            }
+            if( slotJoinsByFieldName( v.lang ) && !m_values.back().type.empty() && !isGoStruct( ing, m_values.back().type ) )
+            {
+                m_values.pop_back();   // fix1 F-5: `Table{ OpPut: f }` of a named MAP type (or any non-struct): a key, not a field
                 continue;
             }
             m_valuesByField[ m_values.back().field ].push_back( static_cast<std::uint32_t>( m_values.size() - 1 ) );
@@ -301,7 +395,24 @@ private:
         std::uint32_t ref = 0;
         std::string   type;    // the resolved declared struct type, "" unknown
         std::string   field;
+        VrLangFamily  fam = VrLangFamily::None;   // fix1 F-3: the value-ref family; a slot never joins across two
     };
+    // fix1 F-5: is Go type key `key` (slot_join::goTypeKeyOf) an in-tree STRUCT type — the only type whose keyed literal names fields
+    bool isGoStruct( const IngestResult& ing, const std::string& key )
+    {
+        if( !m_goStructsBuilt )
+        {
+            m_goStructsBuilt = true;
+            for( const Symbol& s : ing.symbols )
+            {
+                if( s.kind == SymKind::Struct && slotJoinsByFieldName( s.lang ) )
+                {
+                    m_goStructs.try_emplace( slot_join::goTypeKeyOf( ing, s ), char( 1 ) );
+                }
+            }
+        }
+        return m_goStructs.contains( key );
+    }
 
     // An anonymous struct's "@LINE" key is unique in its own file only: the file joins the key.
     static std::string canonType( std::string_view t, std::uint32_t fileId )
@@ -372,16 +483,17 @@ private:
     }
     // The slot of a slot reference: the root's type through the typedef aliases, then each field of the chain through the
     // field-type facts; a hop the facts do not know leaves the type unknown (the name tier).
-    End endOf( const IngestResult& ing, std::uint32_t refIdx ) const
+    End endOf( const IngestResult& ing, std::uint32_t refIdx )
     {
         const Reference& r = ing.references[refIdx];
         End              e;
         e.ref = refIdx;
+        e.fam = valueRefFamily( r.lang );
         if( r.role == RefRole::Call || slotJoinsByFieldName( r.lang ) )
         {
             // IX1-V2: a member call `x.F( … )` (slot_join::memberCalls, its receiver's type unread: the name tier), or a byFieldName
             // store (package-qualified; no typedef aliases or field-type facts on this side)
-            e.type  = r.role == RefRole::Call ? std::string() : slot_join::goTypeKey( ing, r );
+            e.type  = r.role == RefRole::Call ? std::string() : m_goKeys.keyOf( ing, r );
             e.field = r.role == RefRole::Call ? r.calleeName : r.memberPath;
             return e;
         }
@@ -420,9 +532,9 @@ private:
         for( const std::uint32_t k : it->second )
         {
             const End& o = other[k];
-            if( o.type == kConflict )
+            if( o.type == kConflict || o.fam != e->fam )
             {
-                continue;
+                continue;   // fix1 F-3: a Go member call never runs what a C function-pointer field holds, nor the reverse
             }
             if( e->type.empty() || o.type.empty() || e->type == o.type )
             {
@@ -437,6 +549,9 @@ private:
     HashMap<std::string, std::string>                m_aliasInFile;    // "fileId#name" → struct type, the file's own typedef
     HashMap<std::string, std::string>                m_body;           // struct type → its body's digest (kConflict: files differ)
     slot_join::ParamSlots                            m_params;         // IX1-V2: registrars' parameters stored into field slots
+    slot_join::GoTypeKeys                            m_goKeys;         // fix1 F-2: Go type keys by package directory
+    HashMap<std::string, char>                       m_goStructs;      // fix1 F-5: every in-tree Go struct's type key
+    bool                                             m_goStructsBuilt = false;
     std::vector<std::uint32_t>                       m_calls;          // slot Through references, ascending
     HashMap<NodeId, std::vector<std::uint32_t>>      m_callsBySym;     // calling function → its slot Through references
     std::vector<End>                                 m_values;         // slot Value rows with a resolved function, by ref
@@ -508,7 +623,7 @@ public:
                 m_valuesByTarget[ t ].push_back( static_cast<std::uint32_t>( k ) );
             }
         }
-        m_slots.build( ing, m_values, m_targets );
+        m_slots.build( ing, m_values, m_targets, [ this ]( const Reference& v ) { return resolveName( v, v.recvVar ); } );
     }
 
     const SlotIndex& slots() const noexcept { return m_slots; }   // IX-1: the struct-field slot join

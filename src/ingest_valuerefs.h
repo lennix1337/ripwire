@@ -2662,7 +2662,7 @@ private:
     }
 
     // IX1-V2 (Go): the type NAME a composite literal's or receiver's type node spells — `Command`, `batcheval.Command` (its final
-    // segment), by ingest_relations.h aliasTargetName. "" for every other type (a map, a slice, an inline struct, a generic
+    // segment; goValueSlot keeps a qualified literal type whole), by ingest_relations.h aliasTargetName. "" for every other type (a map, a slice, an inline struct, a generic
     // instantiation `Box[T]` — a floor): a value stored there lands in a container slot, which the container join answers.
     std::string_view goTypeName( TSNode ty ) const noexcept
     {
@@ -2694,13 +2694,16 @@ private:
             {
                 return;   // a nested literal whose type is the outer literal's element type: not read (a floor)
             }
-            const std::string_view ty = goTypeName( child( m_anc[j - 3].node, m_fType ) );
+            const TSNode           tyNode = child( m_anc[j - 3].node, m_fType );
+            const std::string_view ty     = goTypeName( tyNode );
             if( ty.empty() )
             {
                 return;   // a map / slice / inline struct literal: the key is not a field of a named struct type
             }
             r.memberPath = std::string( text( k ) );
-            r.memberCtor = std::string( ty );
+            // fix1 F-2: `pkg.T` kept WHOLE (the join maps pkg through the file's import to its directory); a bare `T` is the
+            // file's own package's
+            r.memberCtor = kindIs( ts_node_type( tyNode ), "qualified_type" ) ? std::string( text( tyNode ) ) : std::string( ty );
             return;
         }
         if( kindIs( p.kind, "assignment_statement" ) && m_anc[j].field == m_fRight && kindIs( m_anc[j].kind, "expression_list" ) && j + 1 < m_anc.size() )

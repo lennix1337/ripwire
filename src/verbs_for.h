@@ -579,6 +579,7 @@ struct ForLensHeaderParts
     bool             initSlotsPresent = false;   // FOR-SLOTS (forslots.h): a shown initializer row carries slots= (set after the
                                             // <sigs> splice), so its clause defines it
     bool             slotJoinPresent = false;    // IX1-V2 (forslots.h spliceSlotJoinRows): a shown row carries slot_by= / slot_fields=
+    bool             slotNamePresent = false;    // fix1 F-4: a printed slot caller carries the field-name-only mark (`~`)
     bool             ctorHopPresent = false;     // OWNER-CTOR-HOP (forctorhop.h): the r=1 row carries ctor_l= (set after the splice)
     bool             callerHopPresent = false; // mf1-nx: a name-exact answer whose body candidates are ONE function in the default
                                             // regime (forcallerhop.h forCallerHopTargets), so a <callers> rides and its clause
@@ -790,6 +791,7 @@ inline std::string peerRowClauses( const ForLensHeaderParts& p, bool compact )
 {
     std::string out( presentOnlyClause( p.initSlotsPresent, compact, rw::kForCompactInitSlotsLegend, rw::kForInitSlotsLegend ) );
     out += presentOnlyClause( p.slotJoinPresent, compact, rw::kForCompactSlotJoinLegend, rw::kForSlotJoinLegend );   // IX1-V2
+    out += presentOnlyClause( p.slotNamePresent, compact, rw::kForCompactSlotNameLegend, rw::kForSlotNameLegend );   // fix1 F-4
     out += presentOnlyClause( p.ctorHopPresent, compact, rw::kForCompactCtorHopLegend, rw::kForCtorHopLegend );
     out += presentOnlyClause( p.epPresent, compact, rw::kForCompactEpManifestLegend, rw::kForEpManifestLegend );   // ep-manifest
     return out;
@@ -4164,7 +4166,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         if( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forSlotJoinRowsOn() && sigsPreRendered
             && !enrich.surfaceOff && !enrich.hopsCutMarker )
         {
-            if( rw::spliceSlotJoinRows( sigsStr, ing, shownSigIds ) > 0 )
+            if( rw::spliceSlotJoinRows( sigsStr, ing, shownSigIds, &headerParts.slotNamePresent ) > 0 )
             {
                 headerParts.slotJoinPresent = true;   // the clause rides beside the attributes it defines
                 headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );

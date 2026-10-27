@@ -242,6 +242,12 @@ inline bool forSlotJoinRowsOn()
 {
     return std::getenv( "RIPWIRE_NO_SLOT_JOIN_ROWS" ) == nullptr;
 }
+// fix1 F-4: the mark on a caller joined by the field NAME alone, and its present-only clause (rides when a row prints the mark).
+inline constexpr std::string_view kForSlotNameMark = "~";
+inline constexpr std::string_view kForCompactSlotNameLegend = "; d slot_by= ~C, slot_fields= @~C: C matches the field name only (its type unread), a candidate";
+inline constexpr std::string_view kForSlotNameLegend =
+    "; a ~ before a slot_by= name or a slot_fields= caller (@~C): that function calls through a field of the same NAME whose struct "
+    "type is not read (the callers rows say via=\"slot-name\"), a candidate, never a fact";
 inline constexpr std::string_view kForCompactSlotJoinLegend =
     "; d slot_by= functions that MAY call this one through a slot it is stored in, slot_fields= F=K@C a struct field F holding K "
     "stored functions that C calls through (both by the value index, not calls), _more= the rest";
@@ -254,6 +260,9 @@ static_assert( kForCompactSlotJoinLegend.find( ';', 1 ) == std::string_view::npo
                    && kForSlotJoinLegend.find( "--" ) == std::string_view::npos && kForCompactSlotJoinLegend.find( "--" ) == std::string_view::npos,
                "one clause each, and no '--' (the legend is an XML comment)" );
 static_assert( kForSlotByCap == 4, "kForSlotJoinLegend states the cap: move the sentence with the constant" );
+static_assert( kForCompactSlotNameLegend.find( ';', 1 ) == std::string_view::npos && kForSlotNameLegend.find( ';', 1 ) == std::string_view::npos
+                   && kForCompactSlotNameLegend.find( "--" ) == std::string_view::npos && kForSlotNameLegend.find( "--" ) == std::string_view::npos,
+               "one clause each, and no '--' (the legend is an XML comment)" );
 
 namespace slot_detail
 {
@@ -299,7 +308,8 @@ inline std::string joinedRun( std::string_view attr, const std::vector<std::stri
 }   // namespace slot_detail
 
 // THE SPLICE, as spliceInitSlots: appends slot_by= / slot_fields= to the shown rows' heads. Returns the bytes added.
-inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& ing, const std::vector<NodeId>& shownIds )
+// `nameTier` (when given) is set when a printed caller joined by the field NAME alone (the `~` mark).
+inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& ing, const std::vector<NodeId>& shownIds, bool* nameTier = nullptr )
 {
     std::vector<std::size_t> cand;
     for( std::size_t i = 0; i < shownIds.size(); ++i )
@@ -365,10 +375,15 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
         std::string              run;
         if( s.kind == SymKind::Function || s.kind == SymKind::Method )
         {
+            const bool         subjectIsTest = isTestSymbol( ing, id );
             const ValueRefRows rows = valueRefCallerRows( ing, vri, std::span<const NodeId>( &id, 1 ) );
             std::vector<std::pair<bool, std::string>> by;   // (a test caller, name), first-site order; non-test callers listed first
             for( const ValueRefRow& row : rows.rows )
             {
+                if( !subjectIsTest && isTestPath( rootRelPath( ing, ing.references[ row.ref ].fileId ) ) )
+                {
+                    continue;   // fix1 F-7: a store in test code (`assertMatch( t, MatchV1 )`) is a test harness, not the subject's dispatch
+                }
                 for( const NodeId f : vri.calledBy( row.ref ) )
                 {
                     by.emplace_back( isTestSymbol( ing, f ), slot_detail::ownerName( ing.symbols[f] ) );
@@ -378,7 +393,8 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
                     const NodeId from = ing.references[c].fromSymbol;
                     if( from < ing.symbols.size() )
                     {
-                        by.emplace_back( isTestSymbol( ing, from ), slot_detail::ownerName( ing.symbols[from] ) );
+                        // fix1 F-4: `~` marks a caller joined by the field NAME alone (via="slot-name"): a candidate, not a fact
+                        by.emplace_back( isTestSymbol( ing, from ), ( row.slotTyped ? "" : std::string( kForSlotNameMark ) ) + slot_detail::ownerName( ing.symbols[from] ) );
                     }
                 }
             }
@@ -395,7 +411,7 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
         else
         {
             std::vector<std::pair<std::string_view, std::vector<std::uint32_t>>> fields;   // field → its value refs, first-seen order
-            const std::string typeKey = slotJoinsByFieldName( s.lang ) ? slot_join::goPackageOf( ing.files[ s.fileId ] ) + "." + s.name : s.name;
+            const std::string typeKey = slotJoinsByFieldName( s.lang ) ? slot_join::goTypeKeyOf( ing, s ) : s.name;   // fix1 F-2: the ONE key
             for( const auto& [ ref, field ] : vri.slots().valuesOfType( typeKey ) )
             {
                 auto it = std::ranges::find( fields, field, &std::pair<std::string_view, std::vector<std::uint32_t>>::first );
@@ -411,16 +427,24 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
                 std::vector<NodeId> fns;
                 std::string         caller;
                 bool                callerIsTest = false;
+                bool                callerTyped  = false;
                 for( const std::uint32_t r : refs )
                 {
                     std::ranges::copy( vri.targetsOf( r ), std::back_inserter( fns ) );
                     for( const SlotIndex::Hit& h : vri.slots().callsFor( r ) )
                     {
                         const NodeId from = ing.references[h.ref].fromSymbol;
-                        if( from < ing.symbols.size() && ( caller.empty() || ( callerIsTest && !isTestSymbol( ing, from ) ) ) )
+                        if( from >= ing.symbols.size() )
                         {
-                            caller       = slot_detail::ownerName( ing.symbols[from] );   // the first non-test caller, else the first caller
-                            callerIsTest = isTestSymbol( ing, from );
+                            continue;
+                        }
+                        const bool test = isTestSymbol( ing, from );
+                        // the first non-test caller, else the first caller; a same-type caller before a field-name one
+                        if( caller.empty() || ( callerIsTest && !test ) || ( callerIsTest == test && !callerTyped && h.typed ) )
+                        {
+                            caller       = slot_detail::ownerName( ing.symbols[from] );
+                            callerIsTest = test;
+                            callerTyped  = h.typed;
                         }
                     }
                 }
@@ -431,7 +455,9 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
                     ++more;
                     continue;
                 }
-                std::string item = std::string( field ) + "=" + std::to_string( fns.size() ) + ( caller.empty() ? "" : "@" + caller );
+                // fix1 F-4: `@~C` — C joins by the field NAME alone (its receiver's type is not read): a candidate, not a fact
+                std::string item = std::string( field ) + "=" + std::to_string( fns.size() )
+                                 + ( caller.empty() ? "" : "@" + ( callerTyped ? std::string() : std::string( kForSlotNameMark ) ) + caller );
                 if( std::ssize( names ) < kForSlotByCap )
                 {
                     names.push_back( std::move( item ) );
@@ -449,6 +475,10 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
         if( run.empty() )
         {
             continue;
+        }
+        if( nameTier != nullptr && run.find( kForSlotNameMark ) != std::string::npos )
+        {
+            *nameTier = true;
         }
         const std::size_t close = sigs.find( '>', heads[i] );
         ASSUME( close != std::string::npos && ( i + 1 == heads.size() || close < heads[i + 1] ), "a <d> head closes before the next row opens" );

@@ -12,10 +12,25 @@
 #   B1 [P] a method value `f = b.opPlan` of the receiver, called through f in a closure: called_by=Operation
 #   N1 [G] `f = other.opPlan` (a parameter, not the receiver) makes no row for Remote.opPlan
 #   N2 [G] a field named like a Go METHOD (`h.Close()` beside `(*File).Close`) is no slot call
-#   N3 [G] a map literal value is no field slot;  N4 [G] two same-named registrars storing different fields decide nothing
+#   N3 [G] a map literal value is no field slot
+#   N4 [G] two same-named registrars in two packages: the bare call `Reg( ambiguous )` binds its OWN package's registrar (fix1 F-1:
+#          by-design change — this arm said "decide nothing" while registrars were keyed by the bare name; it now pins the
+#          identity, and N4c below keeps the "decide nothing" premise on the shape that still has it)
 #   N5 [G] a same-named struct in another package: batcheval.Command's slot_fields= never lists cobra.Command's RunE
 #   F1 [P] --for: slot_fields= on the struct row (EvalRW=2: the `c.EvalRW =` store has no type, so it is not this struct's), slot_by= on the stored function, the clause rides;  F2 [G] the A/B handle
 #   L1 [P] the compact legend defines cands= when it rides;  J1 [P] the JSON twin carries cands
+# fix1 (review rv-fn-slot F-1..F-7; fixture test/fnslotfix2/, its own root so the arms above keep their rows):
+#   N6 [P] a same-named function of another package that stores nothing (`other.Enlist( otherFn )`) never feeds the slot (F-1)
+#   N6b [G] the twin: the registrar's own package's bare call `Enlist( realFn )` still lands in Task.Do
+#   N7 [P] a METHOD registrar `(*Router).Mount` never feeds a bare call `Mount( zero, one )` of another package (F-1)
+#   N4c [G] one registrar storing its parameter in two fields (`H{A: fn}`, `H{B: fn}`) decides nothing
+#   K1 [P] x/types.Cmd and y/types.Cmd are two slots: K=1 on each struct row (F-2; the call side is name-only, so `@~`)
+#   K2 [G] a QUALIFIED literal `enlist.Task{Do: litFn}` keys by the import's directory: Task Do=2 (realFn, litFn)
+#   X1 [P] a Go member call never targets a C function-pointer field of the same name (F-3); X1b [P] nor does the C row count it
+#   M1 [P] --for marks a field-name-only caller `~` (slot_by="~useA" on fb, A.F vs B.F) and the clause rides (F-4)
+#   T1 [P] a named MAP type's keyed literal `Table{OpPut: putTab}` is no field slot (F-5); T1b [G] a struct's still is
+#   N3b [G] an unnamed map literal `map[Op]func(){OpGet: getMap}` is no field slot (F-6; pins goValueSlot's ty.empty() guard)
+#   Q1 [P] a slot_by= whose only store is in test code (`assertMatch( t, MatchV1 )`) is not printed on a non-test row (F-7)
 #
 # Usage: bash test/fnslotcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -64,16 +79,56 @@ o="$( run --callers=doneHook )"
 hasnt "N3 a map literal value is no field slot" "$o" 'via="slot'
 o="$( run --callers=ambiguous )"
 has   "N4a the argument row prints" "$o" 'into="Reg#arg0"'
-hasnt "N4 two same-named registrars storing different fields decide nothing" "$o" 'called_by='
+has   "N4 the bare call binds its own package's registrar (misc2.Reg → Hooks2.OnFail)" "$o" 'called_by="fire"'
+hasnt "N4b never the other package's registrar's field" "$o" 'useHooks'
 o="$( run '--for=how does evaluateCommand run the Command EvalRW of Put' )"
 row(){ printf '%s' "$1" | grep -o "<d [^>]*n=\"$2\" p=\"$3\"[^>]*>" | head -1; }   # row ANSWER NAME PATH: that row's head
-has   "F1a slot_fields= on batcheval.Command" "$( row "$o" Command batcheval/command.go )" 'slot_fields="DeclareKeys=1,EvalRW=2@evaluateCommand"'
+has   "F1a slot_fields= on batcheval.Command (the caller joins by the field name: @~)" "$( row "$o" Command batcheval/command.go )" 'slot_fields="DeclareKeys=1,EvalRW=2@~evaluateCommand"'
 hasnt "N5 batcheval.Command never lists cobra.Command's field" "$( row "$o" Command batcheval/command.go )" 'RunE'
-has   "F1b slot_by= on the stored function" "$( row "$o" Put batcheval/cmd_put.go )" 'slot_by="evaluateCommand"'
+has   "F1b slot_by= on the stored function (field-name join: ~)" "$( row "$o" Put batcheval/cmd_put.go )" 'slot_by="~evaluateCommand"'
 has   "F1c the clause rides beside the attributes" "$o" 'd slot_by= functions that MAY call this one'
 o="$( RIPWIRE_NO_SLOT_JOIN_ROWS=1 run '--for=how does evaluateCommand run the Command EvalRW of Put' )"
 hasnt "F2 the A/B handle turns the rows and the clause off" "$o" 'slot_by'
 o="$( run --callers=Put --json )"
 has   "J1 the JSON twin carries cands" "$o" '"cands":"3"'
+
+FIX="$ROOT/test/fnslotfix2"
+[ -d "$FIX" ] || { echo "  FAIL  fixture dir missing: $FIX"; exit 2; }
+o="$( run --callers=otherFn )"
+has   "N6a the argument row prints" "$o" 'into="Enlist#arg0"'
+hasnt "N6 a same-named function of another package that stores nothing never feeds the slot" "$o" 'called_by='
+o="$( run --callers=realFn )"
+has   "N6b the registrar's own package's bare call still lands in Task.Do" "$o" 'into="Enlist#arg0" called_by="execTasks"'
+o="$( run --callers=one )"
+has   "N7a the argument row prints" "$o" 'into="Mount#arg1"'
+hasnt "N7 a METHOD registrar never feeds a bare call of another package" "$o" 'called_by='
+o="$( run --callers=amb )"
+has   "N4c-a the argument row prints" "$o" 'into="Hold#arg0"'
+hasnt "N4c one registrar storing its parameter in two fields decides nothing" "$o" 'called_by='
+o="$( run '--for=how does execX run the Cmd Run of runX and runY' )"
+has   "K1 x/types.Cmd holds one function" "$( row "$o" Cmd x/types/t.go )" 'slot_fields="Run=1@~execX"'
+has   "K1b y/types.Cmd holds one function" "$( row "$o" Cmd y/types/t.go )" 'slot_fields="Run=1@'
+o="$( run '--for=how does execTasks run the Task Do of realFn and litFn' )"
+has   "K2 a qualified literal keys by its import's directory" "$( row "$o" Task enlist/reg.go )" 'slot_fields="Do=2@~execTasks"'
+o="$( run --callees=goCall )"
+has   "X1a the Go slot call prints" "$o" 'through="x.draw"'
+hasnt "X1 a Go member call never targets a C function-pointer field" "$o" 'n="cdraw"'
+o="$( run --callers=cdraw )"
+has   "X1c the C row keeps its own typed caller" "$o" 'called_by="cfire" called_at="cx/ops.c:4" via="slot"'
+hasnt "X1b the C row counts no Go caller" "$o" 'slot_name_also='
+o="$( run '--for=how does useA call fa fb through field F of A and B' )"
+has   "M1 a field-name-only caller is marked ~" "$( row "$o" fb p/p.go )" 'slot_by="~useA"'
+has   "M1b the mark's clause rides" "$o" 'C matches the field name only'
+o="$( run --callers=putTab )"
+has   "T1a the stored value prints" "$o" 'into="t.OpPut"'
+hasnt "T1 a named map type's keyed literal is no field slot" "$o" 'called_by='
+o="$( run --callers=opsFn )"
+has   "T1b a struct's keyed literal still is" "$o" 'into="o.OpPut" called_by="callOps"'
+o="$( run --callers=getMap )"
+has   "N3b-a the stored value prints" "$o" 'into="t.OpGet"'
+hasnt "N3b an unnamed map literal is no field slot" "$o" 'called_by='
+o="$( run '--for=how is MatchV1 scored and matched' )"
+has   "Q1a the MatchV1 row is shown" "$o" 'n="MatchV1" p="fzt/algo.go"'
+hasnt "Q1 a test-only store prints no slot_by=" "$( row "$o" MatchV1 fzt/algo.go )" 'slot_by='
 if [ "$fail" -eq 0 ]; then echo "fnslotcheck: PASS"; else echo "fnslotcheck: FAIL"; fi
 exit "$fail"
