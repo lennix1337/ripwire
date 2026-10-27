@@ -328,6 +328,17 @@ struct GrepCarrierText
     std::vector<std::string> vals;
 };
 
+// A3: p= — the carrier's own definition as path:line, only beside vals= (the file a path-less vals= @line is in, storedVal's rule)
+// and only on a row of one definition; "" otherwise.
+inline std::string grepCarrierAt( const GrepCarrier& c, bool singleRoot, std::string_view rootPrefix )
+{
+    if( c.vals.empty() || c.defPath.empty() || c.defLine == 0 )
+    {
+        return {};
+    }
+    return std::string( singleRoot ? sarif::rootRelativeUri( c.defPath, rootPrefix ) : std::string_view( c.defPath ) ) + ":" + std::to_string( c.defLine );
+}
+
 inline GrepCarrierText grepCarrierText( const GrepCarrier& c, bool singleRoot, std::string_view rootPrefix )
 {
     const auto rel = [ & ]( const std::string& p ) { return std::string( singleRoot ? sarif::rootRelativeUri( p, rootPrefix ) : std::string_view( p ) ); };
@@ -348,10 +359,7 @@ inline GrepCarrierText grepCarrierText( const GrepCarrier& c, bool singleRoot, s
         }
         t.vals.push_back( std::move( item ) );
     }
-    if( !t.vals.empty() && !c.defPath.empty() && c.defLine != 0 )
-    {
-        t.at = rel( c.defPath ) + ":" + std::to_string( c.defLine );   // the file a path-less vals= @line is in (storedVal's rule)
-    }
+    t.at = grepCarrierAt( c, singleRoot, rootPrefix );
     return t;
 }
 
