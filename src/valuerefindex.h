@@ -543,17 +543,13 @@ private:
 class ValueRefIndex
 {
 public:
-    explicit ValueRefIndex( const IngestResult& ing ) : ValueRefIndex( ing, nullptr ) {}
+    explicit ValueRefIndex( const IngestResult& ing ) : m_ing( ing ) { index( nullptr ); }
     // fix1 (RSS): a NARROW index — what --for's slot splice (forslots.h spliceSlotJoinRows) reads, and nothing else: the Value
     // references naming one of `names` (sorted by svLess: the shown functions), every slot STORE (a struct-field value, an argument
     // of a registrar that stores its parameter in a field: the cands=, K and @C counts need the whole slot), every slot fact and
     // slot call, and the Throughs those kept values join (their container, the parameter calls of their callee). Every query the
     // splice makes answers the same as on the full index, by construction; the by-name table holds only the names they resolve.
-    static ValueRefIndex narrowFor( const IngestResult& ing, std::span<const std::string_view> names )
-    {
-        const KeepSets keep = keepSets( ing, names );
-        return ValueRefIndex( ing, &keep );
-    }
+    static ValueRefIndex narrowFor( const IngestResult& ing, std::span<const std::string_view> names ) { return ValueRefIndex( Narrowed{ ing, keepSets( ing, names ) } ); }
 
     const SlotIndex& slots() const noexcept { return m_slots; }   // IX-1: the struct-field slot join
 
@@ -802,8 +798,12 @@ public:
 
 private:
     struct KeepSets;
-    ValueRefIndex( const IngestResult& ing, const KeepSets* keep ) : m_ing( ing )
+    struct Narrowed;
+    explicit ValueRefIndex( const Narrowed& n );
+    // The tables (`keep` non-null: a narrow index, narrowFor).
+    void index( const KeepSets* keep )
     {
+        const IngestResult& ing = m_ing;
         for( NodeId id = 0; id < ing.symbols.size(); ++id )
         {
             const Symbol& s = ing.symbols[id];
@@ -886,6 +886,11 @@ private:
             }
             return containers.contains( jsImportKey( t.fileId, t.calleeName ) );
         }
+    };
+    struct Narrowed
+    {
+        const IngestResult& ing;
+        KeepSets            keep;
     };
     static KeepSets keepSets( const IngestResult& ing, std::span<const std::string_view> names )
     {
@@ -1194,6 +1199,12 @@ private:
     SlotIndex                                            m_slots;     // IX-1: struct-field slots and the calls through them
     mutable HashMap<std::string, std::uint32_t>          m_fileIndex;   // root-relative normalised path → fileId, built on first import
 };
+
+// fix1 (RSS): the narrow index (ValueRefIndex::narrowFor), defined here where Narrowed is complete.
+inline ValueRefIndex::ValueRefIndex( const Narrowed& n ) : m_ing( n.ing )
+{
+    index( &n.keep );
+}
 
 // ── IX-3 name-template dispatch ───────────────────────────────────────────────────────────────────────────────
 // The Pattern references (model.h RefRole::Pattern) and what they may name. Its own index beside ValueRefIndex, built
