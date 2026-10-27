@@ -2036,6 +2036,21 @@ private:
                     break;
                 }
             }
+            if( m_slotByName && kindIs( pt, "assignment_statement" ) )
+            {
+                // IX1-V2: Go `x.F = fn` / `x.a.F = fn` — the slot is the field as written (goValueSlot types it), the container x
+                const TSNode lhsList = child( p.node, m_fLeft );
+                const TSNode lhs     = ts_node_is_null( lhsList ) ? TSNode{} : ts_node_named_child( lhsList, idx );
+                if( !ts_node_is_null( lhs ) && kindIs( ts_node_type( lhs ), "selector_expression" ) )
+                {
+                    const TSNode obj = child( lhs, m_fOperand );
+                    s.into = vrClean( text( lhs ) );
+                    s.key  = "." + std::string( text( child( lhs, m_fField ) ) );
+                    s.container = !ts_node_is_null( obj ) && kindIs( ts_node_type( obj ), "identifier" ) ? std::string( text( obj ) ) : std::string();
+                    s.scope = s.container.empty() ? 'x' : 'f';
+                    return true;
+                }
+            }
             const std::string nm( nthName( p.node, kindIs( pt, "var_spec" ), idx ) );
             s.into = nm;
             s.container = nm;

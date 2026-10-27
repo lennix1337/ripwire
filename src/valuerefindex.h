@@ -100,6 +100,11 @@ public:
         }
         if( r.role == RefRole::Value && sc == kValueRefSlotParamScope )
         {
+            if( slotJoinsByFieldName( r.lang ) )
+            {
+                m_paramFactRefs.push_back( i );   // keyed in build(): its type is package-qualified by its file (goTypeKey)
+                return true;
+            }
             // IX1-V2: parameter argCount of `recvVar` is stored into slot memberCtor.memberPath; two different slots for one
             // (function name, position) — two same-named registrars, or one storing it twice — decide nothing (kConflict)
             noteFact( m_paramSlot, r.recvVar + "#" + std::to_string( r.argCount ), canonType( r.memberCtor, r.fileId ) + "#" + r.memberPath );
@@ -110,6 +115,11 @@ public:
     // After every take: keys the slot values (`values`, ascending, with their resolved `targets`) and the calls by field.
     void build( const IngestResult& ing, std::span<const std::uint32_t> values, std::span<const std::vector<NodeId>> targets )
     {
+        for( const std::uint32_t q : m_paramFactRefs )
+        {
+            const Reference& r = ing.references[q];
+            noteFact( m_paramSlot, r.recvVar + "#" + std::to_string( r.argCount ), goTypeKey( ing, r ) + "#" + r.memberPath );
+        }
         for( std::size_t k = 0; k < values.size(); ++k )
         {
             if( targets[k].empty() )
@@ -271,6 +281,12 @@ private:
             e.field = r.calleeName;   // IX1-V2: a member call `x.F( … )` (addMemberCalls): its receiver's type unread, the name tier
             return e;
         }
+        if( slotJoinsByFieldName( r.lang ) )
+        {
+            e.type  = goTypeKey( ing, r );   // IX1-V2: no typedef aliases or field-type facts on this side
+            e.field = r.memberPath;
+            return e;
+        }
         std::string_view chain = r.memberPath;
         std::string      t     = r.memberCtor.empty() ? std::string() : unalias( canonType( r.memberCtor, r.fileId ), r.fileId );
         for( std::size_t dot = chain.find( '.' ); dot != std::string_view::npos; dot = chain.find( '.' ) )
@@ -344,6 +360,26 @@ private:
             }
         }
     }
+    // IX1-V2: a byFieldName language's slot type, package-qualified: `batcheval.Command` as written, or `Command` written inside
+    // a package directory named batcheval (the last path segment stands for the package name: a package whose name differs
+    // from its directory is a floor). "" stays unknown (the name tier).
+    static std::string goTypeKey( const IngestResult& ing, const Reference& r )
+    {
+        if( r.memberCtor.empty() || r.memberCtor.find( '.' ) != std::string::npos )
+        {
+            return r.memberCtor;
+        }
+        return goPackageOf( ing.files[ r.fileId ] ) + "." + r.memberCtor;
+    }
+public:
+    // The package name a Go file's directory stands for (its last path segment; "" at the root).
+    static std::string goPackageOf( std::string_view path )
+    {
+        const std::string_view dir = includerDir( path );
+        const std::size_t      sl  = dir.rfind( '/' );
+        return std::string( sl == std::string_view::npos ? dir : dir.substr( sl + 1 ) );
+    }
+private:
     static const End* find( const std::vector<End>& ends, std::uint32_t ref ) noexcept
     {
         const auto it = std::ranges::lower_bound( ends, ref, {}, &End::ref );
@@ -380,6 +416,7 @@ private:
     HashMap<std::string, std::string>                m_alias;          // typedef name → struct type (kConflict: files disagree)
     HashMap<std::string, std::string>                m_aliasInFile;    // "fileId#name" → struct type, the file's own typedef
     HashMap<std::string, std::string>                m_body;           // struct type → its body's digest (kConflict: files differ)
+    std::vector<std::uint32_t>                       m_paramFactRefs;  // IX1-V2: byFieldName parameter facts, keyed in build()
     HashMap<std::string, std::string>                m_paramSlot;      // IX1-V2: "fn#k" → "Type#field" its parameter k is stored into
     std::vector<std::uint32_t>                       m_calls;          // slot Through references, ascending
     HashMap<NodeId, std::vector<std::uint32_t>>      m_callsBySym;     // calling function → its slot Through references

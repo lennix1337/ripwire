@@ -25,6 +25,7 @@
 // the stored functions) is built only when one is found, so an answer with no initializer row pays one scan.
 
 #include "forfold.h"            // fold_detail::overlapsServed — the fold's own "the answer already carries this text" reading
+#include "filter.h"             // isTestSymbol — slot_by= / slot_fields= list non-test callers first
 #include "formembers.h"         // MemberNamesServed — the bodies the answer serves
 #include "model.h"
 #include "valuerefindex.h"      // ValueRefIndex::targetsOf — the functions a value reference may hold
@@ -327,19 +328,26 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
         if( s.kind == SymKind::Function || s.kind == SymKind::Method )
         {
             const ValueRefRows rows = valueRefCallerRows( ing, vri, std::span<const NodeId>( &id, 1 ) );
+            std::vector<std::pair<bool, std::string>> by;   // (a test caller, name), first-site order; non-test callers listed first
             for( const ValueRefRow& row : rows.rows )
             {
-                for( std::size_t at = 0; at < row.calledBy.size(); )
+                for( const NodeId f : vri.calledBy( row.ref ) )
                 {
-                    const std::size_t comma = std::min( row.calledBy.find( ',', at ), row.calledBy.size() );
-                    slot_detail::addCapped( names, more, row.calledBy.substr( at, comma - at ) );
-                    at = comma + 1;
+                    by.emplace_back( isTestSymbol( ing, f ), ing.symbols[f].name );
                 }
                 for( const std::uint32_t c : row.slotCalls )
                 {
                     const NodeId from = ing.references[c].fromSymbol;
-                    slot_detail::addCapped( names, more, from < ing.symbols.size() ? ing.symbols[from].name : std::string() );
+                    if( from < ing.symbols.size() )
+                    {
+                        by.emplace_back( isTestSymbol( ing, from ), ing.symbols[from].name );
+                    }
                 }
+            }
+            std::ranges::stable_partition( by, []( const auto& b ) { return !b.first; } );
+            for( auto& [ test, name ] : by )
+            {
+                slot_detail::addCapped( names, more, std::move( name ) );
             }
             if( !names.empty() )
             {
@@ -349,7 +357,8 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
         else
         {
             std::vector<std::pair<std::string_view, std::vector<std::uint32_t>>> fields;   // field → its value refs, first-seen order
-            for( const auto& [ ref, field ] : vri.slots().valuesOfType( s.name ) )
+            const std::string typeKey = slotJoinsByFieldName( s.lang ) ? SlotIndex::goPackageOf( ing.files[ s.fileId ] ) + "." + s.name : s.name;
+            for( const auto& [ ref, field ] : vri.slots().valuesOfType( typeKey ) )
             {
                 auto it = std::ranges::find( fields, field, &std::pair<std::string_view, std::vector<std::uint32_t>>::first );
                 if( it == fields.end() )
@@ -363,15 +372,17 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
             {
                 std::vector<NodeId> fns;
                 std::string         caller;
+                bool                callerIsTest = false;
                 for( const std::uint32_t r : refs )
                 {
                     std::ranges::copy( vri.targetsOf( r ), std::back_inserter( fns ) );
                     for( const SlotIndex::Hit& h : vri.slots().callsFor( r ) )
                     {
                         const NodeId from = ing.references[h.ref].fromSymbol;
-                        if( caller.empty() && from < ing.symbols.size() )
+                        if( from < ing.symbols.size() && ( caller.empty() || ( callerIsTest && !isTestSymbol( ing, from ) ) ) )
                         {
-                            caller = ing.symbols[from].name;
+                            caller       = ing.symbols[from].name;   // the first non-test caller, else the first caller
+                            callerIsTest = isTestSymbol( ing, from );
                         }
                     }
                 }
