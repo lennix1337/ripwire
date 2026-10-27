@@ -336,11 +336,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         const bool        chDiscloseCap = ( pw.end - pw.begin ) < result.size();
         // QUALNAME-1: n="Owner.name" on a member row (memberowner.h) — the rows MF1-NX's <callers> block shares; its legend clause
         // rides exactly when a shown row carries an owner.
-        const rw::MemberOwners chOwners( ing );
-        const bool             chHasOwner = std::any_of( result.begin() + std::ptrdiff_t( pw.begin ), result.begin() + std::ptrdiff_t( pw.end ),
-                                                         [ & ]( rw::NodeId id ) { return !chOwners.ownerOf( ing.symbols[ id ] ).empty(); } );
-        const bool             chOwnerContained = std::any_of( result.begin() + std::ptrdiff_t( pw.begin ), result.begin() + std::ptrdiff_t( pw.end ),
-                                                               [ & ]( rw::NodeId id ) { return chOwners.ownerIsContained( ing.symbols[ id ] ); } );
+        const rw::MemberOwners    chOwners( ing );
+        const rw::MemberOwnerRows chOwnerRows = rw::memberOwnerRows( ing, std::span<const rw::NodeId>( result ).subspan( pw.begin, pw.end - pw.begin ) );
         char              pab[ kPageDisclosureCap ];
 
         const auto [ chNextSelector, chNextIsBare ] = rw::callHierarchyNextSelector( ing, chRows, sym, wantCallers );
@@ -420,7 +417,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                            + rw::viaNameLegend( chHasVia, false, cfg.columnar )                   // FE-B: likewise for via="name"
                            + rw::viaLinkLegend( chHasLink )
                            + rw::defTableLegend( chAttr.groups.multi(), chListing.cut ) + rw::splitArmLegend( chHasSplit )   // attrib-multidef: likewise
-                           + rw::memberOwnerLegend( chHasOwner ) + rw::memberOwnerContainedLegend( chOwnerContained ) ).c_str(),   // QUALNAME-1: likewise, exactly when a shown row names its owner
+                           + rw::memberOwnerLegendFor( chOwnerRows ) ).c_str(),   // QUALNAME-1: likewise, exactly when a shown row names its owner
                          ( std::string( rw::modScopeLegend( chHasModScope ) )   // #60: likewise, exactly when a t="modscope" row is
                            + rw::callSitesAtLegend( chSites.any, chSites.anyCut, rw::kCallSitesPerRowCap ) ).c_str(),   // CALLSITE-AT: likewise for sites_at=/sites_total=
                          ( rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ) + rw::valueRefsLegend( !chRows.valueRefs.rows.empty(), wantCallers )

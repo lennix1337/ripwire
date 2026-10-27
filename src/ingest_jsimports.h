@@ -415,6 +415,14 @@ inline JsDecl jsHoistedDeclScope( TSNode node )
     return { nameNode, parent };
 }
 
+// Lane js-def-naming: the stem a JS file's bare `module.exports = <anonymous fn>` is named by (ingest_sidecap.h captureTagsFacts,
+// ingest_names.h isCjsModuleExportsItself): the Markdown file node's rule, `std::filesystem::path( path ).stem()`; "" for every other
+// language, which has no such definition (and pays no allocation).
+inline std::string cjsExportStem( Lang lang, std::string_view path )
+{
+    return lang == Lang::JavaScript ? std::filesystem::path( path ).stem().string() : std::string();
+}
+
 // Lane js-def-naming: one LocalBindKind::JsObjectLiteral per declarator of a module-scope `const|let|var NAME = { … }` (model.h),
 // the literal's binding name over its own span — the name its members' owner has, which the index stores nowhere else.
 inline void recordJsObjectLiterals( TSNode decl, Lang lang, std::uint32_t fileId, std::string_view src, std::vector<RawBind>& binds )

@@ -1042,10 +1042,6 @@ inline std::vector<std::string_view> pathHopOwners( const IngestResult& ing, std
     ENSURES( owner.size() == path.size(), "one owner slot per hop" );
     return owner;
 }
-inline bool anyPathHopOwner( std::span<const std::string_view> owners ) noexcept
-{
-    return std::any_of( owners.begin(), owners.end(), []( std::string_view o ) { return !o.empty(); } );
-}
 // THE hop rows of a --path answer — the CLI (stdout) and MCP path_between (its memstream) both write through this, so the two
 // transports cannot drift (they were two copies of one loop). Row i's via="name" (FE-B), via="link" and anchor="missing" (a
 // markdown link, #409) and prov="split" (attrib-multidef) read the edge INTO it; the first row is no hop.

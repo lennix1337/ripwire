@@ -53,6 +53,19 @@ inline bool isMemberOwnerKind( SymKind k ) noexcept
 // scopeLastSegment (the segment the index must define as an owner) lives in model.h, beside Symbol::scope: testmap.h's
 // class-new owner reads it too (train 33: IX-5 and QUALNAME-1 each moved the same helper out of defattrib.h).
 
+// The containment languages' symbols per file, ascending start (id breaks a tie): what containedOwnersOf scans for a member's class.
+inline SymbolsByFile containmentSymbolsByFile( const IngestResult& ing )
+{
+    return symbolsByFile(
+        ing, []( const Symbol& t ) { return langFacts( t.lang ).containmentOwners; },
+        [ &ing ]( NodeId a, NodeId b )
+        {
+            const Symbol& x = ing.symbols[ a ];
+            const Symbol& y = ing.symbols[ b ];
+            return x.sigStartByte != y.sigStartByte ? x.sigStartByte < y.sigStartByte : a < b;
+        } );
+}
+
 class MemberOwners
 {
 public:
@@ -87,9 +100,6 @@ public:
                    : std::string_view();
     }
 
-    // Whether `s`'s printed owner (ownerOf) was read by containment, not off a stored scope: the legend's TS/JS clause.
-    bool ownerIsContained( const Symbol& s ) const { return s.scope.empty() && !ownerOf( s ).empty(); }
-
 private:
     // A TS/JS method's owner by containment (see the header): the one enclosing class, else "". The per-file buckets of the
     // containment languages' symbols (ascending start) are built at the first such row, so an answer with none pays nothing.
@@ -101,14 +111,7 @@ private:
         }
         if( !byFile_ )
         {
-            byFile_.emplace( symbolsByFile(
-                ing_, []( const Symbol& t ) { return langFacts( t.lang ).containmentOwners; },
-                [ this ]( NodeId a, NodeId b )
-                {
-                    const Symbol& x = ing_.symbols[ a ];
-                    const Symbol& y = ing_.symbols[ b ];
-                    return x.sigStartByte != y.sigStartByte ? x.sigStartByte < y.sigStartByte : a < b;
-                } ) );
+            byFile_.emplace( containmentSymbolsByFile( ing_ ) );
         }
         if( s.fileId >= byFile_->size() )
         {

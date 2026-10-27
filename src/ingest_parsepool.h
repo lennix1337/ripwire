@@ -135,13 +135,6 @@ struct RawFacts
 // rather than being re-derived at the flush, which would pay preprocdead.h's walk twice on every
 // C-family file that owns an include guard (the shape whose cost audit P1-0 measured at 56.67% of busy
 // leaf samples before the cursor fix).
-// The stem a JS file's bare `module.exports = <anonymous fn>` is named by (captureTagsFacts): the Markdown file node's rule,
-// `fs::path( path ).stem()`; "" for every other language, which has no such definition (and pays no allocation).
-inline std::string cjsExportStem( Lang lang, std::string_view path )
-{
-    return lang == Lang::JavaScript ? fs::path( path ).stem().string() : std::string();
-}
-
 struct PendingParsedFile
 {
     std::uint32_t   fileId = 0;
