@@ -893,7 +893,11 @@ public:
     // Is class `member` in the family of class `site`: `site` itself, an ancestor of it, or a subclass of it?
     bool sameFamily( NodeId site, NodeId member ) const
     {
-        return site == member || isAncestor( site, member ) || isAncestor( member, site );
+        if( site == member )
+        {
+            return true;
+        }
+        return isAncestor( member, site ) || isAncestor( site, member );
     }
 
 private:
