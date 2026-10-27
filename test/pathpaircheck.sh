@@ -42,7 +42,8 @@
 #   (Z) test twin: the bound from= backspace is fixtures/copy/before.py's (the shorter chain) while src/core.py:backspace exists:
 #       from_test="1" + next= naming src/core.py's; next= replays as that one definition. (ZS) the same when only the fixture
 #       copy reaches (one pair, no pairs_reaching=). (ZT) to= side: to_test="1" for a tests/ copy of the to= name.
-#       (ZN) near misses: the bound def is the source one (fixture copy also reaches) -> none; every def in tests -> none.
+#       (ZN) near misses: the bound def is a source one (a fixture copy also reaches, another source def exists) -> none;
+#       every def in tests -> none.
 #   (ZM) MCP path_between prints the same from_test= / next= root attributes.
 #
 # Usage: test/pathpaircheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
@@ -165,6 +166,7 @@ printf 'def backspace():\n    return edit()\n\ndef edit():\n    return 1\n' > "$
 printf 'def edit():\n    return 1\n\ndef helper():\n    return edit()\n' > "$TMP/twt/src/core.py"
 printf 'def edit():\n    return 1\n\ndef backspace():\n    return edit()\n' > "$TMP/twn/src/core.py"
 printf 'from src.core import edit\n\ndef helper():\n    return edit()\n\ndef backspace():\n    return helper()\n' > "$TMP/twn/fixtures/copy/before.py"
+printf 'def backspace():\n    return 0\n' > "$TMP/twn/src/other.py"   # a second SOURCE def: the bound one is not in tests, so none
 printf 'def edit():\n    return 1\n\ndef backspace():\n    return edit()\n' > "$TMP/twa/tests/a_test.py"
 printf 'def edit():\n    return 2\n\ndef helper():\n    return edit()\n\ndef backspace():\n    return helper()\n' > "$TMP/twa/tests/b_test.py"
 run qw Loop,matcher.go:extendedMatch > "$TMP/Q.out"; run qw Loop,extendedMatch > "$TMP/QN.out"
