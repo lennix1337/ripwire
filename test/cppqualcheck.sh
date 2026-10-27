@@ -345,10 +345,12 @@ rrun US --uses=selectBaseline \
 # 35 -> 36 (lane/ep-manifest): findGroupConsumers reads each indexed .py file once for the entry-point group literals.
 # 36 -> 37 (lane/qn-input, train 37b): the written-spelling seed tier (graph.h resolveAllByWrittenSpelling) reads a C/C++ candidate's
 # source through the canonical helper to read its namespace and class chain — one new call site, same helper.
+# 37 -> 38 (lane/testonly-dead, D1): --dead-code's test-only name vetting (verbs_quality.h dropTestOnlySpelledInLibrary) reads each
+# non-test code file once through the canonical helper — one new call site, same helper, no new fopen/fread.
 rrun RW --uses=readWholeFile \
-&& { [ "$( cnt "$RW" )" = 37 ] \
-    && ok "repo: --uses=readWholeFile count=37 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
-    || no "repo: --uses=readWholeFile expected 37, got '$( cnt "$RW" )'"; }
+&& { [ "$( cnt "$RW" )" = 38 ] \
+    && ok "repo: --uses=readWholeFile count=38 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
+    || no "repo: --uses=readWholeFile expected 38, got '$( cnt "$RW" )'"; }
 rrun WC --callers=writeTally \
 && { [ "$( cnt "$WC" )" = 1 ] \
     && ok "repo: --callers=writeTally count=1 (was 0 — both template call sites are in writeDocDriftPage)" \

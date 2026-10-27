@@ -218,6 +218,11 @@ struct LangFacts
     /// `self.f.m()` field receiver, receiverevidence.h foreignFieldOwner / dispatchReceiverOf). `this` unless the language says
     /// otherwise; elsewhere the same text is an ordinary name (a JS `const self = …`, a Python local `this`) that proves nothing.
     std::string_view instanceReceiver = "this";
+
+    /// Python: a leading underscore on a module-level name, or on a module/package path component, marks an internal interface (PEP 8),
+    /// the language's only stand-in for the `static` linkage C/C++ spells; --dead-code's test-only rows read it (quality.h
+    /// underscorePrivateDef). Elsewhere a leading underscore is a naming habit that hides nothing.
+    bool underscorePrivacy = false;
 };
 
 /// java.lang.Object's public methods an interface may redeclare abstract (LangFacts::samIgnoredMembers).
@@ -228,7 +233,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true, .memberSeparator = "::",
       .transitiveIncludes = true, .writtenModule = WrittenModuleRule::SourceChain },
     { .lang = Lang::Python, .frameworkEntryHooks = true, .closureReceiverDispatch = true, .baseImportEvidence = BaseImportEvidence::PythonImport,
-      .instanceReceiver = "self" },
+      .instanceReceiver = "self", .underscorePrivacy = true },
     { .lang = Lang::TypeScript, .overloadSignatures = true, .structuralTyping = true, .importBoundConstruction = true, .baseImportEvidence = BaseImportEvidence::JsImport,
       .writtenBindingUndecided = true, .namespaceBodies = true, .objectLiteralMembers = true },
     { .lang = Lang::Go, .structuralTyping = true, .writtenModule = WrittenModuleRule::PackageDir },

@@ -2927,7 +2927,7 @@ std::optional<int> runQualityViews( const MainDispatch& d )
             // D1 TESTONLY-DEAD: Python's module-private convention is internal-interface evidence for the test-only rows
             // ONLY; a zero-caller row (count=) still needs the `static` token, exactly as before.
             const bool staticLinkage = hasStaticToken( s );
-            if( !staticLinkage && !quality::pythonModulePrivate( rootRelPath( ing, s.fileId ), s ) )
+            if( !staticLinkage && !quality::underscorePrivateDef( rootRelPath( ing, s.fileId ), s ) )
             {
                 continue; // external linkage may be an entry point/API
             }

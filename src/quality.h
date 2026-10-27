@@ -10205,10 +10205,11 @@ inline bool pythonRunnerRoot( std::string_view path, const Symbol& s, std::strin
 // is the language's own spelling, not a privacy mark. `relPath` is ROOT-relative, so a directory above the root never
 // counts. MODULE-LEVEL defs only (empty scope): a method's reach is its class's, and a class in a private module is often
 // re-exported as public API (textual's widgets/_data_table.py DataTable), with methods a framework dispatches by name
-// (action_*, _on_*). Python only; every other language is false. Read only by --dead-code's test-only rows (test-only=).
-inline bool pythonModulePrivate( std::string_view relPath, const Symbol& s ) noexcept
+// (action_*, _on_*). Only a language whose LangFacts row sets underscorePrivacy (Python); every other language is false.
+// Read only by --dead-code's test-only rows (test-only=).
+inline bool underscorePrivateDef( std::string_view relPath, const Symbol& s ) noexcept
 {
-    if( s.lang != Lang::Python || !s.scope.empty() )
+    if( !langFacts( s.lang ).underscorePrivacy || !s.scope.empty() )
     {
         return false;
     }
