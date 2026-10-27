@@ -31,6 +31,20 @@
 #   T1 [P] a named MAP type's keyed literal `Table{OpPut: putTab}` is no field slot (F-5); T1b [G] a struct's still is
 #   N3b [G] an unnamed map literal `map[Op]func(){OpGet: getMap}` is no field slot (F-6; pins goValueSlot's ty.empty() guard)
 #   Q1 [P] a slot_by= whose only store is in test code (`assertMatch( t, MatchV1 )`) is not printed on a non-test row (F-7)
+# part 2 (lane fn-slot-2, Rust; fixture test/fnslotrust/, its own root; model.h kVrSlotLangs Rust row: ParenFieldCall, ModuleType):
+#   R1 [P] a registrar path call `CallEval::new( 1, eval_block )` → `Self { stack, eval }` → `(self.eval)( … )` in CallEval::run:
+#          called_by="run" via="slot" (typed: `Self` is the impl type on both sides), cands=3
+#   R2 [P] a turbofish value `eval_block_generic::<u8>` is the function;  R3 [P] a struct expression `CallEval { eval: direct_eval }`
+#   R4 [P] `Box::new( hook_target )` in `Hooks { eval: … }` lands in Hooks.eval (no Box::new argument row);  R4b [G] no row into Box::new
+#   R5 [P] --callees: `(self.eval)( … )` prints the typed slot and its 3 targets
+#   R6 [P] a path call to a METHOD `Reg::set( r, path_reg_target )` (self = position 0) feeds `self.h = h`, called in Reg::go
+#   N8 [G] a local closure of a stored name (`let shadowed = |x| …; CallEval::new( 3, shadowed )`) is no function value: no row
+#   N9 [P] a same-named struct of ANOTHER crate (crates/twin CallEval) is another slot: eval_block's cands stays 3, twin_run targets 1
+#   N10 [G] (N10a [P]) an enum variant `Msg::Fire { eval: variant_target }` is no struct field slot: no called_by=
+#   N11 [G] a method-call registrar `r.set( method_reg_target )` is a floor: no row
+#   N12 [P] `x.cb = loose_target` and `(y.cb)( … )` (types not read) join by the field name only: via="slot-name", --for `@~`
+#   X2 [G] a Go field of the same name (gox Box.eval) never joins a Rust slot (family guard), nor the reverse
+#   F3 [P] --for: slot_fields= per struct (eval=3@CallEval::run, the twin's eval=1@CallEval::twin_run), slot_by= on eval_block
 #
 # Usage: bash test/fnslotcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -130,5 +144,43 @@ hasnt "N3b an unnamed map literal is no field slot" "$o" 'called_by='
 o="$( run '--for=how is MatchV1 scored and matched' )"
 has   "Q1a the MatchV1 row is shown" "$o" 'n="MatchV1" p="fzt/algo.go"'
 hasnt "Q1 a test-only store prints no slot_by=" "$( row "$o" MatchV1 fzt/algo.go )" 'slot_by='
+
+FIX="$ROOT/test/fnslotrust"
+[ -d "$FIX" ] || { echo "  FAIL  fixture dir missing: $FIX"; exit 2; }
+o="$( run --callers=eval_block )"
+has   "R1 a registrar path call lands in the typed slot its parameter is stored in" "$o" 'into="CallEval::new#arg1" called_by="run" called_at="src/engine/eval.rs:14" via="slot" cands="3"'
+o="$( run --callers=eval_block_generic )"
+has   "R2 a turbofish value is the function" "$o" 'into="CallEval::new#arg1" called_by="run"'
+o="$( run --callers=direct_eval )"
+has   "R3 a struct expression's field value" "$o" 'into="CallEval.eval" called_by="run" called_at="src/engine/eval.rs:14" via="slot"'
+o="$( run --callers=hook_target )"
+has   "R4 Box::new( f ) lands in the field" "$o" 'into="Hooks.eval" called_by="fire" called_at="src/other/hooks.rs:7" via="slot"'
+hasnt "R4b no argument row into the Box::new wrapper" "$o" 'into="Box::new'
+o="$( run --callees=CallEval::run )"
+has   "R5 the (self.eval)( … ) call prints its typed slot and targets" "$o" 'through="self.eval" slot="CallEval.eval" via="slot" targets="3"'
+o="$( run --callers=path_reg_target )"
+has   "R6 a path call to a method counts self as position 0" "$o" 'into="Reg::set#arg1" called_by="go" called_at="crates/twin/src/lib.rs:60" via="slot"'
+o="$( run --callers=shadowed )"
+hasnt "N8 a local closure of a stored name is no function value" "$o" '<vr '
+o="$( run --callers=twin_target )"
+has   "N9 the twin crate's CallEval is its own slot" "$o" 'into="CallEval::new#arg0" called_by="twin_run" called_at="crates/twin/src/lib.rs:11" via="slot"'
+hasnt "N9b the twin's value is not counted with the other crate's" "$o" 'cands='
+o="$( run --callees=CallEval::twin_run )"
+has   "N9c the twin's call targets its one function" "$o" 'slot="CallEval.eval" via="slot" targets="1"'
+o="$( run --callers=variant_target )"
+has   "N10a the variant store prints" "$o" 'into="Msg::Fire.eval"'
+hasnt "N10 an enum variant field is no struct slot" "$o" 'called_by='
+o="$( run --callers=method_reg_target )"
+hasnt "N11 a method-call registrar is a floor" "$o" '<vr '
+o="$( run --callers=loose_target )"
+has   "N12 untyped receivers join by the field name only" "$o" 'into=".cb" called_by="call_loose" called_at="crates/twin/src/lib.rs:48" via="slot-name"'
+o="$( run --callers=goTarget )"
+has   "X2a the Go slot keeps its own call" "$o" 'called_by="fire" called_at="gox/g.go:11" via="slot-name"'
+hasnt "X2 a Go value never counts a Rust slot's functions" "$o" 'cands='
+o="$( run '--for=how CallEval runs eval_block' )"
+has   "F3 slot_fields= on the crate's CallEval" "$( row "$o" CallEval src/engine/eval.rs )" 'slot_fields="eval=3@CallEval::run"'
+has   "F3b slot_fields= on the twin crate's CallEval" "$( row "$o" CallEval crates/twin/src/lib.rs )" 'slot_fields="eval=1@CallEval::twin_run"'
+has   "F3c slot_by= on the stored function (typed: no ~)" "$( row "$o" eval_block src/engine/eval.rs )" 'slot_by="CallEval::run"'
+has   "X2b the Go struct row keeps its own name-tier caller" "$( row "$o" Box gox/g.go )" 'slot_fields="eval=1@~Box.fire"'
 if [ "$fail" -eq 0 ]; then echo "fnslotcheck: PASS"; else echo "fnslotcheck: FAIL"; fi
 exit "$fail"

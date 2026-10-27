@@ -157,6 +157,120 @@ private:
     HashMap<std::string, char>                         m_structs;     // every in-tree Go struct's key
     HashMap<std::string, std::uint32_t>                m_dirOf;       // import path → its directory's first file (kNoFile none)
 };
+// FN-SLOT part 2: each file's Rust crate as its path spells it — the root-relative path before the first `src/` directory (a crate's
+// sources live under its own src/), else the file's directory; "" for a file of no path-call language (never compared).
+inline std::vector<std::string_view> cratesOf( const IngestResult& ing )
+{
+    std::vector<std::string_view> out( ing.files.size() );
+    for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+    {
+        const std::string_view rel = rootRelPath( ing, f );
+        if( !rel.ends_with( ".rs" ) || rel.starts_with( "src/" ) )
+        {
+            continue;
+        }
+        const std::size_t at = rel.find( "/src/" );
+        out[f] = at == std::string_view::npos ? includerDir( rel ) : rel.substr( 0, at );
+    }
+    return out;
+}
+// The one candidate of `cands` (symbols) that file `fileId` most plausibly means: its own file's, else its crate's (`crates`,
+// cratesOf), else the repo's only one; kNoNode when the tier that has any holds two (which one is unknown: never a guess).
+inline NodeId nearestOf( const IngestResult& ing, std::span<const NodeId> cands, std::uint32_t fileId, std::span<const std::string_view> crates )
+{
+    NodeId pick[3] = { kNoNode, kNoNode, kNoNode };
+    int    n[3]    = { 0, 0, 0 };
+    for( const NodeId id : cands )
+    {
+        const std::uint32_t f    = ing.symbols[id].fileId;
+        const int           tier = f == fileId ? 0 : crates[f] == crates[fileId] ? 1 : 2;
+        for( int t = tier; t < 3; ++t )
+        {
+            pick[t] = id;
+            ++n[t];
+        }
+    }
+    for( int t = 0; t < 3; ++t )
+    {
+        if( n[t] > 0 )
+        {
+            return n[t] == 1 ? pick[t] : kNoNode;
+        }
+    }
+    return kNoNode;
+}
+// FN-SLOT part 2: a ModuleType (Rust) slot type's key — the in-tree STRUCT symbol the written name spells (nearestOf: its own file,
+// else its crate, else the repo's only one), as jsImportKey( symbolId, name ); "" when no struct or several of one tier carry the
+// name (an out-of-tree type, or which one is unknown: the name tier); kNoSlot when the name is a path through a TYPE (`E::V`, a
+// variant: no field slot of a struct).
+class RustTypeKeys
+{
+public:
+    void build( const IngestResult& ing )
+    {
+        for( NodeId id = 0; id < ing.symbols.size(); ++id )
+        {
+            const Symbol& sym = ing.symbols[id];
+            if( ( sym.kind == SymKind::Struct || sym.kind == SymKind::Class ) && slotTypeKey( sym.lang ) == VrSlotTypeKey::ModuleType )   // a Rust struct is a class row
+            {
+                m_structs[ sym.name ].push_back( id );
+            }
+        }
+        if( !m_structs.empty() )
+        {
+            m_crates = cratesOf( ing );
+        }
+    }
+    static std::string keyOfSymbol( const Symbol& s, NodeId id ) { return jsImportKey( id, s.name ); }
+    std::string keyOf( const IngestResult& ing, const Reference& r ) const
+    {
+        const std::string_view t = r.memberCtor;
+        if( t.empty() )
+        {
+            return {};
+        }
+        if( t.find( ':' ) != std::string_view::npos )
+        {
+            return std::string( kNoSlot );
+        }
+        const auto it = m_structs.find( std::string( t ) );
+        if( it == m_structs.end() )
+        {
+            return {};
+        }
+        const NodeId id = nearestOf( ing, it->second, r.fileId, m_crates );
+        return id == kNoNode ? std::string() : keyOfSymbol( ing.symbols[id], id );
+    }
+
+private:
+    HashMap<std::string, std::vector<NodeId>> m_structs;   // struct name → the in-tree Rust structs of that name
+    std::vector<std::string_view>             m_crates;    // cratesOf (built when any Rust struct exists)
+};
+// The type key of every language that keys its own types (model.h slotKeysOwnTypes), by its row's VrSlotTypeKey.
+class TypeKeys
+{
+public:
+    void build( const IngestResult& ing )
+    {
+        m_ing = &ing;
+        m_go.build( ing );
+        m_rust.build( ing );
+    }
+    std::string keyOf( const Reference& r )
+    {
+        return slotTypeKey( r.lang ) == VrSlotTypeKey::ModuleType ? m_rust.keyOf( *m_ing, r ) : m_go.keyOf( r );
+    }
+    std::string keyOfSymbol( NodeId id ) const
+    {
+        const Symbol& s = m_ing->symbols[id];
+        return slotTypeKey( s.lang ) == VrSlotTypeKey::ModuleType ? RustTypeKeys::keyOfSymbol( s, id ) : m_go.keyOfSymbol( s );
+    }
+
+private:
+    const IngestResult* m_ing = nullptr;
+    GoTypeKeys          m_go;
+    RustTypeKeys        m_rust;
+};
 // The member calls `x.F( … )` of a MemberCallByName language whose field F holds a stored function somewhere (`holds`), as calls
 // through that slot, in reference order. Not when that language defines a METHOD named F anywhere in the tree: the call may
 // then be that method, and the receiver's type is not read here (a named floor, never a guess).
@@ -198,15 +312,16 @@ class ParamSlots
 {
 public:
     void take( std::uint32_t refIdx ) { m_refs.push_back( refIdx ); }
-    void build( const IngestResult& ing, GoTypeKeys& keys )
+    void build( const IngestResult& ing, TypeKeys& keys )
     {
         for( const std::uint32_t q : m_refs )
         {
             const Reference& r = ing.references[q];
-            if( r.fromSymbol >= ing.symbols.size() || ing.symbols[ r.fromSymbol ].kind != SymKind::Function
-                || ing.symbols[ r.fromSymbol ].name != r.recvVar )
+            const bool       pathCalls = !slotPathSep( r.lang ).empty();   // a path call `T::f( … )` reaches an associated function
+            if( r.fromSymbol >= ing.symbols.size() || ing.symbols[ r.fromSymbol ].name != r.recvVar
+                || !( ing.symbols[ r.fromSymbol ].kind == SymKind::Function || ( pathCalls && ing.symbols[ r.fromSymbol ].kind == SymKind::Method ) ) )
             {
-                continue;   // a method registrar (no bare call reaches it), or a fact outside its own function's definition
+                continue;   // a method registrar no call of its language reaches by name, or a fact outside its own function's definition
             }
             const std::string to   = keys.keyOf( r ) + "#" + r.memberPath;
             std::string&      have = m_slot[ jsImportKey( r.fromSymbol, std::to_string( r.argCount ) ) ];
@@ -241,7 +356,7 @@ public:
 
 private:
     static constexpr std::string_view kConflict = "\x01";
-    std::vector<std::uint32_t>        m_refs;   // the facts, keyed in build() (the type key by its file, GoTypeKeys)
+    std::vector<std::uint32_t>        m_refs;   // the facts, keyed in build() (the type key by its file, TypeKeys)
     HashMap<std::string, std::string> m_slot;   // "registrarId#k" → "TypeKey#field" (kConflict: two different slots)
 };
 // `extra` (ascending) merged into the slot calls and their per-function lists, all kept in reference order (join() and callsIn()
@@ -308,8 +423,8 @@ public:
     // After every take: keys the slot values (`values`, ascending, with their resolved `targets`) and the calls by field.
     void build( const IngestResult& ing, std::span<const std::uint32_t> values, std::span<const std::vector<NodeId>> targets )
     {
-        m_goKeys.build( ing );
-        m_params.build( ing, m_goKeys );
+        m_keys.build( ing );
+        m_params.build( ing, m_keys );
         for( std::size_t k = 0; k < values.size(); ++k )
         {
             if( targets[k].empty() )
@@ -350,7 +465,7 @@ public:
     std::vector<Hit> valuesFor( std::uint32_t callIdx ) const { return join( m_callEnds, callIdx, m_valuesByField, m_values ); }
     // fix1 F-2: the slot type key of a struct symbol of a language that keys its own types (model.h slotKeysOwnTypes), as
     // valuesOfType reads it (the store side keys the same way)
-    std::string typeKeyOf( const Symbol& s ) const { return m_goKeys.keyOfSymbol( s ); }
+    std::string typeKeyOf( NodeId id ) const { return m_keys.keyOfSymbol( id ); }
     // IX1-V2: the slot value references stored into a field of struct type `type` (the resolved type name), with the field,
     // in reference order — what --for's slot_fields= lists on a struct row.
     std::vector<std::pair<std::uint32_t, std::string_view>> valuesOfType( std::string_view type ) const
@@ -383,7 +498,10 @@ public:
         {
             return "." + e->field;
         }
-        const std::string_view t = std::string_view( e->type ).substr( 0, e->type.starts_with( '@' ) ? e->type.find( '#' ) : std::string::npos );
+        // an anonymous struct's "@LINE#file" prints "@LINE"; an own-keyed type's "id#Name" (TypeKeys) prints its name
+        const std::size_t      hash = e->type.find( '#' );
+        const std::string_view t    = e->type.starts_with( '@' ) ? std::string_view( e->type ).substr( 0, hash )
+                                    : hash == std::string::npos ? std::string_view( e->type ) : std::string_view( e->type ).substr( hash + 1 );
         return std::string( t ) + "." + e->field;
     }
 
@@ -474,7 +592,7 @@ private:
         {
             // IX1-V2: a member call `x.F( … )` (slot_join::memberCalls, its receiver's type unread: the name tier), or a store of a
             // language that keys its own types (Go: package-qualified; no typedef aliases or field-type facts on this side)
-            e.type  = r.role == RefRole::Call ? std::string() : m_goKeys.keyOf( r );
+            e.type  = r.role == RefRole::Call ? std::string() : m_keys.keyOf( r );
             e.field = r.role == RefRole::Call ? r.calleeName : r.memberPath;
             return e;
         }
@@ -530,7 +648,7 @@ private:
     HashMap<std::string, std::string>                m_aliasInFile;    // "fileId#name" → struct type, the file's own typedef
     HashMap<std::string, std::string>                m_body;           // struct type → its body's digest (kConflict: files differ)
     slot_join::ParamSlots                            m_params;         // IX1-V2: registrars' parameters stored into field slots
-    slot_join::GoTypeKeys                            m_goKeys;         // fix1 F-2: Go type keys by package directory
+    slot_join::TypeKeys                              m_keys;           // fix1 F-2 / part 2: Go and Rust type keys
     std::function<std::vector<NodeId>( const Reference& )> m_ownersOf;  // fix1 F-1: a bare callee's definitions
     std::vector<std::uint32_t>                       m_calls;          // slot Through references, ascending
     HashMap<NodeId, std::vector<std::uint32_t>>      m_callsBySym;     // calling function → its slot Through references
@@ -812,7 +930,16 @@ private:
                 && ( keep == nullptr || keep->names.contains( s.name ) ) )
             {
                 m_fnByName[ s.name ].push_back( id );
+                if( !slotPathSep( s.lang ).empty() && !s.scope.empty() )
+                {
+                    // part 2: an owner type's function (`Editor::backspace`), as ownedBy looks it up (family, "Owner::name")
+                    m_fnByOwner[ jsImportKey( static_cast<std::uint32_t>( valueRefFamily( s.lang ) ), s.scope + "::" + s.name ) ].push_back( id );
+                }
             }
+        }
+        if( !m_fnByOwner.empty() || std::ranges::any_of( ing.symbols, []( const Symbol& s ) { return !slotPathSep( s.lang ).empty(); } ) )
+        {
+            m_crates = slot_join::cratesOf( ing );
         }
         markPythonMembers();
         for( std::uint32_t i = 0; i < ing.references.size(); ++i )
@@ -836,7 +963,7 @@ private:
                 m_valuesByTarget[ t ].push_back( static_cast<std::uint32_t>( k ) );
             }
         }
-        m_slots.resolveCalleesBy( [ this ]( const Reference& v ) { return resolveName( v, v.recvVar ); } );
+        m_slots.resolveCalleesBy( [ this ]( const Reference& v ) { return resolveCallee( v ); } );
         m_slots.build( ing, m_values, m_targets );
         m_slots.resolveCalleesBy( nullptr );   // it captured `this`: never outlives the build
     }
@@ -912,8 +1039,11 @@ private:
             {
                 continue;
             }
-            const bool named = std::ranges::binary_search( names, std::string_view( r.calleeName ), rw::sortutil::svLess );
-            if( !named && r.memberPath.empty() && !( sc == 'a' && registrars.contains( r.recvVar ) ) )
+            const bool             named = std::ranges::binary_search( names, std::string_view( r.calleeName ), rw::sortutil::svLess );
+            const std::string_view sep   = slotPathSep( r.lang );
+            const std::size_t      at    = sep.empty() ? std::string::npos : r.recvVar.rfind( sep );
+            const std::string      leaf  = at == std::string::npos ? r.recvVar : r.recvVar.substr( at + sep.size() );   // resolveCallee's name
+            if( !named && r.memberPath.empty() && !( sc == 'a' && registrars.contains( leaf ) ) )
             {
                 continue;
             }
@@ -921,7 +1051,7 @@ private:
             k.names.try_emplace( r.calleeName, char( 1 ) );
             if( sc == 'a' )
             {
-                k.names.try_emplace( r.recvVar, char( 1 ) );
+                k.names.try_emplace( leaf, char( 1 ) );
             }
             else if( sc == 'p' )
             {
@@ -1063,6 +1193,49 @@ private:
         return fam == VrLangFamily::C && fIsFn && f.scope == m.scope;   // a C++ member function of the same class
     }
 
+    // The method-value owner rule (rv-fn-slot part-2 piece 3): `fns` (one name's functions) owned by type `owner`, as reference
+    // `r`'s language means it. Go (a method value `b.opPlan` of the enclosing method's receiver, ingest_valuerefs.h methodValueAt):
+    // that type's METHOD in r's own package directory. Rust (`Editor::backspace`, `Self::f` with Self resolved): the owner type's
+    // function of that name nearest r (slot_join::nearestOf: its own file, else its crate, else the repo's only one), else nothing.
+    std::vector<NodeId> ownedBy( const Reference& r, std::string_view owner, std::span<const NodeId> fns ) const
+    {
+        const VrLangFamily fam = valueRefFamily( r.lang );
+        if( !slotPathSep( r.lang ).empty() )
+        {
+            const auto it = fns.empty() ? m_fnByOwner.end() : m_fnByOwner.find( jsImportKey( static_cast<std::uint32_t>( fam ), std::string( owner ) + "::" + m_ing.symbols[ fns.front() ].name ) );
+            if( it == m_fnByOwner.end() )
+            {
+                return {};
+            }
+            const NodeId one = slot_join::nearestOf( m_ing, it->second, r.fileId, m_crates );
+            return one == kNoNode ? std::vector<NodeId>{} : std::vector<NodeId>{ one };
+        }
+        std::vector<NodeId> out;
+        for( const NodeId id : fns )
+        {
+            const Symbol& s = m_ing.symbols[id];
+            if( s.kind == SymKind::Method && valueRefFamily( s.lang ) == fam && s.scope == owner
+                && includerDir( m_ing.files[ s.fileId ] ) == includerDir( m_ing.files[ r.fileId ] ) )
+            {
+                out.push_back( id );
+            }
+        }
+        return out;
+    }
+    // fix1 F-1 / part-2 piece 4: the definitions an argument row's callee (recvVar) resolves to — a bare callee by resolveName;
+    // a path callee `Owner::name` (a language whose slot row has a pathSep) by ownedBy, never by its bare last segment.
+    std::vector<NodeId> resolveCallee( const Reference& v ) const
+    {
+        const std::string_view sep = slotPathSep( v.lang );
+        const std::size_t      at  = sep.empty() ? std::string::npos : v.recvVar.rfind( sep );
+        if( at == std::string::npos )
+        {
+            return resolveName( v, v.recvVar );
+        }
+        const auto it = m_fnByName.find( v.recvVar.substr( at + sep.size() ) );
+        return it == m_fnByName.end() ? std::vector<NodeId>{} : ownedBy( v, std::string_view( v.recvVar ).substr( 0, at ), it->second );
+    }
+
     // `name` as seen from reference `r`'s file, under the visibility rules in the header comment.
     std::vector<NodeId> resolveName( const Reference& r, std::string_view name ) const
     {
@@ -1074,19 +1247,7 @@ private:
         const VrLangFamily  fam = valueRefFamily( r.lang );
         if( r.role == RefRole::Value && !r.memberRoot.empty() )
         {
-            // IX1-V2: a Go method value `b.opPlan` of the enclosing method's receiver (ingest_valuerefs.h methodValueAt): that
-            // receiver type's method of this name in this package, else nothing
-            std::vector<NodeId> out;
-            for( const NodeId id : it->second )
-            {
-                const Symbol& s = m_ing.symbols[id];
-                if( s.kind == SymKind::Method && valueRefFamily( s.lang ) == fam && s.scope == r.memberRoot
-                    && includerDir( m_ing.files[ s.fileId ] ) == includerDir( m_ing.files[ r.fileId ] ) )
-                {
-                    out.push_back( id );
-                }
-            }
-            return out;
+            return ownedBy( r, r.memberRoot, it->second );
         }
         // A C/C++ PROTOTYPE (a bodyless declaration) names the function its definition lives in: it is the target only
         // when no definition with a body is visible — a prototype in this file never hides the extern definition.
@@ -1148,6 +1309,15 @@ private:
                 }
                 break;
             }
+            case VrLangFamily::Rust:
+            {
+                // FN-SLOT part 2: a bare Rust function of another file — its crate's one, else the repo's only one (nearestOf)
+                if( const NodeId one = slot_join::nearestOf( m_ing, other, r.fileId, m_crates ); one != kNoNode )
+                {
+                    out.push_back( one );
+                }
+                break;
+            }
             case VrLangFamily::Js:
             case VrLangFamily::Py:
             {
@@ -1188,6 +1358,8 @@ private:
 
     const IngestResult&                                  m_ing;
     HashMap<std::string, std::vector<NodeId>>            m_fnByName;
+    HashMap<std::string, std::vector<NodeId>>            m_fnByOwner;   // part 2: "family#Owner::name" → a path language's owned functions
+    std::vector<std::string_view>                        m_crates;      // part 2: slot_join::cratesOf, when a path language is indexed
     std::vector<std::uint8_t>                            m_pyMember;   // per symbol: 1 = a Python def directly in its class (empty: no Python)
     std::vector<std::uint32_t>                           m_values;            // Value reference indices, ascending
     std::vector<std::uint32_t>                           m_depthCuts;         // the files' depth-cut records (no row), ascending

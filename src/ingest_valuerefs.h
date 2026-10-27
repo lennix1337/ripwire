@@ -53,8 +53,8 @@
 // scope exit / file end), so an ordinary `x.m()` adds nothing; a parameter Through always survives — its
 // values arrive from callers elsewhere.
 //
-// FLOORS (stated in the legend and pinned by recallshapecheck): a member or qualified value (obj.f, self.f,
-// ns::f, &Cls::m) and a function as the OBJECT of a member access (f.bind, f.name) are not rows; an import
+// FLOORS (stated in the legend and pinned by recallshapecheck; this walk's families — Rust records its own slot rows,
+// ingest_rustslots.h): a member or qualified value (obj.f, self.f, ns::f, &Cls::m) and a function as the OBJECT of a member access (f.bind, f.name) are not rows; an import
 // alias is a local binding; a macro body is opaque; classes are not functions; Python attribute calls never
 // count as a call through a dict; nodes deeper than kVrMaxDepth are not visited — DISCLOSED, never silent: the file's
 // depth-cut record (below) makes value_refs= / --dead-code say the count is a floor and name the first cut site.
@@ -480,6 +480,39 @@ struct VrDepthCut
         disclosed = true;
     }
 };
+// A node at kVrMaxDepth whose children a value walk does not visit: a value reference below it is never captured. The
+// first one's site is kept as the clue the answers print (value_refs_depth_at=).
+inline void noteVrDepthCut( VrDepthCut& cut, TSNode n ) noexcept
+{
+    if( cut.subtrees == 0 )
+    {
+        cut.startByte = ts_node_start_byte( n );
+        cut.line      = ts_node_start_point( n ).row + 1;
+    }
+    if( cut.subtrees < UINT32_MAX )
+    {
+        ++cut.subtrees;
+    }
+}
+// The file's ONE depth-cut record (RECORD SHAPE in the header comment): the cut is disclosed through it on the answers that
+// read value references (valuerefs.h value_refs_depth_capped=, --dead-code; the named exceptions are in the header comment),
+// and it is cached with the file's other references, so a warm run discloses it too.
+inline RawRef vrDepthCutRecord( std::uint32_t fileId, Lang lang, VrDepthCut& cut )
+{
+    EXPECTS( cut.subtrees > 0, "a depth-cut record is written only when the cap stopped the walk" );
+    DISCLOSE( cut, VrDepthCut::DisclosureWhy::SubtreesBelowMaxDepth,
+              "value references: subtrees below kVrMaxDepth were not visited (value_refs_depth_capped=)" );
+    RawRef r;
+    r.fileId        = fileId;
+    r.startByte     = cut.startByte;
+    r.line          = cut.line;
+    r.lang          = lang;
+    r.role          = RefRole::Value;
+    r.qualifier     = std::string( 1, kValueRefDepthCutScope );   // name stays "": no identifier is empty
+    r.argCount      = static_cast<std::uint16_t>( std::min<std::uint32_t>( cut.subtrees, 0xFFFFu ) );
+    r.argCountKnown = true;
+    return r;
+}
 
 struct VrAnc
 {
@@ -556,7 +589,7 @@ public:
             }
             else if( ts_node_child_count( m_anc.back().node ) > 0 )
             {
-                noteDepthCut( m_anc.back().node );   // the cap stops the walk ABOVE these children: one subtree not visited
+                noteVrDepthCut( m_depthCut, m_anc.back().node );   // the cap stops the walk ABOVE these children: one subtree not visited
             }
             bool done = false;
             for( ;; )
@@ -594,7 +627,7 @@ public:
         emitForwardedCalls();
         if( m_depthCut.subtrees > 0 )
         {
-            emitDepthCut();
+            m_out.push_back( vrDepthCutRecord( m_fileId, m_lang, m_depthCut ) );
         }
     }
 
@@ -627,6 +660,7 @@ private:
                     || kindIs( t, "generator_expression" ) ? ScopeKind::Block : ScopeKind::None;
             case VrFam::Go:
                 return kindIs( t, "function_declaration" ) || kindIs( t, "method_declaration" ) || kindIs( t, "func_literal" ) ? ScopeKind::Function : ScopeKind::None;
+            case VrFam::Rust:   // never: Rust runs ingest_rustslots.h, not this walk
             case VrFam::None: break;
         }
         return ScopeKind::None;
@@ -890,6 +924,7 @@ private:
                 }
                 break;
             }
+            case VrFam::Rust:   // never: Rust runs ingest_rustslots.h, not this walk
             case VrFam::None: break;
         }
     }
@@ -1019,6 +1054,7 @@ private:
                 }
                 break;
             }
+            case VrFam::Rust:   // never: Rust runs ingest_rustslots.h, not this walk
             case VrFam::None: break;
         }
     }
@@ -1126,45 +1162,10 @@ private:
                 return kindIs( t, "formal_parameters" ) && !( s.isFunction && ts_node_eq( parent.node, s.node ) );
             }
             case VrFam::Py:
+            case VrFam::Rust:   // never: Rust runs ingest_rustslots.h, not this walk
             case VrFam::None: break;
         }
         return false;
-    }
-
-    // ── the depth cut ──────────────────────────────────────────────────────────────────────────────────
-    // A node at kVrMaxDepth whose children the walk does not visit: a value reference below it is never captured. The
-    // first one's site is kept as the clue the answers print (value_refs_depth_at=).
-    void noteDepthCut( TSNode n ) noexcept
-    {
-        if( m_depthCut.subtrees == 0 )
-        {
-            m_depthCut.startByte = ts_node_start_byte( n );
-            m_depthCut.line      = ts_node_start_point( n ).row + 1;
-        }
-        if( m_depthCut.subtrees < UINT32_MAX )
-        {
-            ++m_depthCut.subtrees;
-        }
-    }
-
-    // The file's ONE depth-cut record (RECORD SHAPE in the header comment): the cut is disclosed through it on the
-    // answers that read value references (valuerefs.h value_refs_depth_capped=, --dead-code; the named exceptions are in
-    // the header comment), and it is cached with the file's other references, so a warm run discloses it too.
-    void emitDepthCut()
-    {
-        EXPECTS( m_depthCut.subtrees > 0, "a depth-cut record is written only when the cap stopped the walk" );
-        DISCLOSE( m_depthCut, VrDepthCut::DisclosureWhy::SubtreesBelowMaxDepth,
-                  "value references: subtrees below kVrMaxDepth were not visited (value_refs_depth_capped=)" );
-        RawRef r;
-        r.fileId        = m_fileId;
-        r.startByte     = m_depthCut.startByte;
-        r.line          = m_depthCut.line;
-        r.lang          = m_lang;
-        r.role          = RefRole::Value;
-        r.qualifier     = std::string( 1, kValueRefDepthCutScope );   // name stays "": no identifier is empty
-        r.argCount      = static_cast<std::uint16_t>( std::min<std::uint32_t>( m_depthCut.subtrees, 0xFFFFu ) );
-        r.argCountKnown = true;
-        m_out.push_back( std::move( r ) );
     }
 
     // ── the walk ───────────────────────────────────────────────────────────────────────────────────────
@@ -3126,13 +3127,21 @@ private:
     TSFieldId m_fConstructor = 0, m_fType = 0, m_fIndex = 0, m_fSubscript = 0, m_fDesignator = 0, m_fAlias = 0;
 };
 
+// Rust's slot records (ingest_rustslots.h, defined after this section).
+inline void captureRustSlotRefs( Lang lang, std::uint32_t fileId, std::string_view src, TSNode root, std::vector<RawRef>& refs );
+
 // The pass's entry point: one file's value references and calls-through-a-value, appended to `refs`. Inert on a
-// language outside the armed set (C, C++, JavaScript/JSX, TypeScript/TSX, Python, Go).
+// language outside the armed set (C, C++, JavaScript/JSX, TypeScript/TSX, Python, Go; Rust records its slot join's only).
 inline void captureValueRefs( Lang lang, std::uint32_t fileId, std::string_view src, TSNode root, std::vector<RawRef>& refs )
 {
     const VrFam fam = valueRefFamily( lang );
     if( fam == VrFam::None || ts_node_is_null( root ) )
     {
+        return;
+    }
+    if( fam == VrFam::Rust )
+    {
+        captureRustSlotRefs( lang, fileId, src, root, refs );   // the slot join's records only (ingest_rustslots.h)
         return;
     }
     PROFILE_SCOPE_DESCRIBE( "ingest/extractFile: value references" );
