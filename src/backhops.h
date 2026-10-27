@@ -798,7 +798,8 @@ public:
         {
             confirm( u, m_back.queue().readersOf( put ), put, BackHopVia::Queue, out );   // QUEUE-HOP: after every older kind
         }
-        for( const std::uint32_t site : m_back.names().sitesIn( u ) )
+        const std::vector<std::uint32_t> lookups = m_back.names().sitesIn( u );   // named first (hazardpatterncheck #7)
+        for( const std::uint32_t site : lookups )
         {
             confirm( u, m_back.names().targets( site ), site, BackHopVia::NameKey, out );   // STRING-KEYED: after the queue
         }
