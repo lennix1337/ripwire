@@ -1902,7 +1902,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             uint32_t         nameRow  = 0;   // 0-based row of the @name identifier
             bool             haveName = false;
             TSNode           nameNode {};    // the @name identifier node — for C++ scope/qualifier (E#4)
-            TSNode           importNamesNode {};   // Python: one clause's target, paired with its optional alias
+            TSNode           importNamesNode {};   // one clause's target, paired with its optional alias (emitCapturedImportBind)
             TSNode           importAliasNode {};
 
             for( uint16_t ci = 0; ci < match.capture_count; ++ci )
@@ -1982,11 +1982,11 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                         {
                             emitCapturedImport( cap.node, fileId, le.lang, src, includes, refs, shortfall );
                         }
-                        else if( full && le.lang == Lang::Python && capSv == "import.names" )
+                        else if( full && capSv == "import.names" )
                         {
                             importNamesNode = cap.node;
                         }
-                        else if( full && le.lang == Lang::Python && capSv == "import.alias" )
+                        else if( full && capSv == "import.alias" )
                         {
                             importAliasNode = cap.node;
                         }
@@ -1997,7 +1997,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
 
             if( !ts_node_is_null( importNamesNode ) )
             {
-                emitCapturedPythonImportBind( importNamesNode, importAliasNode, fileId, src, binds );
+                emitCapturedImportBind( importNamesNode, importAliasNode, fileId, le.lang, src, binds );
             }
             if( !haveName )
             {
