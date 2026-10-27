@@ -323,7 +323,15 @@ GATE_BUDGET_SEC = {
     # red CI leg and the hour spent re-deciding whether it was a hang. 1200 is the tier
     # cppbenchcheck/regexbombcheck already use for exactly this reason. compactlegendcheck's 141 s is real
     # headroom and is left alone -- the row that needs the margin is the one that gets it.
-    "compactlegendcheck.sh":      900,
+    # 2026-10-27 (CI-FLAKES FIX1): 900 -> 1800. PR #444 run 40431017609 (macOS plain shard 1/4) was killed at 1200.8 s (900 declared,
+    # scaled to 1200 by the harness) with every arm up to the kill PASS (the kill landed in the (UD) arm's dialectpin.py, which is
+    # NOT slow: the arm took 62 s of 2115 s below); the same job passed in 871.8 s on run 40417160699. So the wall is the runner's
+    # contention, not one arm. Measured here, build/ripwire plain, per-arm timestamps, host load average 12-13 on 10 cores with
+    # five other lanes' gates running: 2115 s total ((A) 7-52 s, (A-PIN) 25 s, (R) 25 s, (U) 758 s, (F) 29 s, (P) 384 s,
+    # (L) 56 s, (M) 17 s, (N) 201 s, (D) 487 s, (UD) 62 s, (UW) 13 s), against 50-70 s on an idle host: a 30-40x swing for the
+    # same gate. No arm dominates (the largest, (U), is 36 %), so splitting one out would not move the total; the budget is a hang
+    # tripwire, never a perf bar, and 1800 clears the observed CI kill by 1.5x.
+    "compactlegendcheck.sh":     1800,
     "shapingflagcheck.sh":       1200,
     "collectioncapcheck.sh":      900,
                                           # under -j6, rc=124 at the flat cap on both ubuntu PLAIN legs of run
@@ -706,6 +714,10 @@ def run(g):
     # (corpus_pruned_dirs=). Created between the two re-crawls of pagingsweepcheck's cold grep (G) pair, it
     # made that pair disagree on main twice (CI runs 34534320580, 34536435376). pargatescheck.sh pins it.
     env = dict(os.environ, RIPWIRE_BIN=binp, PYTHONDONTWRITEBYTECODE="1")
+    # The gate's own inner alarms (a perl `alarm` around one ripwire call) were calibrated on an idle dev machine too;
+    # the factor this harness already applies to the gate's whole budget is handed down so a gate can scale the one
+    # call that is CPU-bound by tree size (cppqualcheck's cold repo-root parse; CI-FLAKES 2026-10-27). pargatescheck pins it.
+    env["PARGATES_BUDGET_SCALE"] = f"{budget_scale:g}"
     scaled_default = int( round( DEFAULT_TIMEOUT_SEC * budget_scale ) )
     if g in GATE_BUDGET_SEC:
         # A declared entry is a FLOOR, not a ceiling: it is the number below which this gate would be a
