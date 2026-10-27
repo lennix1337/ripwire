@@ -318,6 +318,12 @@ check( "ZS", rzs.get( "from_test" ) == "1" and "pairs_reaching" not in rzs and "
 rzt = root( rd( "ZT" ) )
 check( "ZT", rzt.get( "to_test" ) == "1" and "from_test" not in rzt and "tests/fake.py" in rzt.get( "to_p", "" ) and "next" not in rzt,
        "to= side: a tests/ copy bound is disclosed; no source edit is reached, so no next=: %r" % { k: rzt.get( k ) for k in ( "to_p", "to_test", "next" ) } )
+# CR 4392937862: the compact legend reads an attribute only when THAT attribute is on the answer, so from_test= and to_test= (independent:
+# ZT carries to_test= alone) each own a self-contained reading. A to_test-only page must define to_test=; a from_test-only page must not carry
+# the other side's reading; both sides carry both.
+check( "ZT", "to_test=1: the bound to= definition" in rd( "ZT" ) and "from_test=1:" not in rd( "ZT" ) and "from_test=1 / to_test=1:" not in rd( "ZT" ),
+       "compact legend of a to_test-only answer defines to_test= (and not the other side)" )
+check( "Z", "from_test=1: the bound from= definition" in z and "to_test=1:" not in z, "compact legend of a from_test-only answer defines from_test= alone" )
 zn = rd( "ZN" ); rzn = root( zn ); rza = root( rd( "ZA" ) )
 check( "ZN", "from_test" not in rzn and "src/core.py" in rzn.get( "from_p", "" ) and "from_test=1 / to_test=1:" not in rd( "ZNL" ),
        "bound source def (a fixture copy also reaches): no disclosure: %r" % { k: rzn.get( k ) for k in ( "from_p", "from_test" ) } )
@@ -334,6 +340,7 @@ check( "ZF", rzf.get( "from_test" ) == "1" and rzf.get( "next", "" ).startswith(
 rzu = root( rd( "ZU" ) )
 check( "ZU", rzu.get( "from_test" ) == "1" and rzu.get( "to_test" ) == "1" and rzu.get( "next", "" ) == "--path=src/core.py:backspace,src/core.py:edit",
        "both sides in tests/: each names the source def that reaches: %r" % { k: rzu.get( k ) for k in ( "from_test", "to_test", "next" ) } )
+check( "ZU", "from_test=1: the bound from= definition" in rd( "ZU" ) and "to_test=1: the bound to= definition" in rd( "ZU" ), "compact legend of a both-sides answer defines both attributes" )
 rzp = root( rd( "ZP" ) )
 check( "ZP", rzp.get( "from_test" ) == "1" and rzp.get( "alt" ) == "3" and rzp.get( "next", "" ).startswith( "--path=src/k.py::C" ) and rzp.get( "alt_next", "" ).startswith( "--path=src/k.py::C" )
        and rzp.get( "next" ) != rzp.get( "alt_next" ) and "alt_next=" in rd( "ZPL" ),
