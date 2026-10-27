@@ -706,6 +706,10 @@ def run(g):
     # (corpus_pruned_dirs=). Created between the two re-crawls of pagingsweepcheck's cold grep (G) pair, it
     # made that pair disagree on main twice (CI runs 34534320580, 34536435376). pargatescheck.sh pins it.
     env = dict(os.environ, RIPWIRE_BIN=binp, PYTHONDONTWRITEBYTECODE="1")
+    # The gate's own inner alarms (a perl `alarm` around one ripwire call) were calibrated on an idle dev machine too;
+    # the factor this harness already applies to the gate's whole budget is handed down so a gate can scale the one
+    # call that is CPU-bound by tree size (cppqualcheck's cold repo-root parse; CI-FLAKES 2026-10-27). pargatescheck pins it.
+    env["PARGATES_BUDGET_SCALE"] = f"{budget_scale:g}"
     scaled_default = int( round( DEFAULT_TIMEOUT_SEC * budget_scale ) )
     if g in GATE_BUDGET_SEC:
         # A declared entry is a FLOOR, not a ceiling: it is the number below which this gate would be a

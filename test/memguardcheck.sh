@@ -740,7 +740,33 @@ fi
 #       ENVIRONMENT outcome, not the property: it is re-run, up to 6 attempts, and the arm passes only on an attempt that
 #       shows the whole property. Anything else fails at once — the D1 shape (rc 5, "before anything was built"), a stop
 #       that keeps no z/ file, a wrong line. Six environment outcomes in a row fail too: the arm never passes blind.
-# (the fixture, $EG, is built above B8, which shares it)
+# FIXTURE, $EG12 (CI-FLAKES, 2026-10-27; this arm used to share $EG with B8). The headroom above was real but its margin
+#       was thin and the arm's own attempt loop could not absorb a runner that moved it: on $EG (z/ functions that CALL
+#       each other, 1500 per file) the OS peak footprint (`/usr/bin/time -l`, an upper bound on the hard-line reading, which
+#       is taken between phases) was 62.9-66.7 MB of the 67.1 MB limit over 10 runs foreground and 10 under `taskpolicy -b`
+#       (10-core macOS, plain build), and the arm stopped passing at ~1.6x the z/ function count (rc 5 at 2400 per file),
+#       because the call edges are what grows between the parse stop and the graph build. PR #443 run 40408050413 attempt
+#       1 (macOS plain shard 1) failed B12/B12b with "memory limit reached during the ingest (limit 64M, from
+#       --max-memory)" even after the loop; that runner's shift was NOT reproduced here (20/20 passes on both fixtures
+#       under 8 concurrent cold parses), so the fix widens the margin rather than naming the runner's cause. B12 does not
+#       need call edges: it needs the parse line (half the limit) crossed by a REAL reading, big files sorting last and
+#       parsing first, and an answer after the stop. $EG12 keeps the shape (320 small a-h files, 80 big z/ files of 1500
+#       functions each) but the z/ functions CALL nothing: the same 10 files are parsed at the stop and the peak footprint
+#       is 35.4-40.4 MB (53-60 % of the limit, 40 runs incl. loaded), and it still passes at 2400 functions per file.
+#       $EG, and B8's need for an unguarded peak far over the limit, are unchanged.
+EG12="$TMP/eg12"; mkdir -p "$EG12"
+python3 - "$EG12" <<'PY3'
+import os, sys
+root = sys.argv[1]
+for d in "abcdefgh":
+    os.makedirs( os.path.join( root, d ), exist_ok=True )
+    for f in range( 40 ):
+        open( os.path.join( root, d, "f%02d.c" % f ), "w" ).write( "int %s_%d(int x){ return x; }\n" % ( d, f ) )
+os.makedirs( os.path.join( root, "z" ), exist_ok=True )
+for f in range( 80 ):
+    open( os.path.join( root, "z", "big%02d.c" % f ), "w" ).write(
+        "".join( "int z%d_%d(int x){ return x + %d; }\n" % ( f, k, k ) for k in range( 1500 ) ) )
+PY3
 # ASan quarantine inflates the footprint past the hard line before the soft parse stop is visible (review G1:
 #   peak 498 MB under ASan vs 82 MB plain); a plain binary ignores the option. A sanitizer build keeps 128M: its runtime
 #   carries a fixed footprint of its own that does not double after the stop (measured with llvm@22 ASan: 64M ends on
@@ -749,7 +775,7 @@ B12LIM=64M
 LC_ALL=C grep -q -a '__asan_init' "$BIN" 2>/dev/null && B12LIM=128M
 b12="" b12env=""
 for attempt in 1 2 3 4 5 6; do
-    ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}quarantine_size_mb=0" RIPWIRE_TEST_MEMGUARD=eager:1 "$BIN" "$EG" --no-cache --max-memory=$B12LIM --top-k=3 >"$TMP/b12.out" 2>"$TMP/b12.err"; rc=$?
+    ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}quarantine_size_mb=0" RIPWIRE_TEST_MEMGUARD=eager:1 "$BIN" "$EG12" --no-cache --max-memory=$B12LIM --top-k=3 >"$TMP/b12.out" 2>"$TMP/b12.err"; rc=$?
     hdr="$( grep -oE '<!-- files=[^>]*-->' "$TMP/b12.out" | head -1 )"
     parsed="$( printf '%s' "$hdr" | grep -oE 'memory_parsed=[0-9]+' | grep -oE '[0-9]+' )"
     if [ "$rc" = 0 ] && case "$hdr" in *"memory_stop=parse"*) true;; *) false;; esac && [ "${parsed:-0}" -ge 2 ] && grep -q 'p="z/' "$TMP/b12.out"; then
@@ -763,6 +789,12 @@ for attempt in 1 2 3 4 5 6; do
     break
 done
 [ -n "$b12env" ] && printf '  ..    (B12) environment outcome(s) re-run:%s\n' "$b12env"
+# a red here must say WHAT the runner measured (CI-FLAKES: PR #443's red named only the hard line): the unguarded OS peak of
+# this fixture and the headroom the arm assumes, so the next occurrence is a number, not a guess (macOS `time -l`; silent elsewhere)
+if [ "$b12" != pass ] && [ -x /usr/bin/time ]; then
+    printf '  ..    (B12) diagnostic: unguarded %s; the arm needs the parse line (%s/2) crossed by a real reading, then ends under %s\n' \
+        "$( RIPWIRE_TEST_MEMGUARD=eager:1 /usr/bin/time -l "$BIN" "$EG12" --no-cache --max-memory=4G --top-k=3 2>&1 >/dev/null | grep -E 'peak memory footprint|maximum resident' | tr -s ' ' | tr '\n' ';' )" "$B12LIM" "$B12LIM"
+fi
 if [ "$b12" = pass ]; then
     ok "(B12) a real parse stop ($B12LIM, eager readings) answers from the $parsed files it parsed — the big z/ files, first in the parse order (attempt $attempt)"
 else
