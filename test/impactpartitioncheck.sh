@@ -60,6 +60,11 @@
 # (every 15th, plus the first 3 type seeds) is ALSO run through the CLI and must be byte-identical to the MCP doc -- a PASS/FAIL
 # arm of its own, with a planted-difference control; (c) IMPACTPARTITION_CLI=1 runs every seed through the CLI exactly as before
 # (the slow deep path, for a local audit). Every assertion below is unchanged and reads the same documents.
+# WHY NOT THE CLI WITH ONE SHARED WARM --cache=FILE (measured, plain binary, same host, interleaved): that keeps the CLI path for
+# all 577 seeds but not the cost, because a warm CLI call still loads the cache and rebuilds the call graph every time (the parse is
+# not what is slow). 577 calls with one shared cache file: 547 / 684 / 998 s (load avg 6-9) against 156-210 / 106 / 111 s for
+# this MCP loop, 3.3x-9x, past the 2x bar this choice was held to, and the 998 s run is the slow-runner shape that was killed at
+# 1200 s. So the CLI keeps 42 seeds here and the byte-parity arm above is what ties the two doors together.
 #
 # Usage:  bash test/impactpartitioncheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/impactpartitioncheck.sh
 # Exits non-zero on any failure; prints PASS/FAIL per check, ALL PASS on success.
