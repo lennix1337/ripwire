@@ -87,6 +87,9 @@ struct PathPairs
     // N4 (rv-trace-ep): to= groups past kPathPairMaxDstGroups are not walked; the answer says so (pairs_unlisted= + next=) instead of
     // printing today's one chain as if it were the only pair. 0 = not capped. nextFrom/nextTo: the continuation's endpoints.
     std::size_t unlistedDstGroups = 0;
+    // to= groups no chain reaches past the kPathPairBridgeSearches searched: they got no bridge search, and the answer counts them
+    // (bridges_unsearched=) instead of reading as if every unreached group had been tried. 0 = every unreached group was searched.
+    std::size_t bridgesUnsearched = 0;
     NodeId      nextFrom = kNoNode, nextTo = kNoNode;
     bool active() const noexcept { return pairs.size() >= 2; }
     bool unlisted() const noexcept { return unlistedDstGroups > 0 && !active(); }
@@ -318,6 +321,7 @@ inline PathPairs pathReachingPairs( const IngestResult& ing, const Graph& g, std
     const auto rankOf = []( const PathPair& p ) { return ReachRank{ 1, p.hedged, std::uint32_t( p.hops() ) }; };
     std::stable_sort( chains.begin(), chains.end(), [ & ]( const PathPair& a, const PathPair& b ) { return reachRankBefore( rankOf( a ), rankOf( b ) ); } );
 
+    out.bridgesUnsearched = unreachedDst.size() > kPathPairBridgeSearches ? unreachedDst.size() - kPathPairBridgeSearches : 0;
     std::vector<PathPair> bridges;
     for( std::size_t i = 0; i < unreachedDst.size() && i < kPathPairBridgeSearches; ++i )
     {
@@ -401,20 +405,25 @@ inline PathPairs pathReachingPairs( const IngestResult& ing, const Graph& g, std
 
 // The legend clause, present only on an answer that lists pairs (no `--` inside: it rides in an XML comment).
 inline constexpr std::string_view kPathPairsLegend =
-    "pairs_reaching=N: N from=/to= definition pairs reach each other (directed call chains, then at most one hedged bridge per to= "
-    "definition no chain reaches); each <pair from_p= to_p= hops= hedged=> is one pair's chain, fewest hedged hops first (0 = all "
+    "pairs_reaching=N: N from=/to= definition pairs reach each other (directed call chains, then at most one hedged bridge for each of the first 4 to= "
+    "definitions no chain reaches); each <pair from_p= to_p= hops= hedged=> is one pair's chain, fewest hedged hops first (0 = all "
     "proven), then fewest hops, then the definitions' order; hedged= counts its via=/prov=split/anchor=missing rows (a bridge: its "
     "crossings plus via=name edges), so hedged>0 is NOT a proven chain and its to_p= is a candidate, not a proven binding; the root's from_p=/to_p=/hops= "
     "are the first pair's. joins=J: from its last row the chain is pair J's (those rows are not repeated; hops=/hedged= still count the whole chain, tail included). bridge=1: a hedged "
     "bridge, NOT a path. alt=N: N more reaching pairs, each an <alt from_p= to_p= hops= hedged=> row; next= runs the first; "
     "alt_capped=1: only the first 12 rows print, qualify from= or to= as file:name to list the rest. ";
 static_assert( kPathPairMaxDstGroups == 16, "kPathPairUnlistedLegend names the walk bound" );
+// Present-only: rides beside the pairs clause when a to= definition no chain reaches got no bridge search (the 4-search cap).
+inline constexpr std::string_view kPathPairBridgeCapLegend =
+    "bridges_unsearched=K: K more to= definitions no chain reaches got no bridge search (only the first 4 are searched), so a hedged bridge to them may "
+    "exist; qualify to= as file:name to search one. ";
 inline constexpr std::string_view kPathPairUnlistedLegend =
     "pairs_unlisted=G: to= names G definition groups, more than the 16 this answer walks, so only the one chain found is printed and "
     "other reaching pairs are NOT listed; next= runs the same from= to another to= definition, or qualify to= as file:name. ";
-inline std::string_view pathPairsLegend( const PathPairs& pp ) noexcept
+inline std::string pathPairsLegend( const PathPairs& pp )
 {
-    return pp.active() ? kPathPairsLegend : pp.unlisted() ? kPathPairUnlistedLegend : std::string_view();
+    return pp.active() ? std::string( kPathPairsLegend ) + ( pp.bridgesUnsearched > 0 ? std::string( kPathPairBridgeCapLegend ) : std::string() )
+                       : pp.unlisted() ? std::string( kPathPairUnlistedLegend ) : std::string();
 }
 
 // One definition's selector for a continuation: `p::Scope::name` when it has a scope (the canonical-id grammar --path takes),
@@ -449,6 +458,10 @@ inline PathPairsXml pathPairsRootAttrs( const IngestResult& ing, const PathPairs
         return out;
     }
     out.rootAttrs = " pairs_reaching=\"" + std::to_string( pp.pairs.size() ) + "\"";
+    if( pp.bridgesUnsearched > 0 )
+    {
+        out.rootAttrs += " bridges_unsearched=\"" + std::to_string( pp.bridgesUnsearched ) + "\"";
+    }
     if( pp.pairs.size() > kPathPairChains )
     {
         const PathPair& a = pp.pairs[ kPathPairChains ];
