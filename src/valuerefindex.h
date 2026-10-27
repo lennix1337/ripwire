@@ -158,6 +158,26 @@ private:
     std::vector<std::uint32_t>        m_refs;   // the facts, keyed in build() (the type is package-qualified by its file)
     HashMap<std::string, std::string> m_slot;   // "fn#k" → "Type#field" (kConflict: two different slots)
 };
+// `extra` (ascending) merged into the slot calls and their per-function lists, all kept in reference order (join() and callsIn()
+// binary-search them).
+inline void addCalls( const IngestResult& ing, const std::vector<std::uint32_t>& extra, std::vector<std::uint32_t>& calls,
+                      HashMap<NodeId, std::vector<std::uint32_t>>& bySym )
+{
+    const bool resort = !calls.empty() && !extra.empty();
+    for( const std::uint32_t c : extra )
+    {
+        calls.push_back( c );
+        bySym[ ing.references[c].fromSymbol ].push_back( c );
+    }
+    if( resort )
+    {
+        std::ranges::sort( calls );
+        for( auto& [ sym, list ] : bySym )
+        {
+            std::ranges::sort( list );
+        }
+    }
+}
 }   // namespace slot_join
 
 // ── IX-1 slot-type join ──────────────────────────────────────────────────────────────────────────────────
@@ -222,20 +242,7 @@ public:
             }
             m_valuesByField[ m_values.back().field ].push_back( static_cast<std::uint32_t>( m_values.size() - 1 ) );
         }
-        const std::size_t before = m_calls.size();
-        for( const std::uint32_t c : slot_join::memberCalls( ing, m_valuesByField ) )   // IX1-V2: the call side of a byFieldName slot
-        {
-            m_calls.push_back( c );
-            m_callsBySym[ ing.references[c].fromSymbol ].push_back( c );
-        }
-        if( before > 0 && m_calls.size() > before )
-        {
-            std::ranges::sort( m_calls );   // join() and callsIn() read them in reference order
-            for( auto& [ sym, calls ] : m_callsBySym )
-            {
-                std::ranges::sort( calls );
-            }
-        }
+        slot_join::addCalls( ing, slot_join::memberCalls( ing, m_valuesByField ), m_calls, m_callsBySym );   // IX1-V2: a byFieldName slot's calls
         if( m_calls.empty() )
         {
             return;   // no call through a struct field anywhere: no value needs a slot key
@@ -370,15 +377,12 @@ private:
         const Reference& r = ing.references[refIdx];
         End              e;
         e.ref = refIdx;
-        if( r.role == RefRole::Call )
+        if( r.role == RefRole::Call || slotJoinsByFieldName( r.lang ) )
         {
-            e.field = r.calleeName;   // IX1-V2: a member call `x.F( … )` (slot_join::memberCalls): its receiver's type unread, the name tier
-            return e;
-        }
-        if( slotJoinsByFieldName( r.lang ) )
-        {
-            e.type  = slot_join::goTypeKey( ing, r );   // IX1-V2: no typedef aliases or field-type facts on this side
-            e.field = r.memberPath;
+            // IX1-V2: a member call `x.F( … )` (slot_join::memberCalls, its receiver's type unread: the name tier), or a byFieldName
+            // store (package-qualified; no typedef aliases or field-type facts on this side)
+            e.type  = r.role == RefRole::Call ? std::string() : slot_join::goTypeKey( ing, r );
+            e.field = r.role == RefRole::Call ? r.calleeName : r.memberPath;
             return e;
         }
         std::string_view chain = r.memberPath;

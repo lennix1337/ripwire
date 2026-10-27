@@ -595,9 +595,18 @@ inline constexpr VrSlotLang kVrSlotLangs[] = {
     { Lang::Cpp, false, false },
     { Lang::Go, false, true },
 };
+inline constexpr std::array<bool, kLangCount> kSlotByFieldNameOfLang = []
+{
+    std::array<bool, kLangCount> byLang {};
+    for( const VrSlotLang& row : kVrSlotLangs )
+    {
+        byLang[ static_cast<std::size_t>( row.lang ) ] = row.byFieldName;
+    }
+    return byLang;
+}();
 inline bool slotJoinsByFieldName( Lang l ) noexcept
 {
-    return std::ranges::any_of( kVrSlotLangs, [ l ]( const VrSlotLang& row ) { return row.lang == l && row.byFieldName; } );
+    return enumTableAt( kSlotByFieldNameOfLang, l, false );
 }
 // A slot type key written with the `struct` / `union` keyword (`struct thandle`) leads with this mark: a C tag is no typedef
 // name, so the join never reads it through an alias. A slot fact whose composeRel is kValueRefSlotBodyRel declares that its
