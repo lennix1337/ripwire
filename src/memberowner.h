@@ -103,24 +103,7 @@ public:
 private:
     // A TS/JS method's owner by containment (see the header): the one enclosing class, else "". The per-file buckets of the
     // containment languages' symbols (ascending start) are built at the first such row, so an answer with none pays nothing.
-    std::string_view containedOwnerOf( const Symbol& s ) const
-    {
-        if( s.kind != SymKind::Method || !langFacts( s.lang ).containmentOwners )
-        {
-            return {};
-        }
-        if( !byFile_ )
-        {
-            byFile_.emplace( containmentSymbolsByFile( ing_ ) );
-        }
-        if( s.fileId >= byFile_->size() )
-        {
-            return {};
-        }
-        const FileSymbols&    bucket = ( *byFile_ )[ s.fileId ];
-        const ContainedOwners c      = containedOwnersOf( ing_, std::span<const NodeId>( bucket.data(), bucket.size() ), s );
-        return !c.nested && c.chain.size() == 1 ? c.chain.front() : std::string_view();
-    }
+    std::string_view containedOwnerOf( const Symbol& s ) const;   // defined below the class
 
     using Key = std::pair<Lang, std::string_view>;
     static bool keyLess( const Key& a, const Key& b ) noexcept
@@ -135,6 +118,25 @@ private:
     std::vector<Key>                      defined_;
     mutable std::optional<SymbolsByFile>  byFile_;
 };
+
+inline std::string_view MemberOwners::containedOwnerOf( const Symbol& s ) const
+{
+    if( s.kind != SymKind::Method || !langFacts( s.lang ).containmentOwners )
+    {
+        return {};
+    }
+    if( !byFile_ )
+    {
+        byFile_.emplace( containmentSymbolsByFile( ing_ ) );
+    }
+    if( s.fileId >= byFile_->size() )
+    {
+        return {};
+    }
+    const FileSymbols&    bucket = ( *byFile_ )[ s.fileId ];
+    const ContainedOwners c      = containedOwnersOf( ing_, std::span<const NodeId>( bucket.data(), bucket.size() ), s );
+    return !c.nested && c.chain.size() == 1 ? c.chain.front() : std::string_view();
+}
 
 // Whether `s` could print an owner at all: a stored scope, or a TS/JS method (containment). The cheap pre-test the answer-level
 // "does any row print an owner" checks run before they pay for a MemberOwners pass.
