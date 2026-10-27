@@ -7,7 +7,7 @@ Python rebind-withholding records a 224 placeholder on theirs; train 34 took 226
 carried a 228 placeholder and the Rust precise-capture re-parse 229 (230) — it re-parses a Rust file whose first parse holds
 error bytes with its `use<..>` bounds blanked, so the defs differ — and train 37b took 233 (234); the queue hand-off
 records (a Python queue call's keyword arguments on its call reference) carried another 228 placeholder on their branch, so 235
-sits above every live branch and pull-request number. A cache
+sits above every live branch and pull-request number (the JS/TS naming lane carries placeholders kParserVer 238 and kCacheVersion 45 on its branch: a JS bare `module.exports` function and a named object literal's binding are new extraction, the literal's binding a new record). A cache
 written by 0.6.8 is re-parsed once. `kCacheVersion` 36 → 44: a Rust binding typed only through a trait
 (`&dyn T`, `impl T`, a bound), a Rust `impl T for X` block and a JS/TS binding written after its declaration are new binding
 records, a Kotlin call's trailing-lambda byte (#155) widens the reference record, and a file's parse-health record gains the
