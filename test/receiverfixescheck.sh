@@ -157,6 +157,10 @@ o = run( "tsw17", "--callees=dispatch", "full" ); d = declines( o )
 say( len( d ) == 1 and d[ 0 ].get( "gate" ) == "iface" and d[ 0 ].get( "cands" ) == "17", "C F8 tsw17 dispatch",
      'the 17-wide interface is still one <dc gate="iface" cands="17"> (the width the near_sink row leaves to --callees)', str( d ) )
 
+o = run( "tsext", "--path=dispatch,routers/a.ts:match" ); e = edges( o )
+say( bridge( o ) == "" and root( o ).get( "reachable" ) == "1" and any( x.get( "via" ) == "name" and x.get( "n" ) == "match" for x in e ), "C F9 tsext",
+     "the field's type imported from a package (`import { Router } from 'express'`, the tree has an interface of that name too) is not stated in-tree: the by-name edge stays, no crossing", str( e ) )
+
 print( "(Y) Python: annotations and module-qualified constructors type fields and locals" )
 for sym in ( "go1", "go2", "go3", "go4", "go5", "go6", "go8", "goParam" ):
     o = run( "py", "--callees=" + sym ); e = edges( o )
