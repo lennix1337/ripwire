@@ -13,7 +13,7 @@
 #   N1 [G] `f = other.opPlan` (a parameter, not the receiver) makes no row for Remote.opPlan
 #   N2 [G] a field named like a Go METHOD (`h.Close()` beside `(*File).Close`) is no slot call
 #   N3 [G] a map literal value is no field slot;  N4 [G] two same-named registrars storing different fields decide nothing
-#   N5 [P] a same-named struct in another package: batcheval.Command's slot_fields= never lists cobra.Command's RunE
+#   N5 [G] a same-named struct in another package: batcheval.Command's slot_fields= never lists cobra.Command's RunE
 #   F1 [P] --for: slot_fields= on the struct row (EvalRW=2: the `c.EvalRW =` store has no type, so it is not this struct's), slot_by= on the stored function, the clause rides;  F2 [G] the A/B handle
 #   L1 [P] the compact legend defines cands= when it rides;  J1 [P] the JSON twin carries cands
 #
