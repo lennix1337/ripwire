@@ -9,6 +9,7 @@
 #include "forfold.h"    // body-fold: the whole bodies of the top ranked rows, appended to a compact-route answer
 #include "formembers.h" // member-names: mem= on the shown owner rows of a compact-route answer
 #include "forslots.h"   // FOR-SLOTS: slots= on the shown initializer rows of a compact-route answer
+#include "forgraphverb.h" // FOR-ROUTE-DECLINED: the graph verb a `path from A to B` / `callers of X` task names, appended
 #include "forctorhop.h" // OWNER-CTOR-HOP: ctor_l=/ctor_calls= on the r=1 method row of a compact-route answer
 #include "forcallerhop.h"   // mf1-nx: a name-exact answer about ONE function carries that function's callers
 #include "epmanifest.h"     // ep-manifest: the manifest entry-point groups that register a shown row
@@ -2642,6 +2643,51 @@ struct ForLensPassMode
 {
     std::string_view forAtStamp;
 };
+// the verb sections (verbs_navigate.h) come later in this translation unit; the --for block calls their CLI entry points
+std::optional<int> runPath( const MainDispatch& d );
+std::optional<int> runCallHierarchy( const MainDispatch& d );
+std::optional<int> runConnect( const MainDispatch& d );
+
+// FOR-ROUTE-DECLINED (src/forgraphverb.h): a task spelled `path from A to B` / `callers of X` / `common callers of A and B`
+// gets that verb's DEFAULT answer inside <graph_verb endpoints="subject">, just before </ctx>, on the graph this run built
+// (no re-index). Every byte before it is the ordinary answer; nothing resolves → nothing is printed. XML only (the
+// --json / columnar dialects keep their single document; the verb is one call away there).
+inline void appendSubjectGraphVerb( const MainDispatch& d )
+{
+    const rw::Config& cfg = d.cfg;
+    if( cfg.json || cfg.columnar || cfg.candidates || d.multiRoot )
+    {
+        return;
+    }
+    const std::optional<rw::GraphSubjectArgs> args = rw::chooseGraphSubjectArgs( d.ing, cfg.forTask );
+    if( !args )
+    {
+        return;
+    }
+    rw::Config sub = cfg;   // the verb runs as its own bare call: its default caps, no page window, no --for shaping
+    sub.forTask    = {};
+    sub.pageLimit  = 0;
+    sub.pageOffset = 0;
+    const auto [ flag, value ] = rw::graphSubjectVerbFlag( *args );
+    switch( args->form )
+    {
+        case rw::GraphSubjectForm::Path: sub.pathSpec = value; break;
+        case rw::GraphSubjectForm::Callers: sub.callers = value; break;
+        case rw::GraphSubjectForm::Common: sub.connectSpec = value; break;
+    }
+    const MainDispatch sd{ sub, d.ing, d.g, d.root, d.multiRoot, d.ws, d.fanIn, d.fanInPtr, d.qmetrics, d.ampPtr, d.cboPtr, d.testedPtr,
+                           d.lcom4Ptr, d.impurePtr, d.forChurn, d.redactCounts, d.redactPtr, d.notesPtr, d.notesDegraded, d.grepPhases, d.valueUses };
+    rw::emitRaw( stdout, rw::graphSubjectOpenXml( *args ).c_str() );
+    std::fflush( stdout );
+    switch( args->form )
+    {
+        case rw::GraphSubjectForm::Path: (void)runPath( sd ); break;
+        case rw::GraphSubjectForm::Callers: (void)runCallHierarchy( sd ); break;
+        case rw::GraphSubjectForm::Common: (void)runConnect( sd ); break;
+    }
+    rw::emitRaw( stdout, std::string( rw::kGraphSubjectCloseXml ).c_str() );
+}
+
 std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, const ForLensPassMode& mode )
 {
     using namespace rw;
@@ -4296,6 +4342,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             rw::emitChargedSection( stdout, graphSection, [ & ]{ packGraphBlock( stdout, ing, lensRank, g.outOff, g.outTargets ); } );
         }
+        appendSubjectGraphVerb( d );   // FOR-ROUTE-DECLINED: "" unless the task is spelled as a graph question that resolves
 
         rw::emitRaw( stdout, "</ctx>" );
         reportRedactions( stderr, redactCounts );
