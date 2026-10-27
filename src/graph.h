@@ -7675,7 +7675,7 @@ inline NodeId pythonRenamedImportPin( const IngestResult& ing, const PythonRenam
     {
         Reference at = r;
         at.fromSymbol = outer;
-        if( veto.hasLocal( at, r.calleeName ) || pythonSpannedLocalCovers( imports, outer, r.calleeName, r.startByte ) )
+        if( veto.hasLocal( at, r.calleeName ) )
         {
             return kNoNode;   // an enclosing def binds the name: a closure reads that, not the import
         }
