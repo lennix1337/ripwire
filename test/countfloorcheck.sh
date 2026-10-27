@@ -596,6 +596,18 @@ for dialect in compact full; do
     case "$OUT_NP" in *reads_at*|*vals=*) no "(N/$dialect) a legend defines a carrier term its answer does not carry" ;; *) ok "(N/$dialect) present-only: no carrier term on an answer without a carrier attribute" ;; esac
 done
 
+# F1 (rv-for-small): the p= sentence is its own present-only clause, gated on a row that PRINTS p= (not on reads=/vals= alone):
+# a reads-only carrier page (PC_NAMED_MARK) and a defs=2 row with vals= but no p= (C_DUP_MARK) define no "p= beside".
+for dialect in compact full; do
+    for spec in "pc:PC_NAMED_MARK" "cd:C_DUP_MARK"; do
+        OUT_NQ="$( run "${spec%%:*}" --grep="${spec#*:}" --legend=$dialect )"
+        case "$( nocomment "$OUT_NQ" | grep -oE '<enc [^>]*>' )" in *' p="'*) no "(N/$dialect) premise: ${spec#*:} prints a p= (the arm needs a page without one)" ;; esac
+        [ -n "$( root_tag "$OUT_NQ" grep )" ] || no "(N/$dialect) premise: no <grep> answer for ${spec#*:}"
+        comments "$OUT_NQ" | grep -qF -- "p= beside" \
+            && no "(N/$dialect) the legend of ${spec#*:} (no p= on any row) defines p= beside" || ok "(N/$dialect) present-only: no p= beside on ${spec#*:}, which prints no p="
+    done
+done
+
 # ── O: determinism + xmllint ─────────────────────────────────────────────────────────────────────────────
 echo "=== O: determinism and well-formed XML ==="
 for spec in "c --safe-delete=cell" "c --safe-delete=width_of" "py --grep=APP_BACKEND_ENV" "tsl --lego=Router" "pc --grep=PC_NAMED_MARK" "cc --grep=C_ENT_MARK" \
