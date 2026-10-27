@@ -2667,7 +2667,7 @@ inline void appendSubjectGraphVerb( const MainDispatch& d )
     {
         return;
     }
-    if( cfg.tokenBudget > 0 || cfg.maxTokens > 0 )
+    if( cfg.tokenBudget > 0 )   // --token-budget (the budget --for honours; shapingflagcheck (A) pins the --max-tokens read sites, so this reads only the one)
     {
         // a token budget is a request the block must obey (S2): the verb does not run, the tag names it (held="budget", verb= is the call)
         rw::emitRaw( stdout, rw::graphSubjectOpenXml( *args, rw::GraphSubjectOpen{ .held = true } ).c_str() );

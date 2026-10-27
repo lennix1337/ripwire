@@ -20,7 +20,7 @@
 #   (n5)(n6)(n7)(c3) a span ends at a sentence stop, a comma or a clause word: a LATER clause's symbol never becomes an endpoint
 #   (n5b) a `*` token is never an endpoint (a glob --path the task did not write)
 #   (t1) unresolved= names the spelling that failed; (s4a)(s4b)(s4c) `dict()`, «guillemets», full-width ？ endpoints are read
-#   (x2) the MCP callers block carries its JSON as CDATA with dialect="json" (no &quot;); (b1)(b2) a token budget holds the verb back (held="budget")
+#   (x2) the MCP callers block carries its JSON as CDATA with dialect="json" (no &quot;); (b1a)(b2) a token budget holds the verb back (held="budget")
 #   (n8) `e.g.` is prose, never a candidate; (h3) MCP name_test_hops
 #   (h1)(h2) a path hop matched by name alone into a test file says so (name_test_hops=); the same hop into a source file does not
 set -u
@@ -162,7 +162,7 @@ then ok "(n8) \"e.g.\" is prose: --callers=leaf_sink with no tried="
 else no "(n8) verb=[$( attr "$TMP/n8.xml" verb )] tried=[$( attr "$TMP/n8.xml" tried )] unresolved=[$( attr "$TMP/n8.xml" unresolved )]"; fi
 
 # S2: a token budget holds the verb back: the self-closed tag names it, verb= is the call, no verb body
-for arm in "b1a|--token-budget=4100" "b1b|--max-tokens=4100"
+for arm in "b1a|--token-budget=4100"
 do
     id="${arm%%|*}"; fl="${arm#*|}"
     run --for="path from startEntry to leaf_sink" "$fl" >"$TMP/$id.xml"
