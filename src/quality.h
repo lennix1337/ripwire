@@ -35,6 +35,7 @@
 #include "filter.h"             // B10.1a: isTestPath — the general test-dir convention behind isTestScriptPath
 #include "memguard.h"           // #387: loadRefTree reads the hard line between a commit's ingest and its graph
 #include "infra/Diagnostics.h"  // DISCLOSE — the degrade path when git archive/ingest fails (no-op under NDEBUG; a gate-visible degrade line needs its own fprintf)
+#include "infra/namesplit.h"    // afterLast — a path's last component (isConftestFile, pythonModuleTail), not a third hand-rolled basename
 #include "infra/jsonesc.h"      // L2 — rw::jsonesc::escapeMcp for staleAcksJsonArray's kind= field (the same posture serialize.h's jsonStr uses)
 #include "infra/platform.h"     // RW_LIFETIMEBOUND — the DefectSiteKey projection lambdas; owned here, not transitively
 #include "sourceidentity.h"    // rw::kRipwireSourceIdentity — the producer identity the qsnap/qbody keys and blob header carry
@@ -10092,17 +10093,8 @@ inline bool offsetInComment( std::string_view source, std::size_t spanBegin, std
     return open != std::string_view::npos && span.find( "*/", open + 2 ) == std::string_view::npos;
 }
 
-//
-// D1 fix round 1: the token is the C-family storage class, so the scan runs only for a language whose LangFacts row says
-// `staticLinkage` (C, C++, Objective-C). A Python parameter `static=False`, a TypeScript literal type `'static'` and a Rust
-// `'static` lifetime are the same four letters and no linkage: before this gate they made a public function an
-// "internal-linkage" row (--dead-code `<d>`: zed listed 67 Rust rows; the test-only `<to>` rows inherited it).
-inline bool sourceHasStaticToken( Lang lang, std::string_view source, std::size_t sigStartByte, std::size_t sigEndByte ) noexcept
+inline bool sourceHasStaticToken( std::string_view source, std::size_t sigStartByte, std::size_t sigEndByte ) noexcept
 {
-    if( !langFacts( lang ).staticLinkage )
-    {
-        return false;
-    }
     const std::size_t begin = std::min( sigStartByte, source.size() );
     const std::size_t end   = std::min( sigEndByte, source.size() );
     if( begin >= end )
@@ -10123,6 +10115,15 @@ inline bool sourceHasStaticToken( Lang lang, std::string_view source, std::size_
         position += token.size();
     }
     return false;
+}
+
+// D1 fix round 1: internal linkage of ONE definition. The token is the C-family storage class, so the scan runs only for a
+// language whose LangFacts row says `staticLinkage` (C, C++, Objective-C). A Python parameter `static=False`, a TypeScript literal
+// type `'static'` and a Rust `'static` lifetime are the same four letters and no linkage: before this gate they made a public
+// function an "internal-linkage" row (--dead-code `<d>`: zed listed 67 Rust rows; the test-only `<to>` rows inherited it).
+inline bool symbolHasStaticLinkage( const Symbol& s, std::string_view source ) noexcept
+{
+    return langFacts( s.lang ).staticLinkage && sourceHasStaticToken( source, s.sigStartByte, s.sigEndByte );
 }
 
 // The nearest non-blank, non-comment line above a Python def at `defByte` (or the def's own first byte) opens with '@'.
@@ -10246,8 +10247,7 @@ inline bool underscorePrivateDef( std::string_view relPath, const Symbol& s ) no
 // functions. The base name alone decides (any conftest.py, at any depth).
 inline bool isConftestFile( std::string_view path ) noexcept
 {
-    const std::size_t slash = path.rfind( '/' );
-    return ( slash == std::string_view::npos ? path : path.substr( slash + 1 ) ) == "conftest.py";
+    return namesplit::afterLast( path, "/" ) == "conftest.py";
 }
 
 // D1 fix round 1 (F3): the module name a Python file answers to at its tail: the file stem, or the package directory's name for
@@ -10259,13 +10259,12 @@ inline std::string_view pythonModuleTail( std::string_view relPath ) noexcept
         return {};
     }
     relPath.remove_suffix( 3 );
-    const auto lastPart = []( std::string_view p ) noexcept { const std::size_t slash = p.rfind( '/' ); return slash == std::string_view::npos ? p : p.substr( slash + 1 ); };
-    if( lastPart( relPath ) != "__init__" )
+    if( namesplit::afterLast( relPath, "/" ) != "__init__" )
     {
-        return lastPart( relPath );
+        return namesplit::afterLast( relPath, "/" );
     }
     relPath.remove_suffix( relPath.size() == 8 ? 8 : 9 );   // "__init__" or "/__init__"
-    return lastPart( relPath );
+    return namesplit::afterLast( relPath, "/" );
 }
 
 // D1 fix round 1 (F3): the tail of every module a `from <module> import *` line in `text` names (`from ._impl import *` and

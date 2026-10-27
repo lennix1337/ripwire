@@ -225,7 +225,7 @@ struct LangFacts
     bool underscorePrivacy = false;
 
     /// C, C++, Objective-C: the `static` keyword on a free function in its signature is INTERNAL LINKAGE (the storage class), the one
-    /// internal-interface mark --dead-code's rows rest on (quality.h sourceHasStaticToken). Elsewhere the word is not that keyword: a
+    /// internal-interface mark --dead-code's rows rest on (quality.h symbolHasStaticLinkage). Elsewhere the word is not that keyword: a
     /// Python parameter `static=False`, a TypeScript literal type `'static'`, a Rust `'static` lifetime, a string default all spell it
     /// without meaning linkage, and a function in those languages carries no `static` storage class at all.
     bool staticLinkage = false;

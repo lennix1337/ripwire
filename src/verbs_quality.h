@@ -2878,7 +2878,7 @@ std::optional<int> runQualityViews( const MainDispatch& d )
         // --dead-code's own: the per-file sourceFor() cache amortizing the scan across every candidate.
         const auto hasStaticToken = [ & ]( const Symbol& symbol ) -> bool
         {
-            return sourceHasStaticToken( symbol.lang, sourceFor( symbol.fileId ), symbol.sigStartByte, symbol.sigEndByte );
+            return quality::symbolHasStaticLinkage( symbol, sourceFor( symbol.fileId ) );
         };
 
         // P2.2 (agent-friction round, 2026-08-29): a symbol whose OWN signature text is a registered
