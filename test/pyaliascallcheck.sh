@@ -12,6 +12,7 @@
 #     c_plain.py     from m import f as g ; g()                         the defect's own shape
 #     c_cond.py      if X: from m import f as g ; g()                   one conditional import: the only target it can bind
 #     c_class.py     from m import Widget as Gadget ; Gadget()          a class (target m.py:9 Widget)
+#     c_shadow.py    names = [g for g in fs] ; return g()               a comprehension target does not leak: the call after it is the import
 #   NEAR MISSES (must NOT bind m.py's f)
 #     c_param.py     def call_param(g): g()                             a parameter shadows the import
 #     c_local.py     g = other ; g()                                    a local assignment shadows it
@@ -26,6 +27,13 @@
 #     c_external.py  from json import dumps as d (jsonish.py has a dumps)  outside the tree: never an in-tree dumps
 #     c_twice.py     m3.py defines f twice                              which one is live is not read: no decision
 #     c_nested.py    from m import method as meth                       m defines `method` only inside class Widget: not a module name
+#     c_override.py  the TARGET module rebinds f after its def: mo_import.py (`from fast_over import f`), mo_try.py (try-import),
+#                    mo_star.py (`from mstar import *` with an f), mo_assign.py (`f = other`), mo_dyn.py (`globals()["f"] = len`),
+#                    mo_ostar.py (a star import of a file outside the tree: unknown), mo_global.py (`global f` in a def): m.f is not
+#                    provably the live name, so no pin (the unchanged ladder); each caller must not reach its target's line-1 f
+#     c_shadow.py    [g() for g in fs] / list(g() for g in fs) / lambda g: g()   a comprehension target or lambda parameter named g
+#                    covers the call (the site-spanned records localNameSet skips)
+#     c_member.py    o.gm() / self.gm() through the alias spelling       a member call is not the bare name: never m.py:1
 #   UNCHANGED
 #     c_same.py      from m import h as h ; h()                         alias equals the name: the ladder, as before
 #
@@ -49,11 +57,11 @@ callees(){ ( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --callees="$1" --lege
 # ── 0. presence: every fixture file parses (a fixture that fails to parse would pass the near misses inert) ──
 ( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --skipped --legend=compact ) >"$TMP/skipped" 2>/dev/null
 perl -pe 's/<!--.*?-->//g' "$TMP/skipped" >"$TMP/skipped.body"
-if ! grep -q 'degraded_parse="0"' "$TMP/skipped.body" || ! grep -q 'indexed="25"' "$TMP/skipped.body" || grep -q '<f \|<h ' "$TMP/skipped.body"; then no "a fixture file was skipped or degraded"; sed 's/^/        | /' "$TMP/skipped" | head -5
+if ! grep -q 'degraded_parse="0"' "$TMP/skipped.body" || ! grep -q 'indexed="37"' "$TMP/skipped.body" || grep -q '<f \|<h ' "$TMP/skipped.body"; then no "a fixture file was skipped or degraded"; sed 's/^/        | /' "$TMP/skipped" | head -5
 else ok "every fixture file indexed with no parse degrade"; fi
 
 # ── 1. positive arms ──
-for c in call_plain call_cond; do
+for c in call_plain call_cond call_outside; do
     callees "$c"
     row=$( grep -o '<s [^>]*p="m.py:1"[^>]*/>' "$TMP/$c" )
     if [ -n "$row" ] && ! printf '%s' "$row" | grep -q 'via=' && ! grep -q 'p="decoy.py' "$TMP/$c"; then
@@ -70,11 +78,19 @@ if grep -q 'n="call_plain"' "$TMP/callers" && grep -q 'n="call_cond"' "$TMP/call
 else no "--callers=m.py:f misses an aliased caller"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/callers"; fi
 
 # ── 2. near misses: never m.py's f ──
-for c in call_param call_local call_rebind call_dynamic call_star call_twomod call_fnimport call_inner call_disagree call_reexport call_nested call_external call_twice; do
+for c in call_param call_local call_rebind call_dynamic call_star call_twomod call_fnimport call_inner call_disagree call_reexport call_nested call_external call_twice call_comp call_gen call_lambda call_obj call_self; do
     callees "$c"
     if grep -q 'p="m.py:1"\|p="m2.py:1"\|p="m.py:10"\|p="m3.py\|p="jsonish.py' "$TMP/$c"; then
         no "$c: bound through the renamed import (must stay undecided)"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/$c"
     else ok "$c: no import-pinned edge"; fi
+done
+
+# ── 2b. the target module rebinds f after its def: a def-line pin to mo_*.py:1 would name the overridden def ──
+for c in call_mo_import call_mo_try call_mo_star call_mo_assign call_mo_dyn call_mo_ostar call_mo_global; do
+    callees "$c"
+    if grep -q 'p="mo_[a-z]*.py:1"' "$TMP/$c"; then
+        no "$c: pinned the overridden def of a module that rebinds f (must stay undecided)"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/$c"
+    else ok "$c: no pin to the overridden def"; fi
 done
 
 # ── 3. unchanged: alias equal to the name keeps the ladder (h in m.py, the edge it had before) ──
