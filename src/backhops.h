@@ -1286,7 +1286,8 @@ inline constexpr std::string_view kQueueHopLegend =
     "rh via=queue d=1: a HAND-OFF, not a call: called_by= puts onto a queue field of its own object (self.X.put/put_nowait, one item; timeout=/block= allowed) and "
     "calls= takes from it (self.X.get/get_nowait) in the same class or a base or subclass of it (a base the index proves), or is a proven caller in that family of "
     "such a function (one level); cands=K the readers of that put, a floor (a queue handed out of the class has readers not seen). Python only. "
-    "In a path bridge, s via=queue is the same crossing: the previous row puts, this row takes. ";
+    "In a path bridge, s via=queue is the same crossing: the previous row puts, this row takes. "
+    "<ring d=1 total= shown=> lists only such hand-offs: the root d= is the deepest row, and 1 means only queue hand-offs. ";
 // Whether any ring row is a queue hop: the queue clause rides.
 inline bool impactRingHasQueue( const ImpactRing& ring ) noexcept
 {

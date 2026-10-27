@@ -32,6 +32,8 @@
 #       <pair>s; only NESTED same-line twins (T) fold (rv-delta-38 F1-b: the fold keyed on file+line+name folded these into one).
 #   (U) 17 to= definition groups (past the 16 walked): the one chain stays, DISCLOSED — pairs_unlisted="17" + next= + the legend
 #       clause, and no pairs_reaching=; a 16-group control lists its pairs (no pairs_unlisted=).
+#   (N) five to= definition groups no chain reaches (past the 4 bridge searches): bridges_unsearched="1" says one was not searched;
+#       a 4-group control carries no bridges_unsearched= (CodeRabbit 4387143972: the cap was silent).
 #   (M) MCP path_between prints the CLI's <pair>/<alt>/<s> rows on A, B, C, J.
 #   P1 PATH-ORDER (fzf-14 / zed-03):
 #   (Q) question words: Terminal.Loop (1 hop) and Matcher.Loop (2 hops) reach matcher.go:extendedMatch; the argv's own word
@@ -71,7 +73,7 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
 
-mkdir -p "$TMP/min" "$TMP/site" "$TMP/capd" "$TMP/capok" "$TMP/wide" "$TMP/two" "$TMP/hedge" "$TMP/many" "$TMP/one" "$TMP/none" "$TMP/join"
+mkdir -p "$TMP/min" "$TMP/site" "$TMP/capd" "$TMP/capok" "$TMP/wide" "$TMP/two" "$TMP/hedge" "$TMP/many" "$TMP/bcap" "$TMP/bok" "$TMP/one" "$TMP/none" "$TMP/join"
 cat > "$TMP/two/m.go" <<'EOF'
 package m
 
@@ -122,6 +124,9 @@ import sys
 t = sys.argv[1]
 for d, n in ( ( "capd", 17 ), ( "capok", 16 ) ):
     open( t + "/" + d + "/k.py", "w" ).write( "".join( "class C%d:\n    def target(self):\n        return 1\n\n" % i for i in range( n ) ) + "def start(x):\n    return x.target()\n" )
+for d, n in ( ( "bcap", 5 ), ( "bok", 4 ) ):   # two go() definitions reach the module target; n more target() definitions nothing reaches
+    open( t + "/" + d + "/k.py", "w" ).write( "def target():\n    return 1\n\n" + "".join( "class G%d:\n    def go(self):\n        return target()\n\n" % i for i in range( 2 ) )
+                                              + "".join( "class U%d:\n    def target(self):\n        return 2\n\n" % i for i in range( n ) ) )
 open( t + "/many/k.py", "w" ).write( "def target():\n    return 1\n\n" + "".join( "class C%d:\n    def go(self):\n        return mid%d()\n\ndef mid%d():\n    return target()\n\n" % ( i, i, i ) for i in range( 5 ) ) )
 open( t + "/wide/w.py", "w" ).write( "def target():\n    return 1\n\n" + "".join( "class C%d:\n    def go(self):\n        return target()\n\n" % i for i in range( 20 ) ) )
 open( t + "/one/o.py", "w" ).write( "def target():\n    return 1\n\nclass A:\n    def go(self):\n        return target()\n\nclass B:\n    def go(self):\n        return 2\n" )
@@ -211,6 +216,7 @@ run zp go,target > "$TMP/ZP.out"; run zp go,target --legend=full > "$TMP/ZPL.out
 run tw backspace,edit > "$TMP/Z.out"; run tws backspace,edit > "$TMP/ZS.out"; run twt backspace,edit > "$TMP/ZT.out"
 run twn backspace,edit > "$TMP/ZN.out"; run twa backspace,edit > "$TMP/ZA.out"
 run tw backspace,edit --legend=full > "$TMP/ZL.out"; run twn backspace,edit --legend=full > "$TMP/ZNL.out"
+run bcap go,target > "$TMP/BC.out"; run bok go,target > "$TMP/BK.out"
 
 python3 - "$TMP" "$BIN" <<'PY'
 import re, shlex, subprocess, sys
@@ -272,6 +278,11 @@ if ru.get( "next" ):
     check( "U", r2.get( "to_defs" ) == "1" and "pairs_unlisted" not in r2, "next= narrows to one to= definition: %r" % { k: r2.get( k ) for k in ( "to_defs", "reachable", "pairs_unlisted" ) } )
 uk = rd( "UK" ); ruk = root( uk )
 check( "U", "pairs_unlisted" not in ruk and ruk.get( "pairs_reaching", "" ) != "", "16 to= groups are walked and listed (no pairs_unlisted=): %r" % { k: ruk.get( k ) for k in ( "pairs_unlisted", "pairs_reaching" ) } )
+bc = rd( "BC" ); rbc = root( bc ); bk = rd( "BK" ); rbk = root( bk )
+check( "N", rbc.get( "pairs_reaching" ) == "2" and rbc.get( "to_defs" ) == "6" and rbc.get( "bridges_unsearched" ) == "1",
+       "5 unreached to= groups, 4 bridge searches: the 5th is counted, not silent (CodeRabbit 4387143972): %r" % { k: rbc.get( k ) for k in ( "pairs_reaching", "to_defs", "bridges_unsearched" ) } )
+check( "N", rbk.get( "pairs_reaching" ) == "2" and rbk.get( "to_defs" ) == "5" and "bridges_unsearched" not in rbk,
+       "4 unreached to= groups are all searched: no bridges_unsearched=: %r" % { k: rbk.get( k ) for k in ( "pairs_reaching", "to_defs", "bridges_unsearched" ) } )
 xbad = []
 for k in ( "A", "B", "C", "J" ):
     for at, body in pairs( rd( k ) ):
@@ -354,8 +365,14 @@ if grep -q 'pairs_unlisted=G: to= names G definition groups' "$TMP/UL.out" && ! 
 else
     no "(L) the pairs_unlisted clause rides wrongly"
 fi
+run bcap go,target --legend=full > "$TMP/BL.out"
+if grep -q 'bridges_unsearched=K' "$TMP/BL.out" && grep -q 'first 4 ' "$TMP/CL.out" && ! grep -q 'bridges_unsearched=K' "$TMP/CL.out"; then
+    ok "(L) the pairs clause names the 4-search cap; the bridges_unsearched clause rides exactly when a search was skipped"
+else
+    no "(L) the bridge-search cap is not stated in the pairs legend"
+fi
 if command -v xmllint >/dev/null 2>&1; then
-    xb=0; for k in A B C J CL T V U UL Q QL Z ZL ZT ZP ZU ZX; do xmllint --noout "$TMP/$k.out" 2>/dev/null || { xb=1; echo "    $k.out is not well-formed"; }; done
+    xb=0; for k in A B C J CL T V U UL Q QL Z ZL ZT ZP ZU ZX BL; do xmllint --noout "$TMP/$k.out" 2>/dev/null || { xb=1; echo "    $k.out is not well-formed"; }; done
     if [ $xb -eq 0 ]; then ok "(L) A B C J and the full-legend answer parse as XML"; else no "(L) malformed answer"; fi
 else
     echo "  SKIP  (L) xmllint absent"
