@@ -2667,9 +2667,15 @@ inline void appendSubjectGraphVerb( const MainDispatch& d )
     {
         return;
     }
+    if( cfg.tokenBudget > 0 || cfg.maxTokens > 0 )
+    {
+        // a token budget is a request the block must obey (S2): the verb does not run, the tag names it (held="budget", verb= is the call)
+        rw::emitRaw( stdout, rw::graphSubjectOpenXml( *args, rw::GraphSubjectOpen{ .held = true } ).c_str() );
+        return;
+    }
     rw::Config sub = cfg;   // the verb runs as its own bare call: its default caps, no page window, no --for shaping
     sub.forTask    = {};
-    sub.pageLimit  = 0;
+    sub.pageLimit  = 0;   // defensive, like the json guard above: a paged --for (--limit/--offset) never reaches this site
     sub.pageOffset = 0;
     const auto [ flag, value ] = rw::graphSubjectVerbFlag( *args );
     switch( args->form )
@@ -2689,11 +2695,10 @@ inline void appendSubjectGraphVerb( const MainDispatch& d )
             case rw::GraphSubjectForm::Common: (void)runConnect( sd ); break;
         }
     };
-    rw::emitRaw( stdout, rw::graphSubjectOpenXml( *args ).c_str() );
-    std::fflush( stdout );
     // The bare verb's answer is shaped by main.cpp's whole-stdout compact layer (runWithCompactLegend), which skips --for; so
     // the verb is captured here and compacted by the same applyCompactDialect + compactLegendHint, and the block carries the
     // bytes the bare call prints. A capture that cannot be set up emits the verb's FULL legend instead (a superset; only cost).
+    std::fflush( stdout );   // everything before the block is out before stdout is pointed at the capture
     std::FILE* const capture = sub.legend == "compact" ? std::tmpfile() : nullptr;
     const int        saved   = capture != nullptr ? rw::os::dup( STDOUT_FILENO ) : -1;
     if( capture == nullptr || saved < 0 || rw::os::dup2( rw::os::fileno( capture ), STDOUT_FILENO ) < 0 )
@@ -2705,6 +2710,8 @@ inline void appendSubjectGraphVerb( const MainDispatch& d )
         }
         if( saved >= 0 ) { rw::os::close( saved ); }
         if( capture != nullptr ) { std::fclose( capture ); }
+        rw::emitRaw( stdout, rw::graphSubjectOpenXml( *args ).c_str() );
+        std::fflush( stdout );
         runVerb();
     }
     else
@@ -2722,6 +2729,9 @@ inline void appendSubjectGraphVerb( const MainDispatch& d )
         }
         std::fclose( capture );
         (void)rw::applyCompactDialect( doc, ::compactLegendHint( sub, doc ) );   // not shaped → the bytes as emitted (the DEFAULT posture's rule)
+        // the open tag goes out after the verb ran: name_test_hops= (S5) is read off the rows it printed
+        const std::size_t nameTest = args->form == rw::GraphSubjectForm::Path ? rw::graphSubjectNameTestHops( doc ) : 0;
+        rw::emitRaw( stdout, rw::graphSubjectOpenXml( *args, rw::GraphSubjectOpen{ .nameTestHops = nameTest } ).c_str() );
         std::fwrite( doc.data(), 1, doc.size(), stdout );
     }
     rw::emitRaw( stdout, std::string( rw::kGraphSubjectCloseXml ).c_str() );

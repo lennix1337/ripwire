@@ -19,7 +19,9 @@
 # FIX ROUND 1 (review B1/S1-S5, mutants):
 #   (n5)(n6)(n7)(c3) a span ends at a sentence stop, a comma or a clause word: a LATER clause's symbol never becomes an endpoint
 #   (n5b) a `*` token is never an endpoint (a glob --path the task did not write)
-#   (s4a)(s4b)(s4c) `dict()`, «guillemets», full-width ？ endpoints are read
+#   (t1) unresolved= names the spelling that failed; (s4a)(s4b)(s4c) `dict()`, «guillemets», full-width ？ endpoints are read
+#   (x2) the MCP callers block carries its JSON as CDATA with dialect="json" (no &quot;); (b1)(b2) a token budget holds the verb back (held="budget")
+#   (h1)(h2) a path hop matched by name alone into a test file says so (name_test_hops=); the same hop into a source file does not
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"
@@ -114,7 +116,8 @@ else no "(m1) common-callers form: $f"; fi
 run --for="path from startEntry to leaf_sink notReal_xq" >"$TMP/t1.xml"
 f="$( facts "$TMP/t1.xml" )"
 case "$f" in *"verb=--path=startEntry,leaf_sink "*"tried=2 "*) ok "(t1) the unresolved last-first candidate falls through, tried=2: $f";; *) no "(t1) $f";; esac
-
+u="$( attr "$TMP/t1.xml" unresolved )"
+if [ "$u" = "notReal_xq" ]; then ok "(t1b) unresolved= names the spelling that failed"; else no "(t1b) unresolved=[$u]"; fi
 
 for arm in "n1|path from startEntry to serialising a dict" "n2|path from startEntry to spawning ripgrep" \
            "n3|path from startEntry to notReal_xq" "n4|how does startEntry reach leaf_sink"
@@ -150,6 +153,64 @@ do
     then ok "($id) no block for \"$q\""
     else no "($id) a block for \"$q\": $( facts "$TMP/$id.xml" )"; fi
 done
+
+# S2: a token budget holds the verb back: the self-closed tag names it, verb= is the call, no verb body
+for arm in "b1a|--token-budget=4100" "b1b|--max-tokens=4100"
+do
+    id="${arm%%|*}"; fl="${arm#*|}"
+    run --for="path from startEntry to leaf_sink" "$fl" >"$TMP/$id.xml"
+    if [ "$( attr "$TMP/$id.xml" held )" = "budget" ] && [ "$( attr "$TMP/$id.xml" verb )" = "--path=startEntry,leaf_sink" ] \
+       && grep -q '<graph_verb [^>]*/></ctx>$' "$TMP/$id.xml" && ! grep -q '<path ' "$TMP/$id.xml" && xmlok "$TMP/$id.xml"
+    then ok "($id) $fl: held=\"budget\", verb= names the call, no verb body, well-formed"
+    else no "($id) $fl: held=[$( attr "$TMP/$id.xml" held )] $( facts "$TMP/$id.xml" )"; fi
+done
+mcp_call(){ printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"for","arguments":{"path":"%s","task":"%s"%s}}}\n' "$FX" "$1" "${2:-}" \
+           | ( cd "$FX" || exit 1; "$BIN" --mcp 2>/dev/null ) | python3 -c '
+import sys, json
+for line in sys.stdin:
+    try: d = json.loads( line )
+    except Exception: continue
+    c = d.get( "result", {} ).get( "content" )
+    if c: print( c[0].get( "text", "" ), end="" )'; }
+mcp_call "path from startEntry to leaf_sink" ',"budget_tokens":4100' >"$TMP/b2.xml"
+if [ "$( attr "$TMP/b2.xml" held )" = "budget" ] && grep -q '<graph_verb [^>]*/></ctx>$' "$TMP/b2.xml" && ! grep -q '<path ' "$TMP/b2.xml"
+then ok "(b2) MCP budget_tokens: the same held=\"budget\" tag, no verb body"
+else no "(b2) MCP budget_tokens: held=[$( attr "$TMP/b2.xml" held )]"; fi
+
+# S1: the MCP callers block is JSON in CDATA (not XML-escaped), dialect="json"
+mcp_call "callers of leaf_sink" >"$TMP/x2.xml"
+if python3 - "$TMP/x2.xml" <<'PY'
+import re, sys, json
+s = open( sys.argv[1], encoding="utf8" ).read()
+m = re.search( r'<graph_verb ([^>]*dialect="json"[^>]*)>(<!\[CDATA\[.*\]\]>)</graph_verb></ctx>$', s, re.S )
+if not m or "&quot;" in s[ s.index( "<graph_verb" ): ]: sys.exit( 1 )
+body = m.group( 2 )[ 9:-3 ].replace( "]]]]><![CDATA[>", "]]>" )
+json.loads( body )
+PY
+then ok "(x2) MCP callers: dialect=\"json\", CDATA body parses as JSON, no &quot;"
+else no "(x2) MCP callers block is not CDATA JSON: $( grep -o '<graph_verb [^>]*>' "$TMP/x2.xml" | head -c 300 )"; fi
+
+# S5: a by-name hop into a test file is disclosed; the same hop into a source file is not
+mkdir -p "$FX/ts/src" "$FX/ts/tests"
+cat > "$FX/ts/src/real.ts" <<'TS'
+export function endOne() {}
+export function endTwo() {}
+export function startOne(thing: any) { thing.make(); }
+export function startTwo(thing: any) { thing.build(); }
+export class Real { build() { endTwo(); } }
+TS
+cat > "$FX/ts/tests/fake.test.ts" <<'TS'
+import { endOne } from "../src/real";
+export class Fake { make() { endOne(); } }
+TS
+run --for="path from startOne to endOne" >"$TMP/h1.xml"
+if [ "$( attr "$TMP/h1.xml" name_test_hops )" = "1" ] && grep -q 'via="name"' "$TMP/h1.xml" && xmlok "$TMP/h1.xml"
+then ok "(h1) a by-name hop into tests/fake.test.ts: name_test_hops=1"
+else no "(h1) name_test_hops=[$( attr "$TMP/h1.xml" name_test_hops )] $( facts "$TMP/h1.xml" )"; fi
+run --for="path from startTwo to endTwo" >"$TMP/h2.xml"
+if [ "$( attr "$TMP/h2.xml" name_test_hops )" = "-" ] && grep -q 'via="name"' "$TMP/h2.xml" && grep -q '<graph_verb ' "$TMP/h2.xml"
+then ok "(h2) the same shape through a source file: no name_test_hops"
+else no "(h2) name_test_hops=[$( attr "$TMP/h2.xml" name_test_hops )] $( facts "$TMP/h2.xml" )"; fi
 
 run --for="path from startEntry to leaf_sink" --json >"$TMP/j1.json"
 if [ -s "$TMP/j1.json" ] && ! grep -q 'graph_verb' "$TMP/j1.json"; then ok "(j1) --json carries no block"; else no "(j1) --json has a block or is empty"; fi

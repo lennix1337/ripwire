@@ -14,6 +14,7 @@
 // answer is never replaced: the block rides after it, inside <graph_verb endpoints="subject">, whose legend says the
 // endpoints were read from prose (a name match, hedged), and the verb's default caps and next= paging bound it.
 // Nothing resolves → nothing is appended (byte-identical to the answer without this lane).
+#include "filter.h"      // pathTierOf — name_test_hops=: the verb's own test/fixture path classifier
 #include "graph.h"       // resolveAllByNameQualified / resolveFocus — the callers / connect resolvers
 #include "lexical.h"     // parseGraphSubject — the subject-only half
 #include "nextverb.h"    // nextFlag / nextAttrXml — verb= is a pasteable invocation
@@ -38,6 +39,17 @@ struct GraphSubjectArgs
     std::vector<std::string> endpoints;   // the resolved spellings, slot order
     std::vector<std::string> spans;       // the words each slot was read from
     std::size_t              tried = 0;   // combinations tried before this one resolved (1 = the first)
+    std::vector<std::string> unresolved;  // the spellings the resolver did NOT find on the way (tried > 1 only), first-tried first
+};
+
+// How a block is opened (FOR-ROUTE fix1): `jsonDialect` = the body is the MCP callers twin's JSON in a CDATA section (S1);
+// `held` = a token budget is set, so the verb did NOT run here and the tag is self-closed with the verb= handle only (S2);
+// `nameTestHops` = path rows matched by name alone whose p= is a test or fixture path (S5), 0 = attribute absent.
+struct GraphSubjectOpen
+{
+    bool        jsonDialect  = false;
+    bool        held         = false;
+    std::size_t nameTestHops = 0;
 };
 
 // The first candidate combination whose every endpoint the verb's own resolver finds; nullopt when the task is not
@@ -103,7 +115,12 @@ inline std::optional<GraphSubjectArgs> chooseGraphSubjectArgs( const IngestResul
         }
         if( all )
         {
-            return GraphSubjectArgs{ gs->form, combos[k], gs->spans, k + 1 };
+            GraphSubjectArgs a{ gs->form, combos[k], gs->spans, k + 1, {} };
+            for( const auto& [ spelling, ok ] : memo )
+            {
+                if( !ok ) { a.unresolved.push_back( spelling ); }
+            }
+            return a;
         }
     }
     return std::nullopt;
@@ -126,17 +143,42 @@ inline std::pair<std::string_view, std::string> graphSubjectVerbFlag( const Grap
     return { "--path=", v };
 }
 
+// Path rows (`<s t= n= p="file:line" [via="name"]/>`) matched by NAME ALONE whose p= is a test or fixture path (pathTierOf, the
+// classifier the verb's own from_test= uses). A text read of the verb's printed rows, so it only HEDGES: zed-03's chain crosses
+// `Markdown::new(` bound by name to a test constructor, an intermediate hop the endpoint-only from_test=/to_test= cannot see.
+inline std::size_t graphSubjectNameTestHops( std::string_view doc )
+{
+    std::size_t n = 0;
+    for( std::size_t at = doc.find( "<s " ); at != std::string_view::npos; at = doc.find( "<s ", at + 3 ) )
+    {
+        const std::size_t end = doc.find( "/>", at );
+        if( end == std::string_view::npos ) { break; }
+        const std::string_view row = doc.substr( at, end - at );
+        const std::size_t      p   = row.find( " p=\"" );
+        if( p == std::string_view::npos || row.find( " via=\"name\"" ) == std::string_view::npos ) { continue; }
+        std::string_view path = row.substr( p + 4 );
+        path                  = path.substr( 0, path.find( '"' ) );
+        path                  = path.substr( 0, path.rfind( ':' ) );
+        n += pathTierOf( path ) == PathTier::TestOrBench ? 1 : 0;
+    }
+    return n;
+}
+
 // The opening of the block: its own legend (present only with the block; no `--` inside the comment), then
-// <graph_verb endpoints="subject" verb=… from_span=/to_span= | of_span= [| and_span=] [tried=]>. tried= is present
-// only when an earlier combination did not resolve.
-inline std::string graphSubjectOpenXml( const GraphSubjectArgs& a )
+// <graph_verb endpoints="subject" verb=… from_span=/to_span= | of_span= [| and_span=] [tried= unresolved=] [dialect=] [held=] [name_test_hops=]>.
+// tried=/unresolved= are present only when an earlier combination did not resolve; every other clause only with its attribute.
+inline std::string graphSubjectOpenXml( const GraphSubjectArgs& a, const GraphSubjectOpen& o = {} )
 {
     std::string out = "<!-- ripwire for graph_verb: the task is spelled as a graph question, so the verb it names ran too, on the built "
                       "index with its default caps; endpoints=\"subject\": its endpoints were READ FROM THE TASK WORDS (the *_span= "
-                      "attributes, cut at the first for/with/via/in/on/when/using/during/at/near), matched by name, not chosen "
+                      "attributes, cut at the first for/with/via/in/on/when/using/during/at/near, sentence end, comma or clause word "
+                      "such as and/then/how/which), matched by name, not chosen "
                       "from the graph: check they are the symbols meant; verb= is the same call to paste";
-    out += a.tried > 1 ? "; tried= combinations of the words were tried, the first that resolves ran" : "";
-    out += "; the verb's own legend follows; the answer above is unchanged, and these bytes are not in est_tokens --><graph_verb endpoints=\"subject\"";
+    out += a.tried > 1 ? "; tried= combinations of the words were tried, the first that resolves ran; unresolved= names the spellings that did not resolve" : "";
+    out += o.jsonDialect ? "; dialect=\"json\": this surface answers the verb as JSON, carried as CDATA text, not as XML rows" : "";
+    out += o.nameTestHops > 0 ? "; name_test_hops=N: N path hops were matched by name alone to a definition in a test or fixture path, so they may not be the call the source makes" : "";
+    out += o.held ? "; held=\"budget\": a token budget is set, so the verb did NOT run here: verb= is the one call to run; the answer above is unchanged --><graph_verb endpoints=\"subject\""
+                  : "; the verb's own legend follows; the answer above is unchanged, and these bytes are not in est_tokens --><graph_verb endpoints=\"subject\"";
     const auto [ flag, value ] = graphSubjectVerbFlag( a );
     out += nextAttrXml( nextFlag( flag, value ), "verb" );
     static constexpr std::string_view kPathSpans[]   = { "from_span", "to_span" };
@@ -147,8 +189,17 @@ inline std::string graphSubjectOpenXml( const GraphSubjectArgs& a )
         const std::string_view name = a.form == GraphSubjectForm::Path ? kPathSpans[k] : a.form == GraphSubjectForm::Common ? kCommonSpans[k] : "of_span";
         out += " " + std::string( name ) + "=\"" + std::string( escapeXml( a.spans[k], esc ) ) + "\"";
     }
-    out += a.tried > 1 ? " tried=\"" + std::to_string( a.tried ) + "\"" : "";
-    out += ">";
+    if( a.tried > 1 )
+    {
+        out += " tried=\"" + std::to_string( a.tried ) + "\"";
+        std::string names;
+        for( const std::string& u : a.unresolved ) { names += ( names.empty() ? "" : " " ) + u; }
+        out += names.empty() ? "" : " unresolved=\"" + std::string( escapeXml( names, esc ) ) + "\"";
+    }
+    out += o.jsonDialect ? " dialect=\"json\"" : "";
+    out += o.held ? " held=\"budget\"" : "";
+    out += o.nameTestHops > 0 ? " name_test_hops=\"" + std::to_string( o.nameTestHops ) + "\"" : "";
+    out += o.held ? "/>" : ">";
     return out;
 }
 
