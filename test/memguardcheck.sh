@@ -754,51 +754,76 @@ fi
 #       functions each) but the z/ functions CALL nothing: the same 10 files are parsed at the stop and the peak footprint
 #       is 35.4-40.4 MB (53-60 % of the limit, 40 runs incl. loaded), and it still passes at 2400 functions per file.
 #       $EG, and B8's need for an unguarded peak far over the limit, are unchanged.
-EG12="$TMP/eg12"; mkdir -p "$EG12"
-python3 - "$EG12" <<'PY3'
+# CI-FLAKES FIX1 (2026-10-27): the call-free $EG12 of the first fix was still shaped like $EG -- the stop is reached by what the
+#       parse RETAINS (~26 MB of facts) -- and that shape depends on the worker count. Reproduced with the pool forced to W
+#       workers (a DYLD_INTERPOSE shim on std::thread::hardware_concurrency, Release and plain builds, 10-core host): W=10/16
+#       stop after 10-20 files and end under the hard line; W=3 (the macOS runner: CI run 40439389312, macos-26 Release shard
+#       4/4, "34 of them parsed", the stop line and THEN rc 5 "memory limit reached during the graph build") needs 33-34 files
+#       to reach the parse line, because three in-flight trees are a small share of 32 MB, so nearly all of it is facts, and
+#       the graph build roughly doubles facts: 2/3 runs at W=3 and W=4 ended on the hard line (rc 5, "none" parsed), and
+#       the six-attempt loop could not help because the runner repeats the outcome. The fixture's size is therefore not one
+#       number: a few big files whose TREES carry the footprint (a function whose body is one C array of N elements is one
+#       def and no calls, so it is almost all tree and almost no facts) reach the parse line from the workers in flight, W x tree, and leave little
+#       to double. How much one tree weighs against 32 MB is the pool's business, so the arm walks a short ladder of element
+#       counts by outcome (rc 0 with no stop = too light, go up; the hard line after the stop = too heavy, go down) and
+#       passes on the first rung that shows the whole property. Measured, Release, workers forced to 3/4/6/10/16: 9000 elements
+#       -> rc 0 with the stop at W=3,4,6,10,16 (2 of 2 each); 14000 -> the same; 20000 -> rc 5 at W=10 and 16 and
+#       4000 -> no stop at W=3,4 (so the ladder is not decoration).
+EG12="$TMP/eg12"
+mkeg12(){   # mkeg12 ELEMENTS: 320 small a-h files + 40 z/ files of 4 array-holding functions each (no calls)
+    rm -rf "$EG12"; mkdir -p "$EG12"
+    python3 - "$EG12" "$1" <<'PY3'
 import os, sys
-root = sys.argv[1]
+root, n = sys.argv[1], int( sys.argv[2] )
 for d in "abcdefgh":
     os.makedirs( os.path.join( root, d ), exist_ok=True )
     for f in range( 40 ):
         open( os.path.join( root, d, "f%02d.c" % f ), "w" ).write( "int %s_%d(int x){ return x; }\n" % ( d, f ) )
 os.makedirs( os.path.join( root, "z" ), exist_ok=True )
-for f in range( 80 ):
+for f in range( 40 ):
     open( os.path.join( root, "z", "big%02d.c" % f ), "w" ).write(
-        "".join( "int z%d_%d(int x){ return x + %d; }\n" % ( f, k, k ) for k in range( 1500 ) ) )
+        "".join( "int z%d_%d(int x){ int a[] = {%s}; return x; }\n" % ( f, k, ",".join( [ "1" ] * n ) ) for k in range( 4 ) ) )
 PY3
+}
 # ASan quarantine inflates the footprint past the hard line before the soft parse stop is visible (review G1:
 #   peak 498 MB under ASan vs 82 MB plain); a plain binary ignores the option. A sanitizer build keeps 128M: its runtime
 #   carries a fixed footprint of its own that does not double after the stop (measured with llvm@22 ASan: 64M ends on
 #   the hard line during the ingest 3/3, 128M passes), which is the headroom the floor buys a plain build.
 B12LIM=64M
 LC_ALL=C grep -q -a '__asan_init' "$BIN" 2>/dev/null && B12LIM=128M
-b12="" b12env=""
-for attempt in 1 2 3 4 5 6; do
+b12="" b12env="" b12lad=( 2500 4000 6000 9000 14000 ) b12i=3 b12lo=0 b12hi=4 b12trail=""
+LC_ALL=C grep -q -a '__asan_init' "$BIN" 2>/dev/null && b12lad=( 5000 8000 12000 18000 28000 )
+for attempt in 1 2 3 4 5 6 7 8; do
+    mkeg12 "${b12lad[$b12i]}"
     ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}quarantine_size_mb=0" RIPWIRE_TEST_MEMGUARD=eager:1 "$BIN" "$EG12" --no-cache --max-memory=$B12LIM --top-k=3 >"$TMP/b12.out" 2>"$TMP/b12.err"; rc=$?
     hdr="$( grep -oE '<!-- files=[^>]*-->' "$TMP/b12.out" | head -1 )"
     parsed="$( printf '%s' "$hdr" | grep -oE 'memory_parsed=[0-9]+' | grep -oE '[0-9]+' )"
+    b12trail="$b12trail [${b12lad[$b12i]} elems: rc=$rc parsed=${parsed:--}]"
     if [ "$rc" = 0 ] && case "$hdr" in *"memory_stop=parse"*) true;; *) false;; esac && [ "${parsed:-0}" -ge 2 ] && grep -q 'p="z/' "$TMP/b12.out"; then
         b12=pass; break
     fi
-    if { [ "$rc" = 5 ] && grep -q '^ripwire: memory limit reached during the ' "$TMP/b12.err" && ! grep -q 'before anything was built' "$TMP/b12.err"; } \
-       || { [ "$rc" = 0 ] && ! grep -q 'memory_stop=' "$TMP/b12.out"; }; then
-        b12env="$b12env [attempt $attempt: rc=$rc $( grep '^ripwire:' "$TMP/b12.err" | tail -1 | head -c 70 )]"
-        continue
+    if [ "$rc" = 5 ] && grep -q '^ripwire: memory limit reached during the ' "$TMP/b12.err" && ! grep -q 'before anything was built' "$TMP/b12.err"; then
+        b12hi=$(( b12i - 1 ))   # too heavy: the parse stop landed too late for the hard line; lighter trees
+    elif [ "$rc" = 0 ] && ! grep -q 'memory_stop=' "$TMP/b12.out"; then
+        b12lo=$(( b12i + 1 ))   # too light: the parse line was never crossed; heavier trees
+    else
+        break                    # anything else (the D1 shape, a stop that keeps no z/ file, a wrong line) fails at once
     fi
-    break
+    if [ "$b12lo" -gt "$b12hi" ]; then b12lo=0; b12hi=4; fi   # the window closed on a noisy reading: walk the ladder again
+    b12i=$(( ( b12lo + b12hi ) / 2 ))
 done
-[ -n "$b12env" ] && printf '  ..    (B12) environment outcome(s) re-run:%s\n' "$b12env"
-# a red here must say WHAT the runner measured (CI-FLAKES: PR #443's red named only the hard line): the unguarded OS peak of
-# this fixture and the headroom the arm assumes, so the next occurrence is a number, not a guess (macOS `time -l`; silent elsewhere)
+[ "$b12" != pass ] && [ -n "$b12trail" ] && b12env="$b12trail"
+[ -n "$b12env" ] && [ "$b12" = pass ] && printf '  ..    (B12) ladder:%s\n' "$b12trail"
+# a red here must say WHAT the runner measured, in the FAIL line itself (CI run 40439389312 showed only failure-shaped lines,
+# so a separate diagnostic line never reached the log): the rungs tried, and the unguarded OS peak of the last rung (macOS `time -l`)
+b12diag=""
 if [ "$b12" != pass ] && [ -x /usr/bin/time ]; then
-    printf '  ..    (B12) diagnostic: unguarded %s; the arm needs the parse line (%s/2) crossed by a real reading, then ends under %s\n' \
-        "$( RIPWIRE_TEST_MEMGUARD=eager:1 /usr/bin/time -l "$BIN" "$EG12" --no-cache --max-memory=4G --top-k=3 2>&1 >/dev/null | grep -E 'peak memory footprint|maximum resident' | tr -s ' ' | tr '\n' ';' )" "$B12LIM" "$B12LIM"
+    b12diag=" unguarded: $( RIPWIRE_TEST_MEMGUARD=eager:1 /usr/bin/time -l "$BIN" "$EG12" --no-cache --max-memory=4G --top-k=3 2>&1 >/dev/null | grep -E 'peak memory footprint|maximum resident' | tr -s ' ' | tr '\n' ';' )"
 fi
 if [ "$b12" = pass ]; then
     ok "(B12) a real parse stop ($B12LIM, eager readings) answers from the $parsed files it parsed — the big z/ files, first in the parse order (attempt $attempt)"
 else
-    no "(B12) rc=$rc header: $hdr stderr: $( grep '^ripwire:' "$TMP/b12.err" | head -c 200 )"
+    no "(B12) rc=$rc header: $hdr stderr: $( grep '^ripwire:' "$TMP/b12.err" | head -c 200 ) rungs:$b12trail$b12diag"
 fi
 if [ "$b12" = pass ] && grep -q "^ripwire: the memory guard stopped the parse at the parse line (half of the $B12LIM limit)" "$TMP/b12.err"; then
     ok "(B12b) the stop line names the parse line (half of the limit), not the limit it did not reach"
