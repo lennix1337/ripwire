@@ -398,6 +398,8 @@ check( "(M1) MCP impact: the same <ring> with the queue row as the CLI", ring( r
 check( "(M1) MCP path_between: the same queue <bridge> as the CLI", bridge( resp.get( 2, "" ) ) != "" and bridge( resp.get( 2, "" ) ) == bridge( t2 ), repr( resp.get( 2, "" )[-300:] ) )
 imf = run( P, "--impact=_get", "--legend=full" ) or ""; pf = run( P, "--path=post,handle", "--legend=full" ) or ""
 check( "(L1) the queue clause rides on a queue ring and a queue bridge (full legend)", "HAND-OFF" in imf and "HAND-OFF" in pf, imf[:200] )
+check( "(L1) a queue-only <ring d=1> is defined: the full legend says what the root d=1 means (CodeRabbit 4387143955)",
+       attr( ring( imf ), "d" ) == "1" and "<ring d=1" in imf and "only queue hand-offs" in imf, ring( imf )[:200] )
 check( "(L1) the queue clause is present-only: an answer with no queue row lacks it", run( tmp + "/cache", "--impact=fetch", "--legend=full" ) is not None
        and "HAND-OFF" not in ( run( tmp + "/cache", "--impact=fetch", "--legend=full" ) or "" ), "" )
 if shutil.which( "xmllint" ):

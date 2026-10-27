@@ -363,7 +363,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "slot_name_also",    "slot_name_also=K: K name-only callers hidden behind the same-type ones", false, "vr" },
     // HOP1 (src/backhops.h kImpactRingLegend): --impact's hedged slot ring, present-only
     { "reaches_hedged",    "reaches_hedged=N: N functions MAY reach of= through a hedged hop: one or two calls through a struct field or container (3 field calls within 16 callers), plus their proven callers past narrow hops; never in reaches= or any count" },
-    { "calls",             "ring d=2|3 total= shown= next=; rh called_by= called_at= via= calls=: called_by may call calls= through a field or container at called_at=; d=3 the third field hop; slot_fns=|cands=K the functions it may hold; via=queue d=1 a queue hand-off; a hedge, in no count", false, "rh" },
+    { "calls",             "ring d=1|2|3 (the deepest row; 1 = only queue hand-offs) total= shown= next=; rh called_by= called_at= via= calls=: called_by may call calls= through a field or container at called_at=; d=3 the third field hop; slot_fns=|cands=K the functions it may hold; via=queue d=1 a queue hand-off; a hedge, in no count", false, "rh" },
     // hub-fold (src/backhops.h kImpactHubLegend): the folded ring member, its count and the page cut, present-only
     { "behind",            "hub n= via= d= behind= tested= sample= next=: a ring member with over 16 proven callers, folded: behind= of reaches_hedged= unlisted (tested= a test reaches, sample= first 3: tested, no proven caller, same dir, rank); next= lists them", false, "hub" },
     { "reaches_hedged_hubs", "reaches_hedged_hubs=K: K of them sit behind a hub" },
