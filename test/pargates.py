@@ -331,7 +331,11 @@ GATE_BUDGET_SEC = {
     # (L) 56 s, (M) 17 s, (N) 201 s, (D) 487 s, (UD) 62 s, (UW) 13 s), against 50-70 s on an idle host: a 30-40x swing for the
     # same gate. No arm dominates (the largest, (U), is 36 %), so splitting one out would not move the total; the budget is a hang
     # tripwire, never a perf bar, and 1800 clears the observed CI kill by 1.5x.
-    "compactlegendcheck.sh":     1800,
+    # 2026-10-27 (CR harvest of PR #457, 4392937909): 1800 -> 3600. Two COMPLETED runs on a loaded host outlast 1800: the 2115 s one
+    # above and a standalone 3072 s run on the train branch (344 PASS / 0 FAIL, host load 12-16). A budget under a measured completed run
+    # reads contention as a hang, and this table's rule is that a generous tripwire costs nothing. 3600 clears 3072 by 17 % (and the
+    # observed CI kill at 1200 by 3x); a real hang still dies, an hour on.
+    "compactlegendcheck.sh":     3600,
     "shapingflagcheck.sh":       1200,
     "collectioncapcheck.sh":      900,
                                           # under -j6, rc=124 at the flat cap on both ubuntu PLAIN legs of run
