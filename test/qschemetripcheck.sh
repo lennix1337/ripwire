@@ -34,6 +34,10 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-27, lane fn-slot (IX1-V2, base integration/train-39 3d03da53): RE-PINNED ONCE with UPDATE_GOLDEN=1 (b4eb6e92… -> 18dfbcac…).
+#   Watched text: kParserVer 239 -> 247, a PLACEHOLDER (train 40 renumbers; Go value refs now include field assignments, method
+#   values and registrar-parameter slot facts, so the dead set is extraction-dependent), its quality.h mirror with it.
+#   kCacheVersion stays 44 (no record changes shape). kQSnapCacheScheme stays 24: no watched quality.h function moved.
 # 2026-10-27, train 39 (lanes ci-flakes, for-small, path-order, receiver-fixes merged onto integration/train-38 aaadc628): RE-DERIVED
 #   ONCE with UPDATE_GOLDEN=1 on the composed tree (the two branch pins f9ffa1bf… / dc0d4c67… conflicted -> b4eb6e92…). Watched text: kParserVer
 #   235 -> 239 (rich 240; receiver-fixes' typing, its placeholder 237) and quality.h's kIngestParserVerMirror with it.

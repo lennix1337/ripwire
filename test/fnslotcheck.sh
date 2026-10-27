@@ -27,7 +27,7 @@ echo "fnslotcheck: BIN=$BIN ($( "$BIN" --version 2>/dev/null | grep -o 'built_fr
 FIX="$ROOT/test/fnslotfix"
 [ -d "$FIX" ] || { echo "  FAIL  fixture dir missing: $FIX"; exit 2; }
 fail=0
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 run(){
     local out rc
