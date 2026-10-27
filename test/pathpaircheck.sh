@@ -54,6 +54,8 @@
 #       source definition reaches, from_test=1 prints with NO next=.
 #   (ZD) a C declaration is never the source twin (tests/x.c defines backspace, src/core.h declares it: no disclosure); (ZE) a real
 #       definition beside the declaration is named. (ZP) a twin next= beside alt=: the alt continuation is alt_next=, not lost.
+#   (ZX) the same beside pairs_unlisted=: a bound tests/ `start` with 17 to= groups: unlisted_next= keeps the cap's continuation, next= is the source
+#       twin's (cr-prepass-39; the alt= arm above never reached the unlisted_next= branch).
 #
 # Usage: test/pathpaircheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -137,6 +139,13 @@ printf 'def edit():\n    return 1\n\ndef helper():\n    return edit()\n\ndef bac
 printf 'def edit():\n    return 1\n\ndef backspace():\n    return edit()\n' > "$TMP/twu/tests/fake.py"
 mkdir -p "$TMP/zp/src" "$TMP/zp/tests"
 cp "$TMP/many/k.py" "$TMP/zp/src/k.py"; printf 'from src.k import target\n\ndef go():\n    return target()\n' > "$TMP/zp/tests/t.py"
+mkdir -p "$TMP/zx/src" "$TMP/zx/tests"
+python3 - "$TMP" <<'PY'
+import sys
+t = sys.argv[1]
+open( t + "/zx/src/k.py", "w" ).write( "".join( "class C%d:\n    def target(self):\n        return 1\n\n" % i for i in range( 17 ) ) + "def helper():\n    return C0().target()\n\ndef start():\n    return helper()\n" )
+open( t + "/zx/tests/t.py", "w" ).write( "from src.k import C0\n\ndef start():\n    return C0().target()\n" )
+PY
 mkdir -p "$TMP/qm" "$TMP/qt" "$TMP/twf/src" "$TMP/twf/fixtures/copy" "$TMP/cd/src" "$TMP/cd/tests" "$TMP/ce/src" "$TMP/ce/tests"
 printf 'package m\n\ntype Matcher struct{}\n\nfunc (m *Matcher) helper() int { return m.scan() }\nfunc (m *Matcher) Loop() int   { return m.helper() }\nfunc (m *Matcher) scan() int   { return 1 }\n' > "$TMP/qm/matcher.go"
 printf 'package m\n\ntype Terminal struct{ m *Matcher }\n\nfunc (t Terminal) Loop() int { return t.m.scan() }\n' > "$TMP/qm/terminal.go"
@@ -197,6 +206,7 @@ run qw Loop,matcher.go:extendedMatch > "$TMP/Q.out"; run qw Loop,extendedMatch >
 run qw Loop,matcher.go:extendedMatch --legend=full > "$TMP/QL.out"; run qw Loop,extendedMatch --legend=full > "$TMP/QNL.out"
 run qh go,gold.py:target > "$TMP/QH.out"; run qa backspace,edit > "$TMP/QA.out"
 run qm Loop,matcher.go:scan > "$TMP/QM.out"; run qt matcher.go:start,scan > "$TMP/QT.out"
+run zx start,target > "$TMP/ZX.out"; run zx start,target --legend=full > "$TMP/ZXL.out"
 run zp go,target > "$TMP/ZP.out"; run zp go,target --legend=full > "$TMP/ZPL.out"; run twu backspace,edit > "$TMP/ZU.out"; run twf backspace,edit > "$TMP/ZF.out"; run cd backspace,edit > "$TMP/ZD.out"; run ce backspace,edit > "$TMP/ZE.out"
 run tw backspace,edit > "$TMP/Z.out"; run tws backspace,edit > "$TMP/ZS.out"; run twt backspace,edit > "$TMP/ZT.out"
 run twn backspace,edit > "$TMP/ZN.out"; run twa backspace,edit > "$TMP/ZA.out"
@@ -317,6 +327,10 @@ rzp = root( rd( "ZP" ) )
 check( "ZP", rzp.get( "from_test" ) == "1" and rzp.get( "alt" ) == "3" and rzp.get( "next", "" ).startswith( "--path=src/k.py::C" ) and rzp.get( "alt_next", "" ).startswith( "--path=src/k.py::C" )
        and rzp.get( "next" ) != rzp.get( "alt_next" ) and "alt_next=" in rd( "ZPL" ),
        "twin next= and the alt continuation each on their own attribute: %r" % { k: rzp.get( k ) for k in ( "alt", "next", "alt_next" ) } )
+rzx = root( rd( "ZX" ) )
+check( "ZX", rzx.get( "from_test" ) == "1" and rzx.get( "pairs_unlisted" ) == "17" and rzx.get( "next", "" ).startswith( "--path=src/k.py:start," )
+       and rzx.get( "unlisted_next", "" ).startswith( "--path=tests/t.py:start," ) and "alt_next" not in rzx and "alt" not in rzx and "unlisted_next=" in rd( "ZXL" ),
+       "17 to= groups + a tests/ copy bound: unlisted_next= keeps the cap's continuation, next= is the source twin's: %r" % { k: rzx.get( k ) for k in ( "pairs_unlisted", "next", "unlisted_next", "alt_next" ) } )
 rzd = root( rd( "ZD" ) )
 check( "ZD", "from_test" not in rzd and "next" not in rzd and "tests/x.c" in rzd.get( "from_p", "" ) and rzd.get( "from_defs" ) == "2",
        "a C header declaration is not a source twin (no disclosure): %r" % { k: rzd.get( k ) for k in ( "from_p", "from_defs", "from_test", "next" ) } )
@@ -341,7 +355,7 @@ else
     no "(L) the pairs_unlisted clause rides wrongly"
 fi
 if command -v xmllint >/dev/null 2>&1; then
-    xb=0; for k in A B C J CL T V U UL Q QL Z ZL ZT ZP ZU; do xmllint --noout "$TMP/$k.out" 2>/dev/null || { xb=1; echo "    $k.out is not well-formed"; }; done
+    xb=0; for k in A B C J CL T V U UL Q QL Z ZL ZT ZP ZU ZX; do xmllint --noout "$TMP/$k.out" 2>/dev/null || { xb=1; echo "    $k.out is not well-formed"; }; done
     if [ $xb -eq 0 ]; then ok "(L) A B C J and the full-legend answer parse as XML"; else no "(L) malformed answer"; fi
 else
     echo "  SKIP  (L) xmllint absent"
