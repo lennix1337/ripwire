@@ -5,6 +5,7 @@
 
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
+#include "infra/sortutil.h"   // svLess: the explicit byte order the test-only name vetting sorts by (portablebuildcheck #6)
 
 // verbs_quality.h — the quality family, moved VERBATIM from main.cpp in the 2026-08-29 split:
 // the delta-basis plumbing (noBaselineFatalMessage, loadRefPairDelta, resolveDeltaBasis),
@@ -2789,6 +2790,31 @@ std::optional<int> runQualityViews( const MainDispatch& d )
             }
         }
 
+        // D1 TESTONLY-DEAD: a library function (not itself test code) whose EVERY indexed caller is a test symbol
+        // (filter.h isTestSymbol: the shared test-path rule plus the in-file test conventions). Not dead and never in
+        // count=: a test reaches it, a library caller nowhere in the index does. Only callers decide it, so an edge a
+        // test reaches by name alone can only add a test caller, never hide a library one. Decorated and value-held
+        // defs stay off (a registry or table may be the library's use). The name vetting below drops any row whose
+        // name a non-test code file spells at all (a module-level call, an aliased import, a value), so a site the call
+        // graph did not attribute cannot leave a used function on this list.
+        std::vector<NodeId> testOnly;
+        const auto* inCi = g.inEdges.colIndices();
+        const auto testOnlyByEdges = [ & ]( const Symbol& s, std::uint32_t edgeBegin, std::uint32_t edgeEnd ) -> bool
+        {
+            if( isTestSymbol( ing, s.id ) || quality::pythonDecoratedDef( s, sourceFor( s.fileId ) ) || dcVri.isValueReferenced( s.id ) )
+            {
+                return false;
+            }
+            for( std::uint32_t e = edgeBegin; e < edgeEnd; ++e )
+            {
+                if( !isTestSymbol( ing, inCi[ e ] ) )
+                {
+                    return false;
+                }
+            }
+            return true;
+        };
+
         // collect candidates: in-degree == 0, not exported, sorted for determinism
         std::vector<NodeId> candidates;
         candidates.reserve( 64 );
@@ -2806,7 +2832,10 @@ std::optional<int> runQualityViews( const MainDispatch& d )
             {
                 continue; // may be instantiated by external TUs
             }
-            if( !hasStaticToken( s ) )
+            // D1 TESTONLY-DEAD: Python's module-private convention is internal-interface evidence for the test-only rows
+            // ONLY; a zero-caller row (count=) still needs the `static` token, exactly as before.
+            const bool staticLinkage = hasStaticToken( s );
+            if( !staticLinkage && !quality::pythonModulePrivate( rootRelPath( ing, s.fileId ), s ) )
             {
                 continue; // external linkage may be an entry point/API
             }
@@ -2821,7 +2850,15 @@ std::optional<int> runQualityViews( const MainDispatch& d )
             const std::uint32_t inDeg = inRo[ s.id + 1 ] - inRo[ s.id ];
             if( inDeg != 0 )
             {
+                if( testOnlyByEdges( s, inRo[ s.id ], inRo[ s.id + 1 ] ) )
+                {
+                    testOnly.push_back( s.id );   // vetted by name below, against every non-test reference
+                }
                 continue;
+            }
+            if( !staticLinkage )
+            {
+                continue; // Python private, zero callers: no `static` evidence, so never a count= row
             }
             if( isRegisteredMacroSymbol( s ) )
             {
@@ -2862,6 +2899,68 @@ std::optional<int> runQualityViews( const MainDispatch& d )
             }
             return sa.name < sb.name;
         } );
+        if( !testOnly.empty() )
+        {
+            // name vetting: a whole-word spelling of the name in any NON-test, non-prose indexed file — outside the
+            // def's own signature span — keeps the row off. Text, not references: an aliased import
+            // (`from m import dump as binary_dump`) and a module-level call carry no edge to the def, and a comment
+            // or string mention costs only a missed row, never a used function on this list. Each file is read once,
+            // uncached (the scan may cover the whole tree).
+            std::vector<std::string_view> testOnlyNames;
+            testOnlyNames.reserve( testOnly.size() );
+            for( NodeId id : testOnly ) { testOnlyNames.push_back( ing.symbols[ id ].name ); }
+            std::ranges::sort( testOnlyNames, sortutil::svLess );
+            const auto uniqueEnd = std::ranges::unique( testOnlyNames ).begin();
+            testOnlyNames.erase( uniqueEnd, testOnlyNames.end() );
+            std::vector<std::string_view> spelledOutsideTests;
+            const auto isIdent = []( char c ) noexcept { return std::isalnum( static_cast<unsigned char>( c ) ) || c == '_'; };
+            for( std::uint32_t fileId = 0; fileId < ing.files.size(); ++fileId )
+            {
+                const std::string_view rel = rootRelPath( ing, fileId );
+                if( isTestPath( rel ) || docparse::isProseExtension( docparse::lowerExtOf( rel ) ) )
+                {
+                    continue;
+                }
+                const std::optional<std::string> bytes = docparse::detail::readWholeFile( diskPath( ing, fileId ) );
+                if( !bytes )
+                {
+                    continue;
+                }
+                const std::string_view text = *bytes;
+                for( std::string_view name : testOnlyNames )
+                {
+                    for( std::size_t at = text.find( name ); at != std::string_view::npos; at = text.find( name, at + 1 ) )
+                    {
+                        const std::size_t end = at + name.size();
+                        if( ( at > 0 && isIdent( text[ at - 1 ] ) ) || ( end < text.size() && isIdent( text[ end ] ) ) )
+                        {
+                            continue;
+                        }
+                        const bool ownSignature = std::ranges::any_of( testOnly, [ & ]( NodeId id )
+                        {
+                            const Symbol& d = ing.symbols[ id ];
+                            return d.fileId == fileId && d.name == name && at >= d.sigStartByte && at < d.sigEndByte;
+                        } );
+                        if( !ownSignature )
+                        {
+                            spelledOutsideTests.push_back( name );
+                            break;
+                        }
+                    }
+                }
+            }
+            std::ranges::sort( spelledOutsideTests, sortutil::svLess );
+            std::erase_if( testOnly, [ & ]( NodeId id )
+                           { return std::ranges::binary_search( spelledOutsideTests, std::string_view( ing.symbols[ id ].name ), sortutil::svLess ); } );
+            std::ranges::sort( testOnly, [ & ]( NodeId a, NodeId b )
+            {
+                const Symbol& sa = ing.symbols[a];  const Symbol& sb = ing.symbols[b];
+                const std::string& pa = ing.files[ sa.fileId ];  const std::string& pb = ing.files[ sb.fileId ];
+                if( pa != pb ) { return pa < pb; }
+                if( sa.line != sb.line ) { return sa.line < sb.line; }
+                return sa.name < sb.name;
+            } );
+        }
 
         rw::emitTo( stdout, "<!-- ripwire dead-code: source functions with internal linkage and no caller found in the indexed tree — a name-based "
                      "graph reading, not a confidence judgement (dynamic dispatch, reflection and macro-generated callers are invisible to it). "
@@ -2883,7 +2982,15 @@ std::optional<int> runQualityViews( const MainDispatch& d )
                      "absent at 0. A `static` inside a comment is not linkage evidence. "
                      "Graph evidence is local to the indexed tree; verify before deleting. {}{}-->",
                      // Reference-as-value round: beside its hyphenated siblings above, exactly when the root carries it.
-                     ( std::string( valueRefExcluded > 0 ? "value-ref-excluded=N (absent when 0): internal functions kept off this list because "
+                     ( std::string( testOnly.empty() ? "" : "test-only=N (absent when 0): library functions whose every indexed caller "
+                                                           "is test code (a test path, or an in-file test scope), listed as <to n= t= p= l=> rows "
+                                                           "after the d rows on the first page; not dead and not in count=, the index holds no "
+                                                           "library caller. Internal evidence as for d rows, or a Python leading-underscore name or "
+                                                           "module/package (module-level defs); the name spelled whole-word in any non-test code file, outside its own "
+                                                           "signature, keeps it off. A test helper "
+                                                           "outside a test path, conftest/fixture files and test binaries named only in a build "
+                                                           "file read as library callers, so the list is a floor. " )
+                       + std::string( valueRefExcluded > 0 ? "value-ref-excluded=N (absent when 0): internal functions kept off this list because "
                                                            "a table, field or argument in ANOTHER function or at file scope holds them as a VALUE "
                                                            "(matched by name; it is not a proven call; the callers verb lists the sites); a function "
                                                            "that only stores itself is still listed. One entity, one reason: a def a reason above "
@@ -2910,8 +3017,9 @@ std::optional<int> runQualityViews( const MainDispatch& d )
                                          + ( decoratedExcluded == 0 ? std::string() : std::format( " decorated-excluded=\"{}\"", decoratedExcluded ) )
                                          + ( valueRefExcluded == 0 ? std::string() : std::format( " value-ref-excluded=\"{}\"", valueRefExcluded ) )
                                          + rw::valueRefsDepthAttrXml( ing, dcDepthCut, rw::VrRender{ qvSingleRoot, qvRootPrefix } );   // absent when no cut
-        rw::emitTo( stdout, "<dead-code count=\"{}\" evidence=\"internal-linkage+zero-callers\" register-macro-excluded=\"{}\"{}{}{}{}{}{}>",
-                     candidates.size(), registerMacroExcluded, runnerRootAttr,
+        const std::string testOnlyAttr = testOnly.empty() ? std::string() : std::format( " test-only=\"{}\"", testOnly.size() );   // D1: absent at 0
+        rw::emitTo( stdout, "<dead-code count=\"{}\" evidence=\"internal-linkage+zero-callers\" register-macro-excluded=\"{}\"{}{}{}{}{}{}{}>",
+                     candidates.size(), registerMacroExcluded, runnerRootAttr, testOnlyAttr,
                      dcFilterAttr.c_str(),
                      pageDisclosure( dcAb, sizeof( dcAb ), dcPw.end - dcPw.begin, candidates.size(), dcPw.end,
                                      cfg.pageLimit, cfg.pageOffset, false ),
@@ -2925,6 +3033,15 @@ std::optional<int> runQualityViews( const MainDispatch& d )
             // name and path may contain & < > " — escape both so output is valid XML.
             const auto en = rw::escapeXml( s.name, dcEsc );
             rw::emitTo( stdout, "<d n=\"{}\" t=\"{}\"", std::string_view( en.data(), en.size() ), symTag( s.kind ) );
+            const std::string_view rp = qvSingleRoot ? rw::sarif::rootRelativeUri( ing.files[ s.fileId ], qvRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
+            const auto ep = rw::escapeXml( rp, dcEsc );
+            rw::emitTo( stdout, " p=\"{}\" l=\"{}\"/>", std::string_view( ep.data(), ep.size() ), s.line );
+        }
+        for( std::size_t testOnlyIndex = 0; dcPw.begin == 0 && testOnlyIndex < testOnly.size(); ++testOnlyIndex )   // first page only: never repeated
+        {
+            const Symbol& s = ing.symbols[ testOnly[ testOnlyIndex ] ];
+            const auto en = rw::escapeXml( s.name, dcEsc );
+            rw::emitTo( stdout, "<to n=\"{}\" t=\"{}\"", std::string_view( en.data(), en.size() ), symTag( s.kind ) );
             const std::string_view rp = qvSingleRoot ? rw::sarif::rootRelativeUri( ing.files[ s.fileId ], qvRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
             const auto ep = rw::escapeXml( rp, dcEsc );
             rw::emitTo( stdout, " p=\"{}\" l=\"{}\"/>", std::string_view( ep.data(), ep.size() ), s.line );

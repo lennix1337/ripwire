@@ -10199,6 +10199,38 @@ inline bool pythonRunnerRoot( std::string_view path, const Symbol& s, std::strin
                                          s.sigStartByte );
 }
 
+// D1 TESTONLY-DEAD: Python's own internal-interface evidence, standing in for the `static` token C/C++ spells — PEP 8's
+// "internal interfaces" convention: a leading-underscore name, or a def inside a module or package whose path component
+// starts with one underscore (`_segment_tools.py`, `_internal/x.py`). A dunder component (`__init__.py`, `__main__.py`)
+// is the language's own spelling, not a privacy mark. `relPath` is ROOT-relative, so a directory above the root never
+// counts. MODULE-LEVEL defs only (empty scope): a method's reach is its class's, and a class in a private module is often
+// re-exported as public API (textual's widgets/_data_table.py DataTable), with methods a framework dispatches by name
+// (action_*, _on_*). Python only; every other language is false. Read only by --dead-code's test-only rows (test-only=).
+inline bool pythonModulePrivate( std::string_view relPath, const Symbol& s ) noexcept
+{
+    if( s.lang != Lang::Python || !s.scope.empty() )
+    {
+        return false;
+    }
+    const auto privateMark = []( std::string_view part ) noexcept { return part.size() > 1 && part[ 0 ] == '_' && part[ 1 ] != '_'; };
+    if( privateMark( s.name ) )
+    {
+        return true;
+    }
+    std::size_t start = 0;
+    while( start < relPath.size() )
+    {
+        const std::size_t slash = relPath.find( '/', start );
+        const std::size_t end   = slash == std::string_view::npos ? relPath.size() : slash;
+        if( privateMark( relPath.substr( start, end - start ) ) )
+        {
+            return true;
+        }
+        start = end + 1;
+    }
+    return false;
+}
+
 // lane/safe-delete: the --dead-code high-confidence PRECONDITIONS on symbol KIND/PLACEMENT alone — a
 // source free function with a body, living outside a header. Deliberately excludes in-degree (the
 // --dead-code block tests the corpus-wide in-edge CSR; --safe-delete already has its own 1-hop caller
