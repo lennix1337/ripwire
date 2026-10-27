@@ -392,6 +392,12 @@ inline PathPairs pathReachingPairs( const IngestResult& ing, const Graph& g, std
         out.pairs.clear();   // exactly one pair reaches: today's answer, byte for byte
         return out;
     }
+    // qword= marks only a word that ORDERS: when every pair's owner carries one (zed `Editor::backspace`: every from= is an
+    // Editor's), the key told no pair apart and the mark would be noise
+    if( std::all_of( out.pairs.begin(), out.pairs.end(), []( const PathPair& p ) { return !p.qword.empty(); } ) )
+    {
+        std::for_each( out.pairs.begin(), out.pairs.end(), []( PathPair& p ) { p.qword.clear(); } );
+    }
     // N5: the pair shortestPathAny found must be among the pairs (the reverse walk reads the same edges as the forward search);
     // a future out-only edge the walk cannot see would otherwise drop it silently
     DASSERT( std::any_of( out.pairs.begin(), out.pairs.end(), []( const PathPair& p ) { return p.today; } ),

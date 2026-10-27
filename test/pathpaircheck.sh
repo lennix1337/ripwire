@@ -37,6 +37,7 @@
 #   (Q) question words: Terminal.Loop (1 hop) and Matcher.Loop (2 hops) reach matcher.go:extendedMatch; the argv's own word
 #       `matcher` equals Matcher.Loop's owner, so that pair prints FIRST with qword="matcher" and the qword legend clause rides.
 #       (QN) near miss: `--path=Loop,extendedMatch` (no owner word in the argv) keeps the reach order, no qword=, no clause.
+#   (QA) a word every listed pair's owner carries orders nothing: no qword= (zed `Editor::backspace,Buffer::edit`).
 #   (QH) a question word never lifts a hedged chain over a proven one: Gold.go (owner word, via=name) stays after Wrong.go.
 #   (Z) test twin: the bound from= backspace is fixtures/copy/before.py's (the shorter chain) while src/core.py:backspace exists:
 #       from_test="1" + next= naming src/core.py's; next= replays as that one definition. (ZS) the same when only the fixture
@@ -155,6 +156,7 @@ class Gold:
     def go(self, x):
         return x.relay()
 EOF
+mkdir -p "$TMP/qa"; for f in a b; do printf 'def edit():\n    return 1\n\nclass Edit:\n    def backspace(self):\n        return edit()\n' > "$TMP/qa/$f.py"; done
 printf 'def edit():\n    return 1\n\ndef helper():\n    return edit()\n\ndef backspace():\n    return helper()\n' > "$TMP/tw/src/core.py"
 printf 'from src.core import edit\n\ndef backspace():\n    return edit()\n' > "$TMP/tw/fixtures/copy/before.py"
 printf 'def edit():\n    return 1\n\ndef backspace():\n    return 0\n' > "$TMP/tws/src/core.py"
@@ -167,7 +169,7 @@ printf 'def edit():\n    return 1\n\ndef backspace():\n    return edit()\n' > "$
 printf 'def edit():\n    return 2\n\ndef helper():\n    return edit()\n\ndef backspace():\n    return helper()\n' > "$TMP/twa/tests/b_test.py"
 run qw Loop,matcher.go:extendedMatch > "$TMP/Q.out"; run qw Loop,extendedMatch > "$TMP/QN.out"
 run qw Loop,matcher.go:extendedMatch --legend=full > "$TMP/QL.out"; run qw Loop,extendedMatch --legend=full > "$TMP/QNL.out"
-run qh go,gold.py:target > "$TMP/QH.out"
+run qh go,gold.py:target > "$TMP/QH.out"; run qa backspace,edit > "$TMP/QA.out"
 run tw backspace,edit > "$TMP/Z.out"; run tws backspace,edit > "$TMP/ZS.out"; run twt backspace,edit > "$TMP/ZT.out"
 run twn backspace,edit > "$TMP/ZN.out"; run twa backspace,edit > "$TMP/ZA.out"
 run tw backspace,edit --legend=full > "$TMP/ZL.out"; run twn backspace,edit --legend=full > "$TMP/ZNL.out"
@@ -247,6 +249,8 @@ check( "Q", len( pq ) == 2 and "matcher.go" in pq[0].get( "from_p", "" ) and pq[
 qn = rd( "QN" ); pqn = [ attrs( p[0] ) for p in pairs( qn ) ]
 check( "QN", len( pqn ) == 2 and "terminal.go" in pqn[0].get( "from_p", "" ) and not any( "qword" in a for a in pqn ) and "qword=WORD:" not in rd( "QNL" ),
        "no owner word in the argv: reach order (1 hop first), no qword=, no clause: %r" % pqn )
+qa = rd( "QA" )
+check( "QA", "qword=" not in qa and len( pairs( qa ) ) == 2 and root( qa ).get( "pairs_reaching" ) == "2", "no pair told apart by the word: no qword= (%d pairs)" % len( pairs( qa ) ) )
 pqh = [ attrs( p[0] ) for p in pairs( rd( "QH" ) ) ]
 check( "QH", len( pqh ) == 2 and pqh[0].get( "hedged" ) == "0" and pqh[1].get( "hedged" ) == "1" and pqh[1].get( "qword" ) == "gold"
        and "gold.py:13" in pqh[1].get( "from_p", "" ), "a hedged owner-word pair stays after the proven one: %r" % pqh )
