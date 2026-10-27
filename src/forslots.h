@@ -413,7 +413,7 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
         else
         {
             std::vector<std::pair<std::string_view, std::vector<std::uint32_t>>> fields;   // field → its value refs, first-seen order
-            const std::string typeKey = slotJoinsByFieldName( s.lang ) ? vri.slots().goTypeKeyOf( s ) : s.name;   // fix1 F-2: the ONE key
+            const std::string typeKey = slotKeysOwnTypes( s.lang ) ? vri.slots().typeKeyOf( s ) : s.name;   // fix1 F-2: the ONE key
             for( const auto& [ ref, field ] : vri.slots().valuesOfType( typeKey ) )
             {
                 auto it = std::ranges::find( fields, field, &std::pair<std::string_view, std::vector<std::uint32_t>>::first );

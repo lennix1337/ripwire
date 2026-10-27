@@ -579,34 +579,60 @@ inline constexpr char kValueRefSlotFactScope = 't';
 // that function at that position (`Reg( Put )`) into the same field. Distinct from every other scope char.
 inline constexpr char kValueRefSlotParamScope = 'q';
 
-// IX-1 / IX1-V2: which languages record a slot join, and how its CALL side is found — the one table both the extractor
-// (ingest_valuerefs.h) and the join (valuerefindex.h) read. byFieldName: a member call `x.F( … )` (an ordinary Call reference
-// with memberCall) is a call through field F when some function value is stored in a field F, joined at index time by the
-// field name (the receiver's type is not read: the name tier, via="slot-name"); otherwise the extractor records the field
-// calls itself (C family: kValueRefSlotCallScope rows, everyFieldCall = every `x->f( … )` in C, the C++ gate otherwise).
+// IX-1 / IX1-V2: which languages record a slot join, and how — the one table both the extractor (ingest_valuerefs.h) and the
+// join (valuerefindex.h) read. A language's row supplies the per-language pieces of the language-blind join (SlotIndex):
+// callSide — how a call THROUGH a field is found:
+//   ThroughRows: the extractor records the field calls itself (C family: kValueRefSlotCallScope rows; everyFieldCall = every
+//     `x->f( … )` in C, the C++ gate otherwise);
+//   MemberCallByName: an ordinary member call `x.F( … )` (a Call reference with memberCall) is a call through field F when some
+//     function value is stored in a field F, joined at index time by the field name (the receiver's type is not read: the name
+//     tier, via="slot-name"); the extractor records only the STORE side (Go).
+// typeKey — how a slot's declared struct type is keyed (both sides and --for's struct rows key the same way):
+//   TypedefFacts: the type as written, through the typedef / field-type slot facts (C family);
+//   PackageDir: the package DIRECTORY the type is declared in, plus its name (Go: valuerefindex.h slot_join::GoTypeKeys).
+enum class VrSlotCallSide : std::uint8_t { ThroughRows, MemberCallByName };
+enum class VrSlotTypeKey : std::uint8_t { TypedefFacts, PackageDir };
 struct VrSlotLang
 {
-    Lang lang;
-    bool everyFieldCall;
-    bool byFieldName;
+    Lang           lang;
+    bool           everyFieldCall;
+    VrSlotCallSide callSide;
+    VrSlotTypeKey  typeKey;
 };
 inline constexpr VrSlotLang kVrSlotLangs[] = {
-    { Lang::C, true, false },
-    { Lang::Cpp, false, false },
-    { Lang::Go, false, true },
+    { Lang::C, true, VrSlotCallSide::ThroughRows, VrSlotTypeKey::TypedefFacts },
+    { Lang::Cpp, false, VrSlotCallSide::ThroughRows, VrSlotTypeKey::TypedefFacts },
+    { Lang::Go, false, VrSlotCallSide::MemberCallByName, VrSlotTypeKey::PackageDir },
 };
-inline constexpr std::array<bool, kLangCount> kSlotByFieldNameOfLang = []
+inline constexpr std::array<const VrSlotLang*, kLangCount> kVrSlotLangOf = []
 {
-    std::array<bool, kLangCount> byLang {};
+    std::array<const VrSlotLang*, kLangCount> byLang {};
     for( const VrSlotLang& row : kVrSlotLangs )
     {
-        byLang[ static_cast<std::size_t>( row.lang ) ] = row.byFieldName;
+        byLang[ static_cast<std::size_t>( row.lang ) ] = &row;
     }
     return byLang;
 }();
+// The slot row of language `l`, nullptr when it records no slot join.
+inline const VrSlotLang* vrSlotLang( Lang l ) noexcept
+{
+    return enumTableAt( kVrSlotLangOf, l, static_cast<const VrSlotLang*>( nullptr ) );
+}
 inline bool slotJoinsByFieldName( Lang l ) noexcept
 {
-    return enumTableAt( kSlotByFieldNameOfLang, l, false );
+    const VrSlotLang* row = vrSlotLang( l );
+    return row != nullptr && row->callSide == VrSlotCallSide::MemberCallByName;
+}
+// How language `l` keys a slot type (TypedefFacts for a language with no slot row: it keys nothing of its own).
+inline VrSlotTypeKey slotTypeKey( Lang l ) noexcept
+{
+    const VrSlotLang* row = vrSlotLang( l );
+    return row == nullptr ? VrSlotTypeKey::TypedefFacts : row->typeKey;
+}
+// A language whose slot types key by its own rule (valuerefindex.h slot_join), not through the C family's typedef facts.
+inline bool slotKeysOwnTypes( Lang l ) noexcept
+{
+    return slotTypeKey( l ) != VrSlotTypeKey::TypedefFacts;
 }
 // A slot type key written with the `struct` / `union` keyword (`struct thandle`) leads with this mark: a C tag is no typedef
 // name, so the join never reads it through an alias. A slot fact whose composeRel is kValueRefSlotBodyRel declares that its

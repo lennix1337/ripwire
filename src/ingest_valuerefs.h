@@ -190,7 +190,7 @@ inline constexpr VrPatternLookup kVrPatternLookups[] = {
 // with the join). C has no member functions, so EVERY field call `x->f( … )` calls through a function-pointer field (or a macro
 // the grammar reads as one). A C++ field call is mostly a member-function call: there the receiver must be declared with the
 // `struct` / `union` keyword, or be declared with a struct type whose body in this same file declares the callee as a
-// function-pointer field. Go (byFieldName): this walk records only the STORE side (a keyed composite-literal field, a field
+// function-pointer field. Go (callSide MemberCallByName): this walk records only the STORE side (a keyed composite-literal field, a field
 // assignment, a parameter stored into one); the call side is the ordinary member call, joined by field name in valuerefindex.h.
 
 // A template's literal side must hold this many identifier characters to be matched (`f"_{m}"` is too wide).
@@ -531,9 +531,9 @@ public:
         m_fArguments   = fieldIdFor( tl, NodeField::Arguments );
         m_fSource      = ts_language_field_id_for_name( tl, "source", 6 );
         m_fReceiver    = ts_language_field_id_for_name( tl, "receiver", 8 );
-        const VrSlotLang* slotRow = findByField( kVrSlotLangs, &VrSlotLang::lang, m_lang );
-        m_slot         = slotRow != nullptr && !slotRow->byFieldName ? slotRow : nullptr;
-        m_slotByName   = slotRow != nullptr && slotRow->byFieldName;
+        const VrSlotLang* slotRow = vrSlotLang( m_lang );
+        m_slot         = slotRow != nullptr && slotRow->callSide == VrSlotCallSide::ThroughRows ? slotRow : nullptr;
+        m_slotByName   = slotRow != nullptr && slotRow->callSide == VrSlotCallSide::MemberCallByName;
         m_fwd          = callForwardersOf( m_lang );
         m_fwdArmed     = !m_fwd.empty();
 
@@ -3098,7 +3098,7 @@ private:
     VrFam                          m_fam;
     Lang                           m_lang;
     const VrSlotLang*              m_slot = nullptr;    // IX-1: this language's slot row (nullptr: no slot capture)
-    bool                           m_slotByName = false;   // IX1-V2: a byFieldName row (Go): the store side only (goValueSlot)
+    bool                           m_slotByName = false;   // IX1-V2: a MemberCallByName row (Go): the store side only (goValueSlot)
     std::vector<VrStructFields>    m_structs;           // IX-1: this file's struct bodies so far
     std::vector<std::pair<std::string, std::string_view>> m_callableFields;   // IX-1: (struct, function-pointer field) this file declares
     VrAliases                                             m_aliases;          // IX-1: this file's typedef / using alias → struct type key

@@ -69,13 +69,13 @@ inline bool vrBindLess( const IngestResult& ing, const Reference& a, const Refer
     return a.startByte < b.startByte;
 }
 
-// ── IX1-V2: the byFieldName languages' side of the slot join (model.h kVrSlotLangs) ──────────────────────────────────
+// ── IX1-V2: the per-language pieces of the slot join (model.h kVrSlotLangs) ──────────────────────────────────────
 namespace slot_join
 {
-// fix1 F-2: a byFieldName (Go) slot type's key — the package DIRECTORY the type is declared in (a Go package is a directory:
+// fix1 F-2: a PackageDir (Go) slot type's key — the package DIRECTORY the type is declared in (a Go package is a directory:
 // x/types.Cmd and y/types.Cmd are two types though both packages are named `types`), as the first file of that directory, and the
 // type name: jsImportKey( dirFile, name ). keyOfSymbol is the ONE spelling the store side (SlotIndex) and --for's struct rows
-// (forslots.h, through SlotIndex::goTypeKeyOf) both key by. A store's type (Reference::memberCtor, keyOf): `T` → the writing
+// (forslots.h, through SlotIndex::typeKeyOf) both key by. A store's type (Reference::memberCtor, keyOf): `T` → the writing
 // file's directory; `pkg.T` → the directory of the file's import bound to `pkg`, when exactly one in-tree Go directory is that
 // import path's tail, else "" (unknown: the name tier — an out-of-tree package, an unmatched or ambiguous path). fix1 F-5: an
 // in-tree type that is no STRUCT (`type Table map[Op]func()`, an alias) keys kNoSlot: its keyed literal names map keys, not fields.
@@ -106,7 +106,7 @@ public:
         }
         for( const Symbol& sym : ing.symbols )
         {
-            if( sym.kind == SymKind::Struct && slotJoinsByFieldName( sym.lang ) )
+            if( sym.kind == SymKind::Struct && slotTypeKey( sym.lang ) == VrSlotTypeKey::PackageDir )
             {
                 m_structs.try_emplace( keyOfSymbol( sym ), char( 1 ) );
             }
@@ -157,7 +157,7 @@ private:
     HashMap<std::string, char>                         m_structs;     // every in-tree Go struct's key
     HashMap<std::string, std::uint32_t>                m_dirOf;       // import path → its directory's first file (kNoFile none)
 };
-// The member calls `x.F( … )` of a byFieldName language whose field F holds a stored function somewhere (`holds`), as calls
+// The member calls `x.F( … )` of a MemberCallByName language whose field F holds a stored function somewhere (`holds`), as calls
 // through that slot, in reference order. Not when that language defines a METHOD named F anywhere in the tree: the call may
 // then be that method, and the receiver's type is not read here (a named floor, never a guess).
 template<class Holds>
@@ -331,7 +331,7 @@ public:
             }
             m_valuesByField[ m_values.back().field ].push_back( static_cast<std::uint32_t>( m_values.size() - 1 ) );
         }
-        slot_join::addCalls( ing, slot_join::memberCalls( ing, m_valuesByField ), m_calls, m_callsBySym );   // IX1-V2: a byFieldName slot's calls
+        slot_join::addCalls( ing, slot_join::memberCalls( ing, m_valuesByField ), m_calls, m_callsBySym );   // IX1-V2: a MemberCallByName slot's calls
         if( m_calls.empty() )
         {
             return;   // no call through a struct field anywhere: no value needs a slot key
@@ -348,8 +348,9 @@ public:
     std::vector<Hit> callsFor( std::uint32_t valueIdx ) const { return join( m_values, valueIdx, m_callsByField, m_callEnds ); }
     // The slot value references (with a resolved function) the slot call `callIdx` may call through.
     std::vector<Hit> valuesFor( std::uint32_t callIdx ) const { return join( m_callEnds, callIdx, m_valuesByField, m_values ); }
-    // fix1 F-2: a byFieldName struct symbol's type key, as valuesOfType reads it (the store side keys the same way)
-    std::string goTypeKeyOf( const Symbol& s ) const { return m_goKeys.keyOfSymbol( s ); }
+    // fix1 F-2: the slot type key of a struct symbol of a language that keys its own types (model.h slotKeysOwnTypes), as
+    // valuesOfType reads it (the store side keys the same way)
+    std::string typeKeyOf( const Symbol& s ) const { return m_goKeys.keyOfSymbol( s ); }
     // IX1-V2: the slot value references stored into a field of struct type `type` (the resolved type name), with the field,
     // in reference order — what --for's slot_fields= lists on a struct row.
     std::vector<std::pair<std::uint32_t, std::string_view>> valuesOfType( std::string_view type ) const
@@ -469,10 +470,10 @@ private:
         End              e;
         e.ref = refIdx;
         e.fam = valueRefFamily( r.lang );
-        if( r.role == RefRole::Call || slotJoinsByFieldName( r.lang ) )
+        if( r.role == RefRole::Call || slotKeysOwnTypes( r.lang ) )
         {
-            // IX1-V2: a member call `x.F( … )` (slot_join::memberCalls, its receiver's type unread: the name tier), or a byFieldName
-            // store (package-qualified; no typedef aliases or field-type facts on this side)
+            // IX1-V2: a member call `x.F( … )` (slot_join::memberCalls, its receiver's type unread: the name tier), or a store of a
+            // language that keys its own types (Go: package-qualified; no typedef aliases or field-type facts on this side)
             e.type  = r.role == RefRole::Call ? std::string() : m_goKeys.keyOf( r );
             e.field = r.role == RefRole::Call ? r.calleeName : r.memberPath;
             return e;
