@@ -682,18 +682,18 @@ def app_route(fn):
 
 
 @app_route
-def handler(static=3):  # decorated AND a decorator value use: counted in decorated-excluded= only
+def handler(static=3):  # D1 fix round: a Python `static=` parameter is no linkage evidence, so no Python def is a --dead-code candidate
     return static
 
 
-def tabled(static=4):  # a value use only: value-ref-excluded=
+def tabled(static=4):  # (same: never a candidate, never counted)
     return static
 
 
 TABLE = [tabled]
 
 
-def orphan(static=5):  # neither: still listed
+def orphan(static=5):  # (same: no longer listed — static is the storage class only in C/C++/ObjC)
     return static
 EOF
 cat >"$FX/dead/r.cpp" <<'EOF'
@@ -1021,10 +1021,10 @@ arm "CX6 safe-delete a.c:handler_a: still a dead-code candidate with risk=none-f
 
 # ── --dead-code: one entity, one reason (review fix 9) ─────────────────────────────────────────────────
 echo "-- dead-code precedence"
-arm "DC1a dead-code (negative): orphan and truly_dead_cpp stay listed; the decorated handler stays in decorated-excluded=1; the TEST_CASE in register-macro-excluded=1" \
-    dead --dead-code 'd:n=orphan' 'd:n=truly_dead_cpp' 'nod:n=handler' attr:decorated-excluded=1 attr:register-macro-excluded=1
-arm "DC1b dead-code: tabled, BM_x (BENCHMARK arg), reg_only counted ONCE in value-ref-excluded=3 — the decorated handler is not counted again" \
-    dead --dead-code attr:count=2 nd:2 'nod:n=tabled' 'nod:n=BM_x' 'nod:n=reg_only' attr:value-ref-excluded=3 attr:decorated-excluded=1
+arm "DC1a dead-code (negative): truly_dead_cpp stays listed; the Python orphan/handler (a static= parameter, no linkage) are no rows and no decorated-excluded=; the TEST_CASE in register-macro-excluded=1" \
+    dead --dead-code 'd:n=truly_dead_cpp' 'nod:n=orphan' 'nod:n=handler' noattr:decorated-excluded attr:register-macro-excluded=1
+arm "DC1b dead-code: BM_x (BENCHMARK arg) and reg_only counted ONCE in value-ref-excluded=2 — the Python tabled/handler are not candidates, so not counted at all" \
+    dead --dead-code attr:count=1 nd:1 'nod:n=tabled' 'nod:n=BM_x' 'nod:n=reg_only' attr:value-ref-excluded=2 noattr:decorated-excluded
 
 # ── JS: object-literal tables (pair, shorthand, array), computed and dotted dispatch, callbacks, CJS exports ──
 echo "-- JavaScript"
