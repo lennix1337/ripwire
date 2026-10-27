@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# receiverfixescheck.sh — a member call on a field the class STATES as a type, and a Rust trait-object call, bind what that type
+# can run, never the caller's own-class namesake and never a same-file impl picked by name (lane receiver-fixes).
+#
+#   test/receiverfixescheck.sh [BIN]        # BIN defaults to $RIPWIRE_BIN, then build/ripwire
+#
+# THE GAPS (reports: m1-lite Stage 0, rta-s0 row C6).
+#   TS-FIELD-SELF: `this.pub.provide()` with `pub: Provider` bound the CALLER's own `provide` by name (a false edge), and inside
+#     `provide` itself `this.#provider.provide()` vanished (callees count=0, no <dc>: the own method was the one same-file
+#     candidate and the self-loop then dropped). `#private` fields and `this.#f = …` recorded no type; `import type { T }`
+#     bound no module, so an interface T was not found.
+#   PY-CTOR-ANNOT: `self.f: T`, `T | None`, `Optional[ T ]` annotations and `mod.X( … )` constructors typed nothing (the base
+#     read only a bare `X( … )` value), so `self.f.start()` bound the caller's own `start` by name.
+#   RUST-DYN-NAMESAKE: a `&dyn T` / `Box<dyn T>` call whose implementors list the map cannot list (two same-named `Spy` structs
+#     in the test crate, as in mdbook) fell to the name tiers, which picked the one same-file impl (TestRenderer) by name.
+#
+# THE CONTRACT.
+#   * A receiver `this.<f>` / `self.<f>` whose field the class states as an in-tree class or interface T that is neither the
+#     caller's class nor one of its bases never binds the caller's own definition of the callee (receiverevidence.h
+#     foreignFieldOwner; graph.h cuts it from the name tiers). T an interface: the dispatch tier answers (gate="iface", one
+#     unproven candidate included); T a class: its member, proven.
+#   * Python: an annotation wins over the value (`= None` leaves the field typed); `mod.X( … )` types a local or field only when
+#     `mod` is an in-tree module (the written-qualifier check); T known by name to two classes stays a split, never proven.
+#   * Rust: an OPEN trait list declines over the bodied methods inside T's impl blocks (+ T's default); never a by-name pick.
+#   * A declined iface list names the non-test candidates first (cand= order only).
+#
+# ARMS: [P] red on the base binary, green after; [C] controls (both); [FLOOR] a stated limit, pinned. Exits non-zero on any failure.
+set -u
+export PYTHONDONTWRITEBYTECODE=1
+ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
+[ "${BIN#/}" = "$BIN" ] && BIN="$PWD/$BIN"
+echo "receiverfixescheck: BIN=$BIN"
+[ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
+command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
+[ -d "$ROOT/test/receiverfixesfix" ] || { echo "fixture missing: test/receiverfixesfix"; exit 2; }
+
+python3 - "$BIN" "$ROOT" <<'PY'
+import os, re, subprocess, sys, tempfile
+BIN, ROOT = sys.argv[1], sys.argv[2]
+FIX = os.path.join( ROOT, "test", "receiverfixesfix" )
+npass = nfail = 0
+def say( good, tag, msg, why = "" ):
+    global npass, nfail
+    if good: npass += 1; print( "  PASS  %s: %s" % ( tag, msg ) )
+    else:    nfail += 1; print( "  FAIL  %s: %s%s" % ( tag, msg, ( " — " + why ) if why else "" ) )
+def run( sub, flag, legend = "compact" ):
+    root = os.path.join( FIX, sub )
+    with tempfile.TemporaryDirectory() as home:
+        env = { k: v for k, v in os.environ.items() if not k.startswith( "RIPWIRE_" ) }
+        env.update( HOME = home, TMPDIR = home + "/" )
+        p = subprocess.run( [ BIN, root, "--no-cache", flag, "--legend=" + legend ], cwd = root, env = env, capture_output = True, text = True, timeout = 300 )
+    if p.returncode != 0:
+        print( "  rc=%d for %s %s: %s" % ( p.returncode, sub, flag, p.stderr[:200] ) )
+    return p.stdout
+def rows( out ):
+    out = re.sub( r"<!--.*?-->", "", out, flags = re.S )
+    return [ ( m.group( 1 ), dict( re.findall( r'([a-z_]+)="([^"]*)"', m.group( 2 ) ) ) ) for m in re.finditer( r"<(s|dc) ([^>]*)/>", out ) ]
+def edges( out ):    return [ a for k, a in rows( out ) if k == "s" ]
+def declines( out ): return [ a for k, a in rows( out ) if k == "dc" ]
+
+print( "(T) TypeScript: a stated field's type, never the caller's own namesake" )
+for sym, line in ( ( "exec/executor.ts:Executor.provide", "20" ), ( "viaPublic", "23" ), ( "viaLate", "26" ) ):
+    o = run( "ts", "--callees=" + sym, "full" ); e, d = edges( o ), declines( o )
+    iface = [ x for x in d if x.get( "gate" ) == "iface" and x.get( "l" ) == line ]
+    cand  = iface[ 0 ].get( "cand", "" ) if iface else ""
+    say( not e and len( iface ) == 1 and iface[ 0 ].get( "cands" ) == "3", "P T1 " + sym, 'one <dc gate="iface" cands="3">, no edge',
+         "edges=%s dc=%s" % ( e, d ) )
+    say( "exec/executor.ts" not in cand and "exec/box.ts" not in cand and "driver/default-provider.ts:3" in cand and "exec/peer.ts:5" in cand,
+         "P T2 " + sym, "cand= the Provider implementors only (not the caller's own provide, not Box.provide)", cand )
+o = run( "ts", "--callees=viaPrivBox" ); e = edges( o )
+say( len( e ) == 1 and e[ 0 ].get( "p" ) == "src/exec/box.ts:2" and "via" not in e[ 0 ], "P T3 viaPrivBox", "`#boxp: Box` → the one proven Box.provide edge", str( e ) )
+o = run( "ts", "--callers=exec/executor.ts:Executor.provide" ); e = edges( o )
+say( not any( x.get( "n" ) in ( "viaPublic", "viaLate", "viaPrivBox" ) for x in e ), "P T4 callers", "no via=name caller row from a stated-field call", str( e ) )
+o = run( "ts", "--callees=flush" ); e = edges( o )
+say( not any( x.get( "n" ) == "write" for x in e ), "P T5 flush", "`out: Sink` (an interface no class implements) never binds Solo's own write", str( e ) )
+o = run( "ts", "--callees=viaSelfField" ); e = edges( o )
+say( len( e ) == 1 and e[ 0 ].get( "p" ) == "src/exec/executor.ts:19" and "via" not in e[ 0 ], "C T6 viaSelfField", "a field of the caller's own class keeps its own provide (proven)", str( e ) )
+o = run( "ts", "--callees=Peer.provide", "full" ); d = [ x for x in declines( o ) if x.get( "gate" ) == "iface" ]
+say( len( d ) == 1 and "exec/peer.ts:5" in d[ 0 ].get( "cand", "" ), "P T7 Peer (near miss)", "a class implementing the field's interface keeps its own provide among the candidates", str( d ) )
+o = run( "ts", "--callees=viaUntyped" ); e = edges( o )
+say( any( x.get( "p" ) == "src/exec/executor.ts:19" and x.get( "via" ) == "name" for x in e ), "FLOOR T8 viaUntyped",
+     "an UNTYPED field proves nothing: the by-name rows stay (own namesake included)", str( e ) )
+
+print( "(Y) Python: annotations and module-qualified constructors type fields and locals" )
+for sym in ( "go1", "go2", "go3", "go4", "go5", "go6", "go8", "goParam" ):
+    o = run( "py", "--callees=" + sym ); e = edges( o )
+    m = [ x for x in e if x.get( "n" ) == "Manager.start" ]
+    say( len( m ) == 1 and "via" not in m[ 0 ] and "prov" not in m[ 0 ] and not any( x.get( "n" ) == "AppA.start" for x in e ), "P Y1 " + sym,
+         "Manager.start proven, never AppA.start", str( e ) )
+for sym, what in ( ( "goExt", "`requests.Session | None` (an outside qualifier)" ), ( "goBoth", "`Manager | AppA | None` (two classes)" ), ( "goExtLocal", "`requests.Manager()`" ) ):
+    o = run( "py", "--callees=" + sym ); e = edges( o )
+    say( not any( x.get( "n" ) == "Manager.start" and "via" not in x for x in e ), "C Y2 " + sym, what + " proves no Manager.start", str( e ) )
+o = run( "py", "--callees=goExt" ); e = edges( o )
+say( any( x.get( "n" ) == "AppA.start" and x.get( "via" ) == "name" for x in e ), "FLOOR Y3 goExt", "a field typed outside the tree keeps the by-name rows", str( e ) )
+o = run( "pydup", "--callees=goDup" ); e = edges( o )
+say( len( e ) == 2 and all( x.get( "prov" ) == "split" for x in e ) and not any( x.get( "n" ) == "App.start" for x in e ), "P Y4 goDup",
+     "T named by two classes: a split over both (never proven), never App.start", str( e ) )
+
+print( "(R) Rust: a trait object whose implementors list is open declines over T's impl blocks" )
+for sym, line in ( ( "execute", "10" ), ( "boxed", "13" ) ):
+    o = run( "rs", "--callees=" + sym, "full" ); e, d = edges( o ), declines( o )
+    iface = [ x for x in d if x.get( "gate" ) == "iface" and x.get( "l" ) == line ]
+    say( not any( "render" in x.get( "n", "" ) for x in e ) and len( iface ) == 1 and iface[ 0 ].get( "cands" ) == "4", "P R1 " + sym,
+         'no by-name render edge; one <dc gate="iface" cands="4">', "edges=%s dc=%s" % ( e, d ) )
+    cand = iface[ 0 ].get( "cand", "" ).split() if iface else []
+    say( len( cand ) == 4 and cand[ -1 ] == "tests/suite/renderer.rs:5" and all( c.startswith( "zcrates/" ) for c in cand[ :3 ] ), "P R2 " + sym,
+         "cand= the non-test impls first, the test crate's Spy last", str( cand ) )
+print( "receiverfixescheck: %d passed, %d failed" % ( npass, nfail ) )
+sys.exit( 1 if nfail else 0 )
+PY

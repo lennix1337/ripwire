@@ -34,6 +34,9 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-27, lane receiver-fixes (base integration/train-37b c585f48b): RE-PINNED ONCE with UPDATE_GOLDEN=1 (2a76ac24… -> dc0d4c67…).
+#   Watched text: kParserVer 233 -> 237 (rich 238), a PLACEHOLDER above train 38's 235 / 236 (the train renumbers), its quality.h
+#   mirror with it. kCacheVersion stays 44 (no record changes shape). kQSnapCacheScheme stays 24: no watched quality.h function moved.
 # 2026-10-26, train 37b (lane rust-degraded merged onto integration/train-37a 8ed64e64): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the
 #   composed tree (the two branch pins f7bd2b61… / e7026b6b… conflicted -> 2a76ac24…). Watched text: kParserVer 231 -> 233 (rich 234)
 #   and kCacheVersion 43 -> 44 (above train 36's 231 / 43 and the lane's placeholders 229 / 42), both mirrors with them.

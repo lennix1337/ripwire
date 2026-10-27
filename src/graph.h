@@ -3003,8 +3003,10 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
     for( const Binding& b : ing.bindings )
     {
         if( b.kind != LocalBindKind::JsImport || b.fileId >= ing.files.size() ) { continue; }
-        JsImportTarget target = pinJsImport( ing, ex, workspace, b.fileId, b.typeName, b.importedName );
-        target.renamed        = b.importedName != b.var;
+        // isFromAssignment (lane receiver-fixes): a type-only `import type { T }` under its export name — its module is resolved, and
+        // the name it binds is T's, so a field or local written `T` finds T's module (an interface's: receiverevidence.h importedTypeClass)
+        JsImportTarget target = pinJsImport( ing, ex, workspace, b.fileId, b.typeName, b.isFromAssignment ? std::string_view( b.var ) : std::string_view( b.importedName ) );
+        target.renamed        = b.importedName != b.var && !b.isFromAssignment;
         const auto [ found, inserted ] = tables.targets.try_emplace( jsImportKey( b.fileId, b.var ), target );
         if( !inserted )
         {
@@ -10303,6 +10305,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         {
             ifaceCand.clear();
             bool                   proven = true;
+            bool                   statedField = false;   // TS-FIELD-SELF: the receiver is `this.f` with f stated as another type
             std::string_view       bound;
             const bool             cppSplit = narrowed;
             if( cppSplit )
@@ -10326,8 +10329,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                         ifaceCand.push_back( c );
                     }
                 }
-                proven = ans.proven;
-                bound  = recv.bound;
+                proven      = ans.proven;
+                bound       = recv.bound;
+                statedField = !ifaceCand.empty() && recvEv.foreignFieldOwner( r ) != kNoNode;
             }
             if( ifaceCand.size() > 1 && std::any_of( ifaceCand.begin(), ifaceCand.end(), [ & ]( NodeId c ) { return !arityCannotTake( r, c ); } ) )
             {
@@ -10339,7 +10343,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 narrowed  = true;
                 ifaceImpl = true;
             }
-            else if( ifaceCand.size() > 1 )
+            // TS-FIELD-SELF: one unproven candidate (a structural language's floor) behind a stated field declines too — the name tiers
+            // would bind whatever else shares the name in the caller's directory (kysely `this.#compiler.compileQuery` → a sibling
+            // executor's own compileQuery); the row says cands="1" and names it, never an edge
+            else if( ifaceCand.size() > 1 || ( statedField && !proven && !cppSplit ) )
             {
                 recordDecline( r, std::span<const NodeId>( ifaceCand.data(), ifaceCand.size() ), DeclinedSiteKind::Iface );
                 if( !bound.empty() )
@@ -10592,6 +10599,26 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 disposition = vetoExternal( r );
                 continue;
+            }
+        }
+
+        // ---- lane receiver-fixes (TS-FIELD-SELF): `this.f.m()` on a field the class states as another type T never means the
+        // caller's own-class `m` (ReceiverEvidence::foreignFieldOwner). The cut is over the assembled name set, so the ladder below
+        // weighs what is left: before, the own definition was the one same-file candidate, bound by name, and a self-loop then
+        // dropped the call without a trace. Nothing left: the callee T runs is not in the tree.
+        if( !scipPinned && !canonical && !narrowed && !cand.empty() )
+        {
+            const NodeId own     = recvEv.foreignFieldOwner( r );
+            const auto   ownsOne = [ & ]( NodeId c ) { return c < recvEv.ownerClass.size() && recvEv.ownerClass[ c ] == ing.symbols[ own ].name && recvEv.ownedBy( c, own ); };
+            if( own != kNoNode && std::any_of( cand.begin(), cand.end(), ownsOne ) )
+            {
+                candMemo = nullptr;   // cand is the cut list now, not the memoized one
+                std::erase_if( cand, ownsOne );
+                if( cand.empty() )
+                {
+                    disposition = vetoExternal( r );
+                    continue;
+                }
             }
         }
 

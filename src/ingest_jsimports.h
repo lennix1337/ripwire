@@ -466,6 +466,13 @@ inline void captureJsImportFacts( TSNode root, Lang lang, std::uint32_t fileId, 
                     {
                         binds.back().importedName = isDefault ? "default" : std::string( pattern::nodeText( name, src ) );
                     }
+                    else if( !isDefault && jsNodeIs( name, "identifier" ) && pattern::nodeText( name, src ) == pattern::nodeText( alias, src ) )
+                    {
+                        // lane receiver-fixes (TS-FIELD-SELF): a TYPE-only `import type { T }` binds no value (importedName stays "", so no
+                        // call pins through it), but its local IS the module's export name: graph.h buildJsImportTables reads it as not
+                        // renamed, so an interface T a field or local is typed as finds its module (receiverevidence.h importedTypeClass)
+                        binds.back().isFromAssignment = true;
+                    }
                 }
                 else if( jsNodeIs( node, "namespace_import" ) && !jsHasToken( stmt, "type" ) )
                 {

@@ -361,7 +361,12 @@ constexpr std::uint32_t kCacheVersion = 44;           // 44: train 37b — rust-
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 233;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 237;          // bump on any grammar/.scm/extraction change
+                                                      // 237 = 2026-10-27 (lane receiver-fixes, placeholder: the train renumbers; above train 38's
+                                                      //   235 / rich 236): TS `#private` field declarations and `this.#f = …` record MemberType;
+                                                      //   Python `self.f: T` / `T | None` / `Optional[ T ]` annotations and `mod.X( … )` constructors
+                                                      //   type fields and locals (a RecvType / MemberType with its qualifier), and `x = mod.X( … )`
+                                                      //   no longer writes the base Type tombstone. Rich file tag 238. kCacheVersion stays 44.
                                                       // 233 = 2026-10-26 (train 37b: lane rust-degraded, placeholder 229 / rich 230): a Rust file whose
                                                       //   first parse holds error bytes is re-parsed with its precise-capturing use<..> bounds blanked
                                                       //   (src/rustusebounds.h) — different defs. Strictly above train 36's 231 (rich 232). Rich file tag 234.
