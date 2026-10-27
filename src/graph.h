@@ -7601,10 +7601,10 @@ inline void pythonImportedBases( const BaseEvidenceTables& t, const Reference& r
 // (y != x) renames, for every Python file where EVERY import of y is that one module-scope rename; "" (poisoned) when any import of y in the
 // file is another form, another member, or sits inside a def or class. Built from the shared binds channel's Import records (emitCapturedImportBind:
 // "from:x"). `shadows`: "<fromSymbol>#y" → the byte span of every site-spanned local binding of y in that def (a comprehension target, a lambda
-// parameter, a typed parameter: the receiver-evidence records localNameSet skips), {0,0} for one that covers the whole def.
+// parameter: the receiver-evidence records localNameSet skips).
 struct PythonRenamedImports
 {
-    HashMap<std::string, std::string>                   renamed;
+    HashMap<std::string, std::string>              renamed;
     HashMap<std::string, rw::SmallVec<VarSpan, 1>> shadows;
     [[nodiscard]] bool empty() const noexcept { return renamed.empty(); }
 };
@@ -7643,13 +7643,13 @@ inline PythonRenamedImports buildPythonRenamedImports( const IngestResult& ing )
     return out;
 }
 
-// does a site-spanned local binding of `name` in def `sym` cover the byte `at`? A span {0,0} is a whole-def shadow.
+// does a site-spanned local binding of `name` in def `sym` cover the byte `at`? (A whole-def binding of every other form is a VarDecl: hasLocal.)
 inline bool pythonSpannedLocalCovers( const PythonRenamedImports& t, NodeId sym, std::string_view name, std::uint32_t at )
 {
     std::string key;
     const auto  it = t.shadows.find( fileNameKey( key, sym, name ) );
     return it != t.shadows.end()
-        && std::ranges::any_of( it->second, [ at ]( const VarSpan& s ) { return s.endByte == 0 || ( at >= s.startByte && at < s.endByte ); } );
+        && std::ranges::any_of( it->second, [ at ]( const VarSpan& s ) { return at >= s.startByte && at < s.endByte; } );
 }
 
 // PY-IMPORT-ALIAS-CALL: the ONE definition a bare Python call `y()` reaches through `from m import x as y`, else kNoNode. Decided only
