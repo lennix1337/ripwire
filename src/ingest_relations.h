@@ -1102,7 +1102,8 @@ inline std::string_view writtenTypeNamespace( TSNode typeNode, std::string_view 
 
 // the class NAME a type specifier denotes by itself — its final segment with template arguments dropped: `IRBuilder<F, I>`
 // and `llvm::IRBuilder<F>` → IRBuilder, `ir::QBase` → QBase, `struct Node` → Node. "" for every specifier that names no class
-// on its own: a primitive, `auto`, `decltype( … )`, a dependent `typename T::X`, an enum, an anonymous struct.
+// on its own: a primitive, `auto`, `decltype( … )`, a dependent `typename T::X`, an enum, an anonymous struct. Also Go's
+// `pkg.T` (qualified_type, a Go-only kind: ingest_valuerefs.h goValueSlot reads a composite literal's type through this).
 inline std::string_view aliasTargetName( TSNode spec, std::string_view src ) noexcept
 {
     for( int guard = 0; guard < 16 && !ts_node_is_null( spec ); ++guard )
@@ -1112,7 +1113,7 @@ inline std::string_view aliasTargetName( TSNode spec, std::string_view src ) noe
         {
             return nodeTextOf( spec, src );
         }
-        if( !kindIs( kind, "qualified_identifier" ) && !kindIs( kind, "template_type" )
+        if( !kindIs( kind, "qualified_identifier" ) && !kindIs( kind, "template_type" ) && !kindIs( kind, "qualified_type" )
             && !kindIs( kind, "struct_specifier" ) && !kindIs( kind, "class_specifier" ) && !kindIs( kind, "union_specifier" ) )
         {
             return {};

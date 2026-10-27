@@ -597,14 +597,8 @@ inline constexpr VrSlotLang kVrSlotLangs[] = {
 };
 inline bool slotJoinsByFieldName( Lang l ) noexcept
 {
-    for( const VrSlotLang& row : kVrSlotLangs )
-    {
-        if( row.lang == l )
-        {
-            return row.byFieldName;
-        }
-    }
-    return false;
+    const VrSlotLang* row = findByField( kVrSlotLangs, &VrSlotLang::lang, l );
+    return row != nullptr && row->byFieldName;
 }
 // A slot type key written with the `struct` / `union` keyword (`struct thandle`) leads with this mark: a C tag is no typedef
 // name, so the join never reads it through an alias. A slot fact whose composeRel is kValueRefSlotBodyRel declares that its

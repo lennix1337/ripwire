@@ -2661,29 +2661,12 @@ private:
         return !ts_node_is_null( x ) && kindIs( ts_node_type( x ), "identifier" ) ? x : TSNode{};
     }
 
-    // IX1-V2 (Go): the type NAME a composite literal's type node spells — `Command`, `batcheval.Command` (its final segment),
-    // `Box[T]` (the generic's own name). "" for every other type (a map, a slice, an array, a struct type written inline): a
-    // value stored there lands in a container slot, which the container join (into=) already answers.
-    std::string_view goTypeName( TSNode ty ) const
+    // IX1-V2 (Go): the type NAME a composite literal's or receiver's type node spells — `Command`, `batcheval.Command` (its final
+    // segment), by ingest_relations.h aliasTargetName. "" for every other type (a map, a slice, an inline struct, a generic
+    // instantiation `Box[T]` — a floor): a value stored there lands in a container slot, which the container join answers.
+    std::string_view goTypeName( TSNode ty ) const noexcept
     {
-        for( int guard = 0; guard < 4 && !ts_node_is_null( ty ); ++guard )
-        {
-            const char* tt = ts_node_type( ty );
-            if( kindIs( tt, "type_identifier" ) )
-            {
-                return text( ty );
-            }
-            if( kindIs( tt, "qualified_type" ) )
-            {
-                return text( child( ty, m_fName ) );
-            }
-            if( !kindIs( tt, "generic_type" ) )
-            {
-                return {};
-            }
-            ty = child( ty, m_fType );
-        }
-        return {};
+        return aliasTargetName( ty, m_src );
     }
     // IX1-V2 (Go): the struct-field slot a Value row (effective position anc[j]) lands in — a keyed element of a composite
     // literal of a NAMED type (`Command{ EvalRW: fn }`: memberPath "EvalRW", memberCtor "Command"), or a field assignment

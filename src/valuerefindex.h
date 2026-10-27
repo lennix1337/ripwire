@@ -7,7 +7,7 @@
 #include "mention.h"           // pathStem — a module path's file stem
 #include "resolve.h"           // includerDir, resolvePreciseInclude — a module path's file
 #include "infra/Diagnostics.h"   // EXPECTS/ENSURES — the window and index invariants
-#include "infra/sortutil.h"      // svLess: the method-name list addMemberCalls binary-searches
+#include "infra/sortutil.h"      // svLess: the method-name list slot_join::memberCalls binary-searches
 #include "model.h"
 
 #include <algorithm>
@@ -68,6 +68,60 @@ inline bool vrBindLess( const IngestResult& ing, const Reference& a, const Refer
     return a.startByte < b.startByte;
 }
 
+// ── IX1-V2: the byFieldName languages' side of the slot join (model.h kVrSlotLangs) ──────────────────────────────────
+namespace slot_join
+{
+// The package name a Go file's directory stands for (its last path segment; "" at the root).
+inline std::string goPackageOf( std::string_view path )
+{
+    const std::string_view dir = includerDir( path );
+    const std::size_t      sl  = dir.rfind( '/' );
+    return std::string( sl == std::string_view::npos ? dir : dir.substr( sl + 1 ) );
+}
+// A byFieldName language's slot type, package-qualified: `batcheval.Command` as written, or `Command` written inside a package
+// directory named batcheval (the last path segment stands for the package name: a package whose name differs from its directory
+// is a floor). "" stays unknown (the name tier).
+inline std::string goTypeKey( const IngestResult& ing, const Reference& r )
+{
+    if( r.memberCtor.empty() || r.memberCtor.find( '.' ) != std::string::npos )
+    {
+        return r.memberCtor;
+    }
+    return goPackageOf( ing.files[ r.fileId ] ) + "." + r.memberCtor;
+}
+// The member calls `x.F( … )` of a byFieldName language whose field F holds a stored function somewhere (`holds`), as calls
+// through that slot, in reference order. Not when that language defines a METHOD named F anywhere in the tree: the call may
+// then be that method, and the receiver's type is not read here (a named floor, never a guess).
+template<class Holds>
+std::vector<std::uint32_t> memberCalls( const IngestResult& ing, const Holds& holds )
+{
+    std::vector<std::uint32_t> out;
+    if( holds.empty() )
+    {
+        return out;
+    }
+    std::vector<std::string_view> methods;
+    for( const Symbol& s : ing.symbols )
+    {
+        if( s.kind == SymKind::Method && slotJoinsByFieldName( s.lang ) && holds.contains( s.name ) )
+        {
+            methods.push_back( s.name );
+        }
+    }
+    std::ranges::sort( methods, rw::sortutil::svLess );
+    for( std::uint32_t i = 0; i < ing.references.size(); ++i )
+    {
+        const Reference& r = ing.references[i];
+        if( r.role == RefRole::Call && r.memberCall && slotJoinsByFieldName( r.lang ) && holds.contains( r.calleeName )
+            && !std::ranges::binary_search( methods, std::string_view( r.calleeName ), rw::sortutil::svLess ) )
+        {
+            out.push_back( i );
+        }
+    }
+    return out;
+}
+}   // namespace slot_join
+
 // ── IX-1 slot-type join ──────────────────────────────────────────────────────────────────────────────────
 // A function stored in struct field T.f (a Value row with a slot, ingest_valuerefs.h valueSlot) MAY be called by every call
 // through a field f (`x->f( … )`, a slot Through, scope 's'): via="slot" when both sides' declared struct types resolve to the
@@ -118,7 +172,7 @@ public:
         for( const std::uint32_t q : m_paramFactRefs )
         {
             const Reference& r = ing.references[q];
-            noteFact( m_paramSlot, r.recvVar + "#" + std::to_string( r.argCount ), goTypeKey( ing, r ) + "#" + r.memberPath );
+            noteFact( m_paramSlot, r.recvVar + "#" + std::to_string( r.argCount ), slot_join::goTypeKey( ing, r ) + "#" + r.memberPath );
         }
         for( std::size_t k = 0; k < values.size(); ++k )
         {
@@ -141,7 +195,20 @@ public:
             }
             m_valuesByField[ m_values.back().field ].push_back( static_cast<std::uint32_t>( m_values.size() - 1 ) );
         }
-        addMemberCalls( ing );
+        const std::size_t before = m_calls.size();
+        for( const std::uint32_t c : slot_join::memberCalls( ing, m_valuesByField ) )   // IX1-V2: the call side of a byFieldName slot
+        {
+            m_calls.push_back( c );
+            m_callsBySym[ ing.references[c].fromSymbol ].push_back( c );
+        }
+        if( before > 0 && m_calls.size() > before )
+        {
+            std::ranges::sort( m_calls );   // join() and callsIn() read them in reference order
+            for( auto& [ sym, calls ] : m_callsBySym )
+            {
+                std::ranges::sort( calls );
+            }
+        }
         if( m_calls.empty() )
         {
             return;   // no call through a struct field anywhere: no value needs a slot key
@@ -278,12 +345,12 @@ private:
         e.ref = refIdx;
         if( r.role == RefRole::Call )
         {
-            e.field = r.calleeName;   // IX1-V2: a member call `x.F( … )` (addMemberCalls): its receiver's type unread, the name tier
+            e.field = r.calleeName;   // IX1-V2: a member call `x.F( … )` (slot_join::memberCalls): its receiver's type unread, the name tier
             return e;
         }
         if( slotJoinsByFieldName( r.lang ) )
         {
-            e.type  = goTypeKey( ing, r );   // IX1-V2: no typedef aliases or field-type facts on this side
+            e.type  = slot_join::goTypeKey( ing, r );   // IX1-V2: no typedef aliases or field-type facts on this side
             e.field = r.memberPath;
             return e;
         }
@@ -322,64 +389,6 @@ private:
         e.field = it->second.substr( hash + 1 );
         return e;
     }
-    // IX1-V2: the member calls `x.F( … )` of a byFieldName language (model.h kVrSlotLangs) whose field F holds a stored function
-    // somewhere, as calls through that slot. Not when that language defines a METHOD named F anywhere in the tree: the call may
-    // then be that method, and the receiver's type is not read here (a named floor, never a guess).
-    void addMemberCalls( const IngestResult& ing )
-    {
-        if( m_valuesByField.empty() )
-        {
-            return;
-        }
-        std::vector<std::string_view> methods;
-        for( const Symbol& s : ing.symbols )
-        {
-            if( s.kind == SymKind::Method && slotJoinsByFieldName( s.lang ) && m_valuesByField.contains( s.name ) )
-            {
-                methods.push_back( s.name );
-            }
-        }
-        std::ranges::sort( methods, rw::sortutil::svLess );
-        const std::size_t before = m_calls.size();
-        for( std::uint32_t i = 0; i < ing.references.size(); ++i )
-        {
-            const Reference& r = ing.references[i];
-            if( r.role == RefRole::Call && r.memberCall && slotJoinsByFieldName( r.lang ) && m_valuesByField.contains( r.calleeName )
-                && !std::ranges::binary_search( methods, std::string_view( r.calleeName ), rw::sortutil::svLess ) )
-            {
-                m_calls.push_back( i );
-                m_callsBySym[ r.fromSymbol ].push_back( i );
-            }
-        }
-        if( before > 0 && m_calls.size() > before )
-        {
-            std::ranges::sort( m_calls );   // join() and callsIn() read them in reference order
-            for( auto& [ sym, calls ] : m_callsBySym )
-            {
-                std::ranges::sort( calls );
-            }
-        }
-    }
-    // IX1-V2: a byFieldName language's slot type, package-qualified: `batcheval.Command` as written, or `Command` written inside
-    // a package directory named batcheval (the last path segment stands for the package name: a package whose name differs
-    // from its directory is a floor). "" stays unknown (the name tier).
-    static std::string goTypeKey( const IngestResult& ing, const Reference& r )
-    {
-        if( r.memberCtor.empty() || r.memberCtor.find( '.' ) != std::string::npos )
-        {
-            return r.memberCtor;
-        }
-        return goPackageOf( ing.files[ r.fileId ] ) + "." + r.memberCtor;
-    }
-public:
-    // The package name a Go file's directory stands for (its last path segment; "" at the root).
-    static std::string goPackageOf( std::string_view path )
-    {
-        const std::string_view dir = includerDir( path );
-        const std::size_t      sl  = dir.rfind( '/' );
-        return std::string( sl == std::string_view::npos ? dir : dir.substr( sl + 1 ) );
-    }
-private:
     static const End* find( const std::vector<End>& ends, std::uint32_t ref ) noexcept
     {
         const auto it = std::ranges::lower_bound( ends, ref, {}, &End::ref );
@@ -1263,6 +1272,19 @@ inline std::vector<std::uint32_t> slotCallers( const IngestResult& ing, std::vec
 inline SlotSiteRow slotSiteOf( const IngestResult& ing, const ValueRefIndex& idx, std::uint32_t call );
 
 // --callers side: every value reference resolving to one of `defs`.
+// IX-1 / IX1-V2: the slot callers of callers-side row `row` (only when no container or parameter join answered it), and how many
+// distinct functions the first slot call's slot holds (cands=).
+inline void fillSlotCallers( const IngestResult& ing, const ValueRefIndex& idx, ValueRefRow& row, ValueRefRows& out )
+{
+    row.slotCalls   = slotCallers( ing, idx.slots().callsFor( row.ref ), row.slotTyped, row.slotNameAlso );
+    out.slotCallers = out.slotCallers || !row.slotCalls.empty();
+    if( !row.slotCalls.empty() )
+    {
+        row.slotCands = static_cast<std::uint32_t>( slotSiteOf( ing, idx, row.slotCalls.front() ).targets.size() );
+        out.slotCands = out.slotCands || row.slotCands > 1;
+    }
+}
+
 inline ValueRefRows valueRefCallerRows( const IngestResult& ing, const ValueRefIndex& idx, std::span<const NodeId> defs )
 {
     ValueRefRows out;
@@ -1282,13 +1304,7 @@ inline ValueRefRows valueRefCallerRows( const IngestResult& ing, const ValueRefI
         }
         if( row.calledBy.empty() )
         {
-            row.slotCalls   = slotCallers( ing, idx.slots().callsFor( r ), row.slotTyped, row.slotNameAlso );   // IX-1
-            out.slotCallers = out.slotCallers || !row.slotCalls.empty();
-            if( !row.slotCalls.empty() )
-            {
-                row.slotCands = static_cast<std::uint32_t>( slotSiteOf( ing, idx, row.slotCalls.front() ).targets.size() );   // IX1-V2
-                out.slotCands = out.slotCands || row.slotCands > 1;
-            }
+            fillSlotCallers( ing, idx, row, out );   // IX-1
         }
         out.rows.push_back( std::move( row ) );
     }
