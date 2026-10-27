@@ -23,13 +23,14 @@
 #include "graph.h"              // Graph — the declined records and their stored candidate lists
 #include "model.h"
 #include "nextverb.h"           // nextAttrXml / nextFlag — the ring's continuation
+#include "resolve.h"            // includerDir — the ring order's same-directory key
 #include "receiverevidence.h"   // ReceiverEvidence::chainOf / classLike — the receiver chain and the class kinds, one test each
 #include "serialize.h"          // escapeXml / jsonStr
 #include "valuerefindex.h"      // ValueRefIndex, slotCallers — the slot join and its tier rule
 #include "valuerefs.h"          // VrRender / vrPath — p= spelled as every other row
 #include "infra/Diagnostics.h"  // EXPECTS
 #include "infra/sortutil.h"     // svLess
-#include "infra/enumcount.h"    // enumCountIsExact — kBackHopViaNames is sized by the enum
+#include "infra/enumcount.h"    // enumCountIsExact — kHopKinds has one row per BackHopVia value
 
 #include <algorithm>
 #include <array>
@@ -38,6 +39,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -240,15 +242,106 @@ private:
 };
 
 // ── the provider ─────────────────────────────────────────────────────────────────────────────────────────────────────
-enum class BackHopVia : std::uint8_t { Slot, SlotName, Declined };
+// THE HOP KINDS, as data (composed hops). Each kind is one row of kHopKinds: its printed name, whether it is a call through a
+// struct FIELD (a chain of field calls only may go one hop deeper: the bridge's kBridgeSlotCrossings, the ring's
+// kImpactRingSlotDepth), and whether the --impact ring follows it (a declined hop is spoken for by declined_calls= / <dc>).
+// A new indirection shape (QUEUE-HOP's put/get pairing) is an appended enum value, a row here and one producer in
+// backwardHops / forwardHops; every walk then reads it through the same span with no walk-side change.
+//   container  (composed hops) a call through a container element (`handlers[i]()`) or a parameter's default
+//              (`cb()` where `cb = fn`) whose value-ref join names the sink: the --callers <vr called_by=> row (valuerefindex.h calledBy,
+//              throughsFor); width = the calling functions that row names. slotHops skipped it: it answers first there.
+enum class BackHopVia : std::uint8_t { Slot, SlotName, Declined, Container };
+
+struct HopKindInfo
+{
+    std::string_view name;
+    bool             fieldCall;   // a call through a struct field (slot, slot-name)
+    bool             ring;        // the --impact ring follows it
+};
+inline constexpr std::array kHopKinds = { HopKindInfo{ "slot", true, true }, HopKindInfo{ "slot-name", true, true }, HopKindInfo{ "declined", false, false },
+                                          HopKindInfo{ "container", false, true } };   // indexed by BackHopVia
+inline constexpr std::size_t kBackHopViaCount = 4;
+static_assert( enumCountIsExact<BackHopVia, kBackHopViaCount>(), "kBackHopViaCount must equal the BackHopVia count — raise it with the append" );
+static_assert( kHopKinds.size() == kBackHopViaCount, "one kHopKinds row per BackHopVia value (the extent is deduced from the rows)" );
+inline constexpr const HopKindInfo& hopKind( BackHopVia v ) noexcept { return kHopKinds[ std::size_t( v ) ]; }
 
 struct BackHop
 {
     NodeId        from  = kNoNode;   // the function that may call the sink without a graph edge
     BackHopVia    via   = BackHopVia::Slot;
-    std::uint32_t width = 0;         // slot: the functions that row names; declined: the stored candidates
-    std::uint32_t ref   = 0;         // the call's reference: the slot call through the field, or the declined call
+    std::uint32_t width = 0;         // slot / container: the calling functions that row names; declined: the stored candidates
+    std::uint32_t ref   = 0;         // the call's reference: the slot call through the field, the container call, or the declined call
 };
+
+// The forward twin of a BackHop (composed hops, rv-hop1 correction 2): from a function to a function one of its calls MAY reach.
+struct ForwardHop
+{
+    NodeId        to     = kNoNode;
+    BackHopVia    via    = BackHopVia::Slot;
+    std::uint32_t width  = 0;   // the backward width the provider names for that hop (the calling functions of the join)
+    std::uint32_t stored = 0;   // the FORWARD width: the distinct functions the call may reach (the field's / container's holders), never capped
+    std::uint32_t ref    = 0;   // the call
+};
+
+// One row per calling function: the stronger kind (slot before slot-name), then the narrowest width, then the first call.
+inline void keepOneHopPerCaller( std::vector<BackHop>& v )
+{
+    std::ranges::sort( v, [ ]( const BackHop& a, const BackHop& b )
+    {
+        if( a.from != b.from ) { return a.from < b.from; }
+        if( a.via != b.via ) { return a.via < b.via; }
+        if( a.width != b.width ) { return a.width < b.width; }
+        return a.ref < b.ref;
+    } );
+    v.erase( std::ranges::unique( v, [ ]( const BackHop& a, const BackHop& b ) { return a.from == b.from; } ).begin(), v.end() );
+}
+
+// The distinct functions a container call may reach: every value reference its join lands (valuesThrough), resolved.
+inline std::vector<NodeId> containerHolds( const ValueRefIndex& values, std::uint32_t through )
+{
+    std::vector<NodeId> fns;
+    for( const std::uint32_t v : values.valuesThrough( through ) )
+    {
+        const std::vector<NodeId> t = values.targetsOf( v );
+        fns.insert( fns.end(), t.begin(), t.end() );
+    }
+    std::ranges::sort( fns );
+    fns.erase( std::ranges::unique( fns ).begin(), fns.end() );
+    return fns;
+}
+
+// The hops one value-ref join yields for `sink`: `per( r, rows )` appends the rows of each value reference r to the sink; a row
+// whose caller is the sink itself or no symbol is dropped (a call made inside the sink is no way in), then one row per caller.
+template<class Per>
+inline void valueRefHops( const IngestResult& ing, const ValueRefIndex& values, NodeId sink, std::vector<BackHop>& out, Per&& per )
+{
+    std::vector<BackHop> rows;
+    for( const std::uint32_t r : values.valueRefsTo( std::span<const NodeId>( &sink, 1 ) ) )
+    {
+        per( r, rows );
+    }
+    std::erase_if( rows, [ & ]( const BackHop& h ) { return h.from == sink || h.from >= ing.symbols.size(); } );
+    keepOneHopPerCaller( rows );
+    out.insert( out.end(), rows.begin(), rows.end() );
+}
+
+// The sink's CONTAINER hops (composed hops): each function whose call through a container element (or a parameter's default) the
+// sink's value-ref join names (the --callers <vr called_by=> row: calledBy / throughsFor); width = the callers that row names.
+inline void containerBackHops( const IngestResult& ing, const ValueRefIndex& values, NodeId sink, std::vector<BackHop>& out )
+{
+    valueRefHops( ing, values, sink, out, [ & ]( std::uint32_t r, std::vector<BackHop>& rows )
+    {
+        if( ValueRefIndex::scopeOf( ing.references[ r ] ) == 'a' )
+        {
+            return;   // an ARGUMENT binds per call site: the callee's other callers pass other functions (rv-composed-hops F1); the bridge's value crossing names the passer
+        }
+        const std::uint32_t width = std::uint32_t( values.calledBy( r ).size() );
+        for( const std::uint32_t t : values.throughsFor( r ) )
+        {
+            rows.push_back( BackHop{ ing.references[ t ].fromSymbol, BackHopVia::Container, width, t } );
+        }
+    } );
+}
 
 class BackwardHops
 {
@@ -256,9 +349,11 @@ public:
     BackwardHops( const IngestResult& ing, const Graph& g, const ValueRefIndex& values ) : m_ing( ing ), m_g( g ), m_values( values ), m_rule( ing, g ) {}
 
     const DeclinedCrossRule& declinedRule() const noexcept { return m_rule; }
+    const Graph&             graph() const noexcept { return m_g; }
+    const ValueRefIndex&     values() const noexcept { return m_values; }
 
-    // The sink's backward hops: slot rows first (the stronger tier first per calling function), then declined, each kind by
-    // caller id then reference — one row per (from, kind), the narrowest width kept. Memoised per sink.
+    // The sink's backward hops: slot rows first (the stronger tier first per calling function), then declined, then container,
+    // each kind by caller id then reference — one row per (from, kind), the narrowest width kept. Memoised per sink.
     std::span<const BackHop> backwardHops( NodeId sink ) const
     {
         if( sink >= m_ing.symbols.size() )
@@ -272,33 +367,27 @@ public:
         std::vector<BackHop> out;
         slotHops( sink, out );
         declinedHops( sink, out );
+        containerBackHops( m_ing, m_values, sink, out );
         return m_memo.try_emplace( sink, std::move( out ) ).first->second;
     }
 
 private:
     void slotHops( NodeId sink, std::vector<BackHop>& out ) const
     {
-        std::vector<BackHop> slot;
-        for( const std::uint32_t r : m_values.valueRefsTo( std::span<const NodeId>( &sink, 1 ) ) )
+        valueRefHops( m_ing, m_values, sink, out, [ & ]( std::uint32_t r, std::vector<BackHop>& rows )
         {
             if( !m_values.calledBy( r ).empty() )
             {
-                continue;   // a container/parameter join answers that row first (valueRefCallerRows' own rule): no slot callers there
+                return;   // a container join answers that row first (valueRefCallerRows' own rule): container hops, no slot callers
             }
             bool                             typed    = false;
             std::uint32_t                    nameAlso = 0;
             const std::vector<std::uint32_t> calls    = slotCallers( m_ing, m_values.slots().callsFor( r ), typed, nameAlso );
             for( const std::uint32_t c : calls )
             {
-                const NodeId f = m_ing.references[ c ].fromSymbol;
-                if( f != sink && f < m_ing.symbols.size() )   // a call made inside the sink itself is no way in (defensive: the ring's `known` and the bridge's layer test hold the seeds too)
-                {
-                    slot.push_back( BackHop{ f, typed ? BackHopVia::Slot : BackHopVia::SlotName, std::uint32_t( calls.size() ), c } );
-                }
+                rows.push_back( BackHop{ m_ing.references[ c ].fromSymbol, typed ? BackHopVia::Slot : BackHopVia::SlotName, std::uint32_t( calls.size() ), c } );
             }
-        }
-        keepOnePerCaller( slot );
-        out.insert( out.end(), slot.begin(), slot.end() );
+        } );
     }
 
     void declinedHops( NodeId sink, std::vector<BackHop>& out ) const
@@ -314,21 +403,8 @@ private:
             }
             dc.push_back( BackHop{ from, BackHopVia::Declined, m_g.declinedListOff[ list + 1 ] - m_g.declinedListOff[ list ], m_g.declinedSiteRef[ site ] } );
         }
-        keepOnePerCaller( dc );
+        keepOneHopPerCaller( dc );
         out.insert( out.end(), dc.begin(), dc.end() );
-    }
-
-    // One row per calling function: the stronger kind (slot before slot-name), then the narrowest width, then the first call.
-    static void keepOnePerCaller( std::vector<BackHop>& v )
-    {
-        std::ranges::sort( v, [ ]( const BackHop& a, const BackHop& b )
-        {
-            if( a.from != b.from ) { return a.from < b.from; }
-            if( a.via != b.via ) { return a.via < b.via; }
-            if( a.width != b.width ) { return a.width < b.width; }
-            return a.ref < b.ref;
-        } );
-        v.erase( std::ranges::unique( v, [ ]( const BackHop& a, const BackHop& b ) { return a.from == b.from; } ).begin(), v.end() );
     }
 
     const IngestResult&                          m_ing;
@@ -338,9 +414,97 @@ private:
     mutable HashMap<NodeId, std::vector<BackHop>> m_memo;
 };
 
-inline constexpr std::size_t kBackHopViaCount = 3;
-static_assert( enumCountIsExact<BackHopVia, kBackHopViaCount>(), "kBackHopViaCount must equal the BackHopVia count — raise it with the append" );
-inline constexpr std::array<std::string_view, kBackHopViaCount> kBackHopViaNames = { "slot", "slot-name", "declined" };   // indexed by BackHopVia
+// The forward width of a backward hop's call: the functions that field (slot) or container may hold; 0 for a declined hop.
+inline std::uint32_t backHopStoredWidth( const IngestResult& ing, const ValueRefIndex& values, const BackHop& h )
+{
+    if( hopKind( h.via ).fieldCall )
+    {
+        return std::uint32_t( slotSiteOf( ing, values, h.ref ).targets.size() );
+    }
+    return h.via == BackHopVia::Container ? std::uint32_t( containerHolds( values, h.ref ).size() ) : 0u;
+}
+
+// Direction::Forward (composed hops, rv-hop1 correction 2): the functions `u`'s calls through a struct field or a container
+// MAY reach, each confirmed from the other side (that function's backward hops name u by the same kind) so the two
+// directions never disagree. Slot rows come from slotSiteRows (the --callees <vs> rows: same-type tier alone when it has any, a
+// site the container join answers left to it), container rows from each call through a container (or a parameter's default) in u
+// (valuesThrough). stored = how many functions that call may reach. Slot rows first, then container; memoised per u. No
+// declined rows: a declined call's candidates are the graph's stored list (pathgaps.h bridgeDeclinedCrossings reads it).
+class ForwardHops
+{
+public:
+    ForwardHops( const IngestResult& ing, const BackwardHops& back ) : m_ing( ing ), m_back( back ) {}
+
+    std::span<const ForwardHop> forwardHops( NodeId u ) const
+    {
+        if( u >= m_ing.symbols.size() )
+        {
+            return {};
+        }
+        if( const auto it = m_memo.find( u ); it != m_memo.end() )
+        {
+            return it->second;
+        }
+        std::vector<ForwardHop> out;
+        for( const SlotSiteRow& site : slotSiteRows( m_ing, m_back.values(), std::span<const NodeId>( &u, 1 ) ) )
+        {
+            confirm( u, site.targets, site.ref, true, out );
+        }
+        for( const std::uint32_t t : throughsIn( u ) )
+        {
+            confirm( u, containerHolds( m_back.values(), t ), t, false, out );
+        }
+        return m_memo.try_emplace( u, std::move( out ) ).first->second;
+    }
+
+private:
+    // Each of `fns` whose backward hops name u by a field kind (fieldCall) or the container kind becomes a forward row.
+    void confirm( NodeId u, const std::vector<NodeId>& fns, std::uint32_t call, bool fieldCall, std::vector<ForwardHop>& out ) const
+    {
+        for( const NodeId f : fns )
+        {
+            const std::span<const BackHop> hops = m_back.backwardHops( f );
+            const auto it = std::ranges::find_if( hops, [ & ]( const BackHop& h )
+            {
+                return h.from == u && ( fieldCall ? hopKind( h.via ).fieldCall : h.via == BackHopVia::Container );
+            } );
+            if( it != hops.end() )
+            {
+                out.push_back( ForwardHop{ f, it->via, it->width, std::uint32_t( fns.size() ), call } );
+            }
+        }
+    }
+
+    // The calls through a container element (or a parameter's default) made in u (role Through), in reference order: one sorted
+    // (caller, reference) table built on first use, so a walk never rescans the index per node.
+    std::span<const std::uint32_t> throughsIn( NodeId u ) const
+    {
+        if( !m_built )
+        {
+            m_built = true;
+            for( std::uint32_t i = 0; i < m_ing.references.size(); ++i )
+            {
+                if( m_ing.references[ i ].role == RefRole::Through && m_ing.references[ i ].fromSymbol < m_ing.symbols.size() )
+                {
+                    m_by.emplace_back( m_ing.references[ i ].fromSymbol, i );
+                }
+            }
+            std::ranges::sort( m_by );
+            m_refs.reserve( m_by.size() );
+            std::ranges::transform( m_by, std::back_inserter( m_refs ), [ ]( const std::pair<NodeId, std::uint32_t>& e ) { return e.second; } );
+        }
+        const auto lo = std::ranges::lower_bound( m_by, std::pair<NodeId, std::uint32_t>( u, 0u ) );
+        const auto hi = std::ranges::lower_bound( m_by, std::pair<NodeId, std::uint32_t>( u + 1, 0u ) );
+        return std::span<const std::uint32_t>( m_refs ).subspan( std::size_t( lo - m_by.begin() ), std::size_t( hi - lo ) );
+    }
+
+    const IngestResult&                                   m_ing;
+    const BackwardHops&                                   m_back;
+    mutable HashMap<NodeId, std::vector<ForwardHop>>      m_memo;
+    mutable std::vector<std::pair<NodeId, std::uint32_t>> m_by;     // (caller, Through reference), sorted
+    mutable std::vector<std::uint32_t>                    m_refs;   // parallel: the reference alone (throughsIn's span)
+    mutable bool                                          m_built = false;
+};
 
 // Whether any of `sinks` has a backward hop a consumer follows (width within kBackHopWidth): --path's root next= swap.
 inline bool anyFollowedBackHop( const BackwardHops& hops, std::span<const NodeId> sinks )
@@ -351,149 +515,508 @@ inline bool anyFollowedBackHop( const BackwardHops& hops, std::span<const NodeId
     } );
 }
 
-// ── consumer 2: the --impact hedged slot ring ─────────────────────────────────────────────────────────────────────────
+// ── consumer 2: the --impact hedged ring ─────────────────────────────────────────────────────────────────────────────
 // THE GAP. --impact's reaches= walks resolved edges only, so a function stored in a struct field answered reaches="0" beside
-// its own <vr via="slot" called_by=> row (the IX-1 census: 226 such answers on tmux + htop).
+// its own <vr via="slot" called_by=> row (the IX-1 census: 226 such answers on tmux + htop). HOP1 added one or two slot hops;
+// the functions that reach THOSE through ordinary proven calls (tmux: cmdq_fire_command's own callers) stayed out, a third slot
+// hop (tmux send-keys: cancel ← window_copy_command ← cmd_send_keys_exec ← cmdq_fire_command) stopped at two, and a function
+// in a table called by index (`handlers[i]()`) had no ring at all.
 //
-// THE CONTRACT. Ring d=1 is the slot callers the answer's own <vr> rows name (the provider's slot hops of each answered
-// definition); ring d=2 is the slot callers of each d=1 function (one more slot hop, the provider again). Two slot hops in all,
-// no declined hop (declined_calls= / <dc> already speak for those), no resolved edge walked from a ring member.
-// reaches_hedged=N counts the distinct ring functions (d=1 and d=2) that reaches= does not already hold and that are not an
-// answered definition; the d=2 rows (<rh>) are listed after the <vrs> rows, kImpactRingRowCap shown, next= the callers of the
-// first unshown row's d=1 function. Absent (no attribute, no rows) when the ring is empty: byte-identical.
-// What it does NOT mean: a ring function MAY change behaviour through a slot call; it is never a proven caller and never in
-// reaches= / by_depth= / radius_*.
-inline constexpr std::size_t kImpactRingRowCap = 16;
+// THE CONTRACT (HOP1 + composed hops). The ring follows the hop kinds whose kHopKinds row says `ring` (slot, slot-name,
+// container; never declined: declined_calls= / <dc> speak for those):
+//   d=1  each answered definition's ring hops (the <vr> rows' called_by=);
+//   d=2  each d=1 function's ring hops;
+//   d=3  each d=2 function's FIELD hops, only on a chain whose every hop is a field call (slot / slot-name) within
+//        kBackHopWidth calling functions — the bridge's own allowance (pathgaps.h kBridgeSlotCrossings);
+//   tail every function that reaches a ring member through PROVEN call edges (graph.h transitiveCallers), from members whose
+//        every hop on the chain is within kBackHopWidth (a wider hop is counted itself but composed with nothing).
+// reaches_hedged=N counts the distinct functions of d=1..3 and the tail that reaches= does not already hold and that are not an
+// answered definition. Every one of them is HEDGED: a chain with one hedged hop is hedged, whatever its other edges are.
+// The d=2 and d=3 rows (<rh>) are listed after the <vrs> rows in the ring order (ImpactRingOrder), kImpactRingRowCap shown,
+// next= the callers of the first unshown row's `calls`; each prints its call's forward width (slot_fns= for a field, cands= for
+// a container). The tail has no rows: `--impact=<ring member>` lists it, and a member with more than kBackHopWidth counted
+// functions behind it prints one <hub> row naming that call (the hub fold, ImpactHubRow). Absent (no attribute, no rows)
+// when the ring is empty: byte-identical.
+// What it does NOT mean: a ring or tail function MAY change behaviour through a hedged call; it is never a proven caller and
+// never in reaches= / by_depth= / radius_*.
+inline constexpr std::size_t   kImpactRingRowCap    = 16;
+inline constexpr std::uint32_t kImpactRingSlotDepth = 3;   // a field-only chain's depth; pathgaps.h pins it to kBridgeSlotCrossings
 
 struct ImpactRingRow
 {
-    NodeId        fn    = kNoNode;   // the d=2 function: it may call `calls` through a struct field
-    NodeId        calls = kNoNode;   // the d=1 function it may call
-    BackHopVia    via   = BackHopVia::Slot;
-    std::uint32_t ref   = 0;         // its slot call (called_at=)
+    NodeId        fn     = kNoNode;   // the d=2 / d=3 function: it may call `calls` through a hedged hop
+    NodeId        calls  = kNoNode;   // the d=1 / d=2 function it may call
+    BackHopVia    via    = BackHopVia::Slot;
+    std::uint32_t ref    = 0;         // its call (called_at=)
+    std::uint32_t depth  = 2;
+    std::uint32_t stored = 0;         // the call's forward width (every row: the ordering reads it)
+    std::uint32_t width  = 0;         // the hop's backward width (BackHop.width): the ordering's crossing width
 };
+
+// HUB FOLD (hub-fold lane). A ring member (d=1..3) whose chain stayed narrow and whose own proven tail (the counted functions
+// that reach it through proven calls) holds more than kBackHopWidth functions prints ONE <hub> row: behind= that tail's size,
+// tested= how many of it a test reaches, sample= its first three by the ring order, next= --impact on the member (which lists
+// the tail as proven rows). The tail itself is never listed here. The fold changes rows only: reaches_hedged= keeps every
+// function; reaches_hedged_hubs=K says K of them sit behind some hub (hubs may share callers; K counts each once).
+// What it does NOT mean: behind= is not a proven count toward of= (every one is still hedged), and a member at or under the
+// bound is not folded (its tail stays unlisted, as before the fold).
+struct ImpactHubRow
+{
+    NodeId              fn     = kNoNode;
+    BackHopVia          via    = BackHopVia::Slot;   // the hop that joined the member to the ring
+    std::uint32_t       depth  = 1;
+    std::size_t         behind = 0;
+    std::size_t         tested = 0;
+    std::vector<NodeId> sample;                      // at most kImpactHubSample, in ring order
+};
+inline constexpr std::size_t kImpactHubSample = 3;
 
 struct ImpactRing
 {
-    std::size_t                hedged = 0;   // reaches_hedged=
-    std::vector<ImpactRingRow> rows;         // d=2, in d=1 order then by name
+    std::size_t                hedged = 0;    // reaches_hedged=
+    std::vector<ImpactRingRow> rows;          // ring order (impactRingLess): certainty tier, width narrow first, then the node lens
+    std::vector<ImpactHubRow>  hubs;          // widest first
+    std::size_t                hubbed    = 0; // reaches_hedged_hubs=: distinct functions behind some hub
+    std::size_t                rowsShown = 0; // <rh> rows printed (kImpactRingRowCap, or less under an explicit --limit)
+    std::size_t                hubsShown = 0; // <hub> rows printed
+    std::size_t                cut       = 0; // ring_cut=: hedged rows the --limit page cut (proven <s> rows keep the page)
+    std::string                cutNext;       // the replay that shows them (the root next= while cut > 0)
 };
 
-inline ImpactRing impactSlotRing( const IngestResult& ing, const BackwardHops& hops, std::span<const NodeId> seeds, std::span<const NodeId> reach )
+// The ring order's node lens (rule (b) after the certainty tier and the width): tested (isTestedByReach, the radius_tested=
+// lens) > an entry point (no proven caller: the top of its chain) > same directory as one of of='s definitions > rank r=.
+// A null testReach / empty rank skips that key (every row ties on it).
+struct ImpactRingLens
 {
-    ImpactRing           out;
-    const std::size_t    S = ing.symbols.size();
-    std::vector<char>    known( S, 0 );   // an answered definition or a proven reach member: never counted here
-    std::vector<char>    counted( S, 0 );
-    for( const NodeId n : seeds ) { if( n < S ) { known[ n ] = 1; } }
-    for( const NodeId n : reach ) { if( n < S ) { known[ n ] = 1; } }
-    std::vector<NodeId> d1;
-    for( const NodeId s : seeds )
+    const std::vector<char>* testReach = nullptr;
+    std::span<const float>   rank;
+};
+
+// The ring's walk state (one answer): which depth each function joined at, whether some chain to it stayed narrow, and whether
+// such a chain is also field-only. Each step is one method so impactSlotRing reads as the contract above.
+class ImpactRingWalk
+{
+public:
+    ImpactRingWalk( const IngestResult& ing, const BackwardHops& hops, std::span<const NodeId> seeds, std::span<const NodeId> reach )
+        : m_hops( hops ), m_S( ing.symbols.size() ), m_known( m_S, 0 ), m_counted( m_S, 0 ), m_level( m_S, 0 ), m_narrow( m_S, 0 ), m_fieldNarrow( m_S, 0 ),
+          m_via( m_S, BackHopVia::Slot )
     {
-        for( const BackHop& h : hops.backwardHops( s ) )
+        for( const std::span<const NodeId> set : { seeds, reach } )
         {
-            if( h.via != BackHopVia::Declined && std::ranges::find( d1, h.from ) == d1.end() )
+            for( const NodeId n : set ) { if( n < m_S ) { m_known[ n ] = 1; } }
+        }
+    }
+
+    // d=1: each answered definition's ring hops (all of them counted, whatever their width)
+    void depthOne( std::span<const NodeId> seeds )
+    {
+        for( const NodeId s : seeds )
+        {
+            for( const BackHop& h : m_hops.backwardHops( s ) )
             {
-                d1.push_back( h.from );
+                if( hopKind( h.via ).ring && h.from < m_S )
+                {
+                    join( h.from, 1, m_d1, h.via );
+                    carry( h.from, h, true, true );
+                }
+            }
+        }
+        for( const NodeId f : m_d1 )
+        {
+            count( f );
+        }
+    }
+    // d=2: each d=1 function's ring hops; a proven member, an answered definition or a d=1 function already speaks for itself
+    void depthTwo( ImpactRing& out )
+    {
+        for( const NodeId f : m_d1 )
+        {
+            for( const BackHop& h : m_hops.backwardHops( f ) )
+            {
+                if( hopKind( h.via ).ring && fresh( f, h, 1 ) )
+                {
+                    count( h.from );
+                    out.rows.push_back( ImpactRingRow{ h.from, f, h.via, h.ref, 2, 0, h.width } );
+                    join( h.from, 2, m_d2, h.via );
+                    carry( h.from, h, m_narrow[ f ] != 0, m_fieldNarrow[ f ] != 0 );
+                }
             }
         }
     }
-    const auto count = [ & ]( NodeId n )
+    // d=3: only off a field-only, narrow chain, only by a narrow field hop, never back onto a member the ring already holds
+    void depthThree( ImpactRing& out )
     {
-        if( n < S && known[ n ] == 0 && counted[ n ] == 0 )
+        for( const NodeId f : m_d2 )
         {
-            counted[ n ] = 1;
-            ++out.hedged;
-        }
-    };
-    for( const NodeId f : d1 )
-    {
-        count( f );
-    }
-    for( const NodeId f : d1 )
-    {
-        for( const BackHop& h : hops.backwardHops( f ) )
-        {
-            if( h.via == BackHopVia::Declined || h.from == f || ( h.from < S && known[ h.from ] != 0 ) || std::ranges::find( d1, h.from ) != d1.end() )
+            for( const BackHop& h : m_hops.backwardHops( f ) )
             {
-                continue;   // a proven member, an answered definition or a d=1 function already speaks for itself
+                if( m_fieldNarrow[ f ] != 0 && hopKind( h.via ).fieldCall && h.width <= kBackHopWidth && fresh( f, h, 0 ) )
+                {
+                    join( h.from, 3, m_d3, h.via );
+                    m_narrow[ h.from ] = 1;
+                    count( h.from );
+                    out.rows.push_back( ImpactRingRow{ h.from, f, h.via, h.ref, 3, 0, h.width } );
+                }
             }
-            count( h.from );
-            out.rows.push_back( ImpactRingRow{ h.from, f, h.via, h.ref } );
         }
+    }
+    // the tail: the proven callers of every member whose chain stayed narrow (one walk over all of them)
+    void tail()
+    {
+        for( const std::vector<NodeId>* members : { &m_d1, &m_d2, &m_d3 } )
+        {
+            std::ranges::copy_if( *members, std::back_inserter( m_composable ), [ & ]( NodeId n ) { return m_narrow[ n ] != 0; } );
+        }
+        for( const NodeId n : m_composable.empty() ? std::vector<NodeId>() : transitiveCallers( m_hops.graph(), m_composable ) )
+        {
+            count( n );
+        }
+    }
+    // The hub fold: one proven-caller walk per composable member (attributeReachAnswer groups a reach by DEFINITION of of=,
+    // not by ring member, so it cannot say which member a tail function sits behind). The walk is the tail's own
+    // (expandCallers) with its visited marks reset per member over the nodes it touched, never re-allocated. Skipped
+    // whole when every counted function together is within the bound: a member's tail is a subset of them (a tail may hold
+    // counted d=2/d=3 ring members, not only the tail walk's own share).
+    // `tailOf(member, out)` receives each hub's counted tail before the row is kept (the caller orders the sample).
+    template<class TailFn>
+    void hubs( ImpactRing& out, TailFn&& tailOf ) const
+    {
+        std::size_t hubbed = 0;
+        if( m_hedged <= kBackHopWidth )
+        {
+            return;
+        }
+        const Graph&               g = m_hops.graph();
+        std::vector<char>          seen( g.wOutDeg.size(), 0 ), behindAny( m_S, 0 );
+        std::vector<std::uint32_t> depth( g.wOutDeg.size(), 0 );
+        std::vector<NodeId>        q, tail;
+        for( const NodeId n : m_composable )
+        {
+            if( n >= seen.size() )
+            {
+                continue;
+            }
+            q.assign( 1, n );
+            seen[ n ] = 1;
+            expandCallers( g, q, 0, SIZE_MAX, seen, depth );
+            tail.clear();
+            for( std::size_t i = 1; i < q.size(); ++i )
+            {
+                if( q[ i ] < m_S && m_counted[ q[ i ] ] != 0 )
+                {
+                    tail.push_back( q[ i ] );
+                }
+            }
+            for( const NodeId x : q ) { seen[ x ] = 0; }
+            if( tail.size() > kBackHopWidth )
+            {
+                ImpactHubRow hub{ n, m_via[ n ], std::uint32_t( m_level[ n ] ), tail.size(), 0, {} };
+                for( const NodeId x : tail )
+                {
+                    hubbed += behindAny[ x ] == 0 ? 1 : 0;
+                    behindAny[ x ] = 1;
+                }
+                tailOf( hub, tail );
+                out.hubs.push_back( std::move( hub ) );
+            }
+        }
+        out.hubbed = hubbed;
+    }
+    std::size_t hedged() const noexcept { return m_hedged; }
+
+private:
+    void count( NodeId n )
+    {
+        if( n < m_S && m_known[ n ] == 0 && m_counted[ n ] == 0 )
+        {
+            m_counted[ n ] = 1;
+            ++m_hedged;
+        }
+    }
+    void join( NodeId n, char depth, std::vector<NodeId>& at, BackHopVia via )
+    {
+        if( m_level[ n ] == 0 )
+        {
+            m_level[ n ] = depth;
+            m_via[ n ]   = via;
+            at.push_back( n );
+        }
+    }
+    void carry( NodeId to, const BackHop& h, bool narrowIn, bool fieldIn )
+    {
+        const bool w         = h.width <= kBackHopWidth;
+        m_narrow[ to ]       = char( m_narrow[ to ] != 0 || ( narrowIn && w ) );
+        m_fieldNarrow[ to ]  = char( m_fieldNarrow[ to ] != 0 || ( fieldIn && w && hopKind( h.via ).fieldCall ) );
+    }
+    // h.from is a new ring function for member f: not f, not known, and (maxLevel 1) not at d=1 / (maxLevel 0) at no depth yet
+    bool fresh( NodeId f, const BackHop& h, char maxLevel ) const
+    {
+        return h.from != f && h.from < m_S && m_known[ h.from ] == 0 && ( maxLevel == 0 ? m_level[ h.from ] == 0 : m_level[ h.from ] != 1 );
+    }
+
+    const BackwardHops& m_hops;
+    std::size_t         m_S;
+    std::size_t         m_hedged = 0;
+    std::vector<char>   m_known, m_counted, m_level, m_narrow, m_fieldNarrow;
+    std::vector<BackHopVia> m_via;                    // the hop that joined each member (a hub row's via=)
+    std::vector<NodeId> m_d1, m_d2, m_d3, m_composable;
+};
+
+// The ring order (rule (b)): a node's lens key, then the row key that puts it after the certainty tier and the width.
+class ImpactRingOrder
+{
+public:
+    ImpactRingOrder( const IngestResult& ing, const Graph& g, const ImpactRingLens& lens, std::span<const NodeId> seeds )
+        : m_ing( ing ), m_g( g ), m_lens( lens ), m_testReach( lens.testReach != nullptr ? *lens.testReach : kNoTestReach() )
+    {
+        for( const NodeId s : seeds )
+        {
+            if( s < ing.symbols.size() ) { m_seedDirs.push_back( dirOf( s ) ); }
+        }
+    }
+    bool nodeLess( NodeId a, NodeId b ) const
+    {
+        const auto ka = key( a ), kb = key( b );
+        return ka != kb ? ka < kb : a < b;
+    }
+    // certainty tier, then the backward and forward widths (narrow first), then the node lens
+    bool rowLess( const ImpactRingRow& a, const ImpactRingRow& b ) const
+    {
+        const auto ta = std::tie( a.depth, a.width, a.stored ), tb = std::tie( b.depth, b.width, b.stored );
+        return ta != tb ? ta < tb : ( a.fn != b.fn ? nodeLess( a.fn, b.fn ) : a.ref < b.ref );
+    }
+    bool tested( NodeId n ) const noexcept { return isTestedByReach( m_ing, m_testReach, n ); }
+
+private:
+    std::string_view dirOf( NodeId n ) const { return includerDir( m_ing.files[ m_ing.symbols[ n ].fileId ] ); }
+    // (untested, not an entry, another directory, -rank): smaller first
+    std::tuple<bool, bool, bool, float> key( NodeId n ) const
+    {
+        const auto*       ro    = m_g.inEdges.rowOffsets();
+        const bool        entry = n < m_g.inEdges.rows() && ro[ n ] == ro[ n + 1 ];
+        const bool        same  = std::ranges::find( m_seedDirs, dirOf( n ) ) != m_seedDirs.end();
+        const float       r     = n < m_lens.rank.size() ? m_lens.rank[ n ] : 0.f;
+        return { !tested( n ), !entry, !same, -r };
+    }
+
+    const IngestResult&           m_ing;
+    const Graph&                  m_g;
+    static const std::vector<char>& kNoTestReach()
+    {
+        static const std::vector<char> none;
+        return none;
+    }
+    const ImpactRingLens&         m_lens;
+    const std::vector<char>&      m_testReach;   // empty: no row is tested
+    std::vector<std::string_view> m_seedDirs;
+};
+
+inline ImpactRing impactSlotRing( const IngestResult& ing, const BackwardHops& hops, std::span<const NodeId> seeds, std::span<const NodeId> reach,
+                                  const ImpactRingLens& lens = {} )
+{
+    static_assert( kImpactRingSlotDepth == 3, "the walk below takes d=1, d=2 and exactly one more field hop" );
+    ImpactRing     out;
+    ImpactRingWalk walk( ing, hops, seeds, reach );
+    walk.depthOne( seeds );
+    walk.depthTwo( out );
+    walk.depthThree( out );
+    walk.tail();
+    out.hedged = walk.hedged();
+    for( ImpactRingRow& row : out.rows )
+    {
+        row.stored = backHopStoredWidth( ing, hops.values(), BackHop{ row.fn, row.via, 0, row.ref } );
+    }
+    const ImpactRingOrder order( ing, hops.graph(), lens, seeds );
+    std::ranges::stable_sort( out.rows, [ & ]( const ImpactRingRow& a, const ImpactRingRow& b ) { return order.rowLess( a, b ); } );
+    walk.hubs( out, [ & ]( ImpactHubRow& hub, std::vector<NodeId>& tail )
+    {
+        hub.tested = std::size_t( std::ranges::count_if( tail, [ & ]( NodeId n ) { return order.tested( n ); } ) );
+        const std::size_t k = std::min( tail.size(), kImpactHubSample );
+        std::partial_sort( tail.begin(), tail.begin() + std::ptrdiff_t( k ), tail.end(), [ & ]( NodeId a, NodeId b ) { return order.nodeLess( a, b ); } );
+        hub.sample.assign( tail.begin(), tail.begin() + std::ptrdiff_t( k ) );
+    } );
+    std::ranges::stable_sort( out.hubs, [ ]( const ImpactHubRow& a, const ImpactHubRow& b )
+                              { return a.depth != b.depth ? a.depth < b.depth : a.behind > b.behind; } );
+    out.rowsShown = std::min( out.rows.size(), kImpactRingRowCap );
+    out.hubsShown = out.hubs.size();
+    return out;
+}
+
+// The page window (rule (c)): under an explicit --limit, the proven <s> rows keep the page and the hedged rows take what is
+// left, hubs first (they carry most of the count), then <rh>; ring_cut= counts the rows cut and the root next= replays the
+// answer at the limit that shows them all (every proven row plus every ring row the default shows). No --limit: unchanged.
+inline void sizeImpactRing( ImpactRing& ring, int pageLimit, std::size_t provenShown, std::size_t provenTotal, std::string_view sym )
+{
+    const std::size_t rowsDefault = std::min( ring.rows.size(), kImpactRingRowCap );
+    ring.rowsShown = rowsDefault;
+    ring.hubsShown = ring.hubs.size();
+    if( pageLimit <= 0 )
+    {
+        return;
+    }
+    std::size_t budget = std::size_t( pageLimit ) > provenShown ? std::size_t( pageLimit ) - provenShown : 0;
+    ring.hubsShown     = std::min( ring.hubsShown, budget );
+    budget -= ring.hubsShown;
+    ring.rowsShown = std::min( ring.rowsShown, budget );
+    ring.cut       = rowsDefault + ring.hubs.size() - ring.rowsShown - ring.hubsShown;
+    ring.cutNext   = ring.cut == 0 ? std::string() : nextFlag( "--impact=", sym ) + " --limit=" + std::to_string( provenTotal + rowsDefault + ring.hubs.size() );
+}
+
+inline std::string impactRingAttrXml( const ImpactRing& ring )
+{
+    return countFieldOrEmpty( "reaches_hedged", ring.hedged, /*json=*/false ) + countFieldOrEmpty( "reaches_hedged_hubs", ring.hubbed, /*json=*/false )
+         + countFieldOrEmpty( "ring_cut", ring.cut, /*json=*/false );
+}
+inline std::string impactRingKeyJson( const ImpactRing& ring )
+{
+    return countFieldOrEmpty( "reaches_hedged", ring.hedged, /*json=*/true ) + countFieldOrEmpty( "reaches_hedged_hubs", ring.hubbed, /*json=*/true )
+         + countFieldOrEmpty( "ring_cut", ring.cut, /*json=*/true );
+}
+
+// A hub's selector: file:name, so a namesake in another file is never the one --impact lists (checklist 16).
+inline std::string impactHubSelector( const IngestResult& ing, const ImpactHubRow& hub, const VrRender& rr )
+{
+    const Symbol& s = ing.symbols[ hub.fn ];
+    return vrPath( ing, s.fileId, rr ) + ":" + s.name;
+}
+
+// The answer's root next=: the ring_cut replay while hedged rows were cut; else the widest hub's --impact when the hubs hold
+// more than half of reaches_hedged= (that is where the answer's weight sits); else `fallback` (--safe-delete=, as before).
+inline std::string impactRootNext( const IngestResult& ing, const ImpactRing& ring, const VrRender& rr, std::string fallback )
+{
+    if( ring.cut > 0 )
+    {
+        return ring.cutNext;
+    }
+    if( !ring.hubs.empty() && 2 * ring.hubbed > ring.hedged )
+    {
+        const auto widest = std::ranges::max_element( ring.hubs, [ ]( const ImpactHubRow& a, const ImpactHubRow& b ) { return a.behind < b.behind; } );
+        return nextFlag( "--impact=", impactHubSelector( ing, *widest, rr ) );
+    }
+    return fallback;
+}
+
+inline std::string impactRingNext( const IngestResult& ing, const ImpactRing& ring )
+{
+    return ring.rowsShown < ring.rows.size() ? nextFlag( "--callers=", ing.symbols[ ring.rows[ ring.rowsShown ].calls ].name ) : std::string();
+}
+
+inline std::uint32_t impactRingDepth( const ImpactRing& ring )
+{
+    return std::ranges::any_of( ring.rows, [ ]( const ImpactRingRow& r ) { return r.depth == 3; } ) ? 3u : 2u;
+}
+
+// A ring row's forward-width attribute name: slot_fns for a field call, cands for a container call.
+inline std::string_view impactRingStoredKey( const ImpactRingRow& row ) noexcept
+{
+    return hopKind( row.via ).fieldCall ? std::string_view( "slot_fns" ) : std::string_view( "cands" );
+}
+
+inline std::string impactHubSampleText( const IngestResult& ing, const ImpactHubRow& hub, std::string_view sep, bool json )
+{
+    std::string out;
+    for( const NodeId n : hub.sample )
+    {
+        out += ( out.empty() ? std::string() : std::string( sep ) ) + ( json ? "\"" + jsonStr( ing.symbols[ n ].name ) + "\"" : ing.symbols[ n ].name );
     }
     return out;
 }
 
-inline std::string impactRingAttrXml( const ImpactRing& ring ) { return countFieldOrEmpty( "reaches_hedged", ring.hedged, /*json=*/false ); }
-inline std::string impactRingKeyJson( const ImpactRing& ring ) { return countFieldOrEmpty( "reaches_hedged", ring.hedged, /*json=*/true ); }
-
-inline std::string impactRingNext( const IngestResult& ing, const ImpactRing& ring )
-{
-    const std::size_t shown = std::min( ring.rows.size(), kImpactRingRowCap );
-    return shown < ring.rows.size() ? nextFlag( "--callers=", ing.symbols[ ring.rows[ shown ].calls ].name ) : std::string();
-}
-
-// <ring d="2" total= shown=[ next=]><rh called_by= called_at= via= calls=/>…</ring>, or "" when there is no d=2 row.
+// <ring d="2|3" total= shown=[ next=]><rh called_by= called_at= via= calls=[ d="3"] slot_fns=|cands=/>…</ring> (absent with no
+// shown row), then <hub n= via= d= behind= tested= sample= next=/> per shown hub; "" when neither rides.
 inline std::string impactRingXml( const IngestResult& ing, const ImpactRing& ring, const VrRender& rr )
 {
-    if( ring.rows.empty() )
-    {
-        return {};
-    }
     std::vector<char> esc;
-    const auto        ex    = [ & ]( std::string_view s ) { return std::string( escapeXml( s, esc ) ); };
-    const std::size_t shown = std::min( ring.rows.size(), kImpactRingRowCap );
-    std::string       out   = "<ring d=\"2\" total=\"" + std::to_string( ring.rows.size() ) + "\" shown=\"" + std::to_string( shown ) + "\"" + nextAttrXml( impactRingNext( ing, ring ) ) + ">";
-    for( std::size_t i = 0; i < shown; ++i )
+    const auto        ex  = [ & ]( std::string_view s ) { return std::string( escapeXml( s, esc ) ); };
+    std::string       out;
+    if( ring.rowsShown > 0 )
     {
-        const ImpactRingRow& row = ring.rows[ i ];
-        const Reference&     c   = ing.references[ row.ref ];
-        out += "<rh called_by=\"" + ex( ing.symbols[ row.fn ].name ) + "\" called_at=\"" + ex( vrPath( ing, c.fileId, rr ) ) + ":" + std::to_string( c.line )
-             + "\" via=\"" + std::string( kBackHopViaNames[ std::size_t( row.via ) ] ) + "\" calls=\"" + ex( ing.symbols[ row.calls ].name ) + "\"/>";
+        out = "<ring d=\"" + std::to_string( impactRingDepth( ring ) ) + "\" total=\"" + std::to_string( ring.rows.size() ) + "\" shown=\"" + std::to_string( ring.rowsShown ) + "\""
+            + nextAttrXml( impactRingNext( ing, ring ) ) + ">";
+        for( std::size_t i = 0; i < ring.rowsShown; ++i )
+        {
+            const ImpactRingRow& row = ring.rows[ i ];
+            const Reference&     c   = ing.references[ row.ref ];
+            out += "<rh called_by=\"" + ex( ing.symbols[ row.fn ].name ) + "\" called_at=\"" + ex( vrPath( ing, c.fileId, rr ) ) + ":" + std::to_string( c.line )
+                 + "\" via=\"" + std::string( hopKind( row.via ).name ) + "\" calls=\"" + ex( ing.symbols[ row.calls ].name ) + "\""
+                 + ( row.depth == 3 ? std::string( " d=\"3\"" ) : std::string() ) + " " + std::string( impactRingStoredKey( row ) ) + "=\"" + std::to_string( row.stored ) + "\"/>";
+        }
+        out += "</ring>";
     }
-    return out + "</ring>";
+    for( std::size_t i = 0; i < ring.hubsShown; ++i )
+    {
+        const ImpactHubRow& hub = ring.hubs[ i ];
+        out += "<hub n=\"" + ex( ing.symbols[ hub.fn ].name ) + "\" via=\"" + std::string( hopKind( hub.via ).name ) + "\" d=\"" + std::to_string( hub.depth )
+             + "\" behind=\"" + std::to_string( hub.behind ) + "\" tested=\"" + std::to_string( hub.tested ) + "\" sample=\"" + ex( impactHubSampleText( ing, hub, ",", false ) ) + "\""
+             + nextAttrXml( nextFlag( "--impact=", impactHubSelector( ing, hub, rr ) ) ) + "/>";
+    }
+    return out;
 }
-// The --json twin: `,"ring":{"d":2,"total":N,"shown":M[,"next":…],"rows":[{"called_by":…,"called_at":…,"via":…,"calls":…}]}`, or "".
+// The --json twin: `,"ring":{"d":2|3,"total":N,"shown":M[,"next":…],"rows":[{"called_by":…,"called_at":…,"via":…,"calls":…[,"d":3],"slot_fns"|"cands":K}]}`
+// then `,"hubs":[{"n":…,"via":…,"d":D,"behind":B,"tested":T,"sample":[…],"next":…}]`, each absent as its XML twin is.
+inline std::string impactHubsJson( const IngestResult& ing, const ImpactRing& ring, const VrRender& rr );
 inline std::string impactRingJson( const IngestResult& ing, const ImpactRing& ring, const VrRender& rr )
 {
-    if( ring.rows.empty() )
+    std::string out;
+    if( ring.rowsShown > 0 )
     {
-        return {};
+        out = ",\"ring\":{\"d\":" + std::to_string( impactRingDepth( ring ) ) + ",\"total\":" + std::to_string( ring.rows.size() ) + ",\"shown\":" + std::to_string( ring.rowsShown );
+        if( const std::string next = impactRingNext( ing, ring ); !next.empty() )
+        {
+            out += ",\"next\":\"" + jsonStr( next ) + "\"";
+        }
+        out += ",\"rows\":[";
+        for( std::size_t i = 0; i < ring.rowsShown; ++i )
+        {
+            const ImpactRingRow& row = ring.rows[ i ];
+            const Reference&     c   = ing.references[ row.ref ];
+            out += std::string( i == 0 ? "{" : ",{" ) + "\"called_by\":\"" + jsonStr( ing.symbols[ row.fn ].name ) + "\",\"called_at\":\""
+                 + jsonStr( vrPath( ing, c.fileId, rr ) + ":" + std::to_string( c.line ) ) + "\",\"via\":\"" + std::string( hopKind( row.via ).name )
+                 + "\",\"calls\":\"" + jsonStr( ing.symbols[ row.calls ].name ) + "\"" + ( row.depth == 3 ? std::string( ",\"d\":3" ) : std::string() )
+                 + ",\"" + std::string( impactRingStoredKey( row ) ) + "\":" + std::to_string( row.stored ) + "}";
+        }
+        out += "]}";
     }
-    const std::size_t shown = std::min( ring.rows.size(), kImpactRingRowCap );
-    std::string       out   = ",\"ring\":{\"d\":2,\"total\":" + std::to_string( ring.rows.size() ) + ",\"shown\":" + std::to_string( shown );
-    if( const std::string next = impactRingNext( ing, ring ); !next.empty() )
+    return out + impactHubsJson( ing, ring, rr );
+}
+inline std::string impactHubsJson( const IngestResult& ing, const ImpactRing& ring, const VrRender& rr )
+{
+    std::string out;
+    for( std::size_t i = 0; i < ring.hubsShown; ++i )
     {
-        out += ",\"next\":\"" + jsonStr( next ) + "\"";
+        const ImpactHubRow& hub = ring.hubs[ i ];
+        out += std::string( i == 0 ? ",\"hubs\":[{" : ",{" ) + "\"n\":\"" + jsonStr( ing.symbols[ hub.fn ].name ) + "\",\"via\":\"" + std::string( hopKind( hub.via ).name )
+             + "\",\"d\":" + std::to_string( hub.depth ) + ",\"behind\":" + std::to_string( hub.behind ) + ",\"tested\":" + std::to_string( hub.tested )
+             + ",\"sample\":[" + impactHubSampleText( ing, hub, ",", true ) + "],\"next\":\"" + jsonStr( nextFlag( "--impact=", impactHubSelector( ing, hub, rr ) ) ) + "\"}"
+             + ( i + 1 == ring.hubsShown ? "]" : "" );
     }
-    out += ",\"rows\":[";
-    for( std::size_t i = 0; i < shown; ++i )
-    {
-        const ImpactRingRow& row = ring.rows[ i ];
-        const Reference&     c   = ing.references[ row.ref ];
-        out += std::string( i == 0 ? "{" : ",{" ) + "\"called_by\":\"" + jsonStr( ing.symbols[ row.fn ].name ) + "\",\"called_at\":\""
-             + jsonStr( vrPath( ing, c.fileId, rr ) + ":" + std::to_string( c.line ) ) + "\",\"via\":\"" + std::string( kBackHopViaNames[ std::size_t( row.via ) ] )
-             + "\",\"calls\":\"" + jsonStr( ing.symbols[ row.calls ].name ) + "\"}";
-    }
-    return out + "]}";
+    return out;
 }
 
 inline constexpr std::string_view kImpactRingLegend =
-    "reaches_hedged=N (absent when 0): N functions MAY reach of= through one or two calls through a struct FIELD (the IX-1 slot "
-    "join): the <vr> rows' slot called_by= (one slot hop) and their own slot callers (two), not counted in reaches= and not an "
-    "answered definition. The one-hop set has NO width bound (a wide field's callers are all counted). A hedge: never a proven caller, never in reaches=/by_depth=/radius_*. ";
+    "reaches_hedged=N (absent when 0): N functions MAY reach of= through a HEDGED hop: a call through a struct FIELD (the IX-1 slot "
+    "join) or through a container element or a parameter's default (container), one or two such hops back (three when every hop is a field "
+    "call within 16 callers), plus every function that reaches one of those through proven calls (only past hops within 16 callers). "
+    "Not counted in reaches= and not an answered definition. The one-hop set has NO width bound (a wide field's callers are all counted). "
+    "A hedge: one hedged hop makes the whole chain hedged; never a proven caller, never in reaches=/by_depth=/radius_*. ";
 inline constexpr std::string_view kImpactRingRowsLegend =
-    "<ring d=2 total= shown=> lists the two-hop ones: <rh called_by= called_at= via=slot|slot-name calls=> = called_by may call "
-    "calls= through a field at called_at=; first 16, next= the callers of the first unshown calls=. ";
-// `on`: reaches_hedged= rides; `rows`: the <ring> element rides too (XML/JSON; the columnar form carries the count alone).
-inline std::string impactRingLegend( bool on, bool rows )
+    "<ring d=2 total= shown=> lists the two-hop ones (d=3 when a third field hop is listed too): <rh called_by= called_at= via=slot|slot-name|container calls=> = called_by may call "
+    "calls= through a field or container at called_at=; d=3 the third field hop; slot_fns=K the functions that field holds, cands=K the functions "
+    "that container may hold (the forward width, not capped); first 16, next= the callers of the first unshown calls=. ";
+inline constexpr std::string_view kImpactHubLegend =
+    "<hub n= via= d= behind= tested= sample= next=>: a ring member with more than 16 proven callers behind it, folded: those behind= functions are "
+    "in reaches_hedged= but not listed (tested= of them a test reaches, sample= the first 3 by tested, no proven caller, same dir, rank; next= lists them as proven rows); reaches_hedged_hubs=K: "
+    "K of reaches_hedged= sit behind a hub; ring_cut=N: the page limit cut N ring rows (hedged rows go first, proven rows keep the page), next= shows them. ";
+// `ring.hedged`: reaches_hedged= rides; `rowsForm`: the answer prints rows (XML/JSON; the columnar form carries the counts alone),
+// so the <ring> clause rides with a shown <rh> row; the hub clause rides with reaches_hedged_hubs= / ring_cut= in every form.
+inline std::string impactRingLegend( const ImpactRing& ring, bool rowsForm )
 {
     std::string out;
-    if( on )
+    if( ring.hedged > 0 )
     {
         out.append( kImpactRingLegend );
-        out.append( rows ? kImpactRingRowsLegend : std::string_view() );
+        out.append( rowsForm && ring.rowsShown > 0 ? kImpactRingRowsLegend : std::string_view() );
+        out.append( ring.hubbed > 0 || ring.cut > 0 ? kImpactHubLegend : std::string_view() );
     }
     return out;
 }
