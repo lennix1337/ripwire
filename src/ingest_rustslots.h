@@ -226,7 +226,7 @@ private:
         m_out.push_back( std::move( r ) );
     }
 
-    std::string_view text( TSNode n ) const noexcept { return ts_node_is_null( n ) ? std::string_view() : nodeTextOf( n, m_src ); }
+    std::string_view text( TSNode n ) const noexcept { return nodeTextOf( n, m_src ); }   // "" for a null node
     static TSNode field( TSNode n, std::string_view name ) noexcept
     {
         return ts_node_child_by_field_name( n, name.data(), static_cast<std::uint32_t>( name.size() ) );
