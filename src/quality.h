@@ -10092,8 +10092,17 @@ inline bool offsetInComment( std::string_view source, std::size_t spanBegin, std
     return open != std::string_view::npos && span.find( "*/", open + 2 ) == std::string_view::npos;
 }
 
-inline bool sourceHasStaticToken( std::string_view source, std::size_t sigStartByte, std::size_t sigEndByte ) noexcept
+//
+// D1 fix round 1: the token is the C-family storage class, so the scan runs only for a language whose LangFacts row says
+// `staticLinkage` (C, C++, Objective-C). A Python parameter `static=False`, a TypeScript literal type `'static'` and a Rust
+// `'static` lifetime are the same four letters and no linkage: before this gate they made a public function an
+// "internal-linkage" row (--dead-code `<d>`: zed listed 67 Rust rows; the test-only `<to>` rows inherited it).
+inline bool sourceHasStaticToken( Lang lang, std::string_view source, std::size_t sigStartByte, std::size_t sigEndByte ) noexcept
 {
+    if( !langFacts( lang ).staticLinkage )
+    {
+        return false;
+    }
     const std::size_t begin = std::min( sigStartByte, source.size() );
     const std::size_t end   = std::min( sigEndByte, source.size() );
     if( begin >= end )
@@ -10230,6 +10239,69 @@ inline bool underscorePrivateDef( std::string_view relPath, const Symbol& s ) no
         start = end + 1;
     }
     return false;
+}
+
+// D1 fix round 1 (F4): pytest's own test file. A root `conftest.py` sits outside every test/ directory, so the shared test-path
+// rule (filter.h isTestPath) reads its helpers as library code; --dead-code's test-only rows must not list them as library
+// functions. The base name alone decides (any conftest.py, at any depth).
+inline bool isConftestFile( std::string_view path ) noexcept
+{
+    const std::size_t slash = path.rfind( '/' );
+    return ( slash == std::string_view::npos ? path : path.substr( slash + 1 ) ) == "conftest.py";
+}
+
+// D1 fix round 1 (F3): the module name a Python file answers to at its tail: the file stem, or the package directory's name for
+// `__init__.py`. "" for a path that is not a .py file (or an __init__.py with no directory).
+inline std::string_view pythonModuleTail( std::string_view relPath ) noexcept
+{
+    if( !relPath.ends_with( ".py" ) )
+    {
+        return {};
+    }
+    relPath.remove_suffix( 3 );
+    const auto lastPart = []( std::string_view p ) noexcept { const std::size_t slash = p.rfind( '/' ); return slash == std::string_view::npos ? p : p.substr( slash + 1 ); };
+    if( lastPart( relPath ) != "__init__" )
+    {
+        return lastPart( relPath );
+    }
+    relPath.remove_suffix( relPath.size() == 8 ? 8 : 9 );   // "__init__" or "/__init__"
+    return lastPart( relPath );
+}
+
+// D1 fix round 1 (F3): the tail of every module a `from <module> import *` line in `text` names (`from ._impl import *` and
+// `from pkg._impl import *` both give "_impl"). A glob re-exports the module's public names through the importing package, so a
+// def in that module is part of the package's public surface even when no other file spells its name. Line-based text, not
+// parsed Python: a glob inside a string or a comment reads as one too (a row fewer, never one more).
+inline std::vector<std::string_view> pythonGlobImportTails( std::string_view text )
+{
+    std::vector<std::string_view> tails;
+    for( std::size_t at = 0; at < text.size(); )
+    {
+        const std::size_t eol  = std::min( text.find( '\n', at ), text.size() );
+        std::string_view  line = text.substr( at, eol - at );
+        at                     = eol + 1;
+        line.remove_prefix( std::min( line.find_first_not_of( " \t" ), line.size() ) );
+        const std::size_t imp = line.find( " import " );
+        if( !line.starts_with( "from " ) || imp == std::string_view::npos )
+        {
+            continue;
+        }
+        std::string_view after = line.substr( imp + 8 );
+        after.remove_prefix( std::min( after.find_first_not_of( " \t" ), after.size() ) );
+        if( !after.starts_with( '*' ) )
+        {
+            continue;
+        }
+        std::string_view module = line.substr( 5, imp - 5 );
+        module.remove_prefix( std::min( module.find_first_not_of( " \t" ), module.size() ) );
+        const std::size_t dot = module.rfind( '.' );
+        const std::string_view tail = dot == std::string_view::npos ? module : module.substr( dot + 1 );
+        if( !tail.empty() )
+        {
+            tails.push_back( tail );
+        }
+    }
+    return tails;
 }
 
 // lane/safe-delete: the --dead-code high-confidence PRECONDITIONS on symbol KIND/PLACEMENT alone — a
