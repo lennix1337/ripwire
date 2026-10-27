@@ -2579,7 +2579,7 @@ std::optional<int> runPath( const MainDispatch& d )
         // TRACE-EP (src/pathpairs.h): a reached answer whose names have several definitions lists EVERY reaching definition pair
         // (up to kPathPairChains chains, the rest alt=), never one silently; a glob endpoint keeps its any-of-these meaning
         const rw::PathPairs pthPairs = path.empty() || srcGlob || dstGlob ? rw::PathPairs{}
-            : rw::pathReachingPairs( ing, g, srcDefs, dstDefs, path, [ & ]( std::span<const NodeId> dstMembers )
+            : rw::pathReachingPairs( ing, g, srcDefs, dstDefs, path, spec, [ & ]( std::span<const NodeId> dstMembers )
               {
                   if( !pthValueIdx )
                   {
@@ -2607,13 +2607,15 @@ std::optional<int> runPath( const MainDispatch& d )
         // attrib-multidef (defattrib.h): from_p=/to_p= only for an endpoint the path bound; prov="split" on a split-arm hop
         const rw::PathEndpointBinding pthBound = rw::pathEndpointBinding( g, rw::endpointDefinitionCount( ing, srcDefs ), rw::endpointDefinitionCount( ing, dstDefs ), pthShown );
         const bool                    pthHasSplit = pthMarks.split;
+        // zed-03 (src/pathpairs.h): a bound endpoint that is a test/fixture copy while a source definition exists is disclosed
+        const rw::PathTestTwin        pthTwin = srcGlob || dstGlob ? rw::PathTestTwin{} : rw::pathTestTwins( ing, g, { srcDefs, srcN, pthBound.from }, { dstDefs, dstN, pthBound.to }, pthShown );
         const std::vector<std::string_view> pthOwners = rw::pathHopOwners( ing, path );   // PATH-OWNERS: n="Owner.name" per hop
         const bool pthHasOwner = pthMarks.owner;
         rw::emitTo( stdout, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                      "graph holds none. {}{}{}{}-->{}", ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ) + rw::viaNameLegend( pthHasVia )
                                                          + rw::viaLinkLegend( pthHasLink ) + rw::anchorMissLegend( pthHasMiss )
                                                          + rw::splitArmLegend( pthHasSplit ) + rw::pathUnboundLegend( !pthBound.from || !pthBound.to )
-                                                         + rw::memberOwnerLegend( pthHasOwner ) + std::string( rw::pathPairsLegend( pthPairs ) ) ).c_str(),
+                                                         + rw::memberOwnerLegend( pthHasOwner ) + std::string( rw::pathPairsLegend( pthPairs ) ) + rw::pathOrderLegend( pthPairs, pthTwin ) ).c_str(),
                      ( std::string( rw::toValueRefsLegend( pthToValueRefs.count > 0 ) ) + rw::valueRefsDepthLegend( pthToValueRefs.depthCut.files > 0 ) ).c_str(),
                      ( rw::pathGapsLegend( pthGaps.any(), !pthSinkCallers.empty() ) + rw::pathBridgeLegend( pthBridge )
                        + std::string( rw::nearSinkLegend( !pthNear.rows.empty() ) ) + std::string( rw::pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
@@ -2623,7 +2625,7 @@ std::optional<int> runPath( const MainDispatch& d )
                      pthBound.to ? " to_p=\"" + loc( dstUsed ) + "\"" : std::string(),
                      srcDefs.size(), dstDefs.size(), ( rw::unprovenDefsAttrXml( pthUnprovenDefs ) + rw::pathGlobAttrXml( srcGlob, dstGlob ) ).c_str(),   // H1: beside the defs counts it is not in; ix2-slice: a glob endpoint
                      path.empty() ? 0 : 1, pthShown.empty() ? std::size_t( 0 ) : pthShown.size() - 1,
-                     ( rw::pathPairsRootAttrs( ing, pthPairs, pthSingleRoot, pthRootPrefix ).rootAttrs + pthRootAttr ).c_str(),
+                     ( rw::pathTestTwinRootAttrs( ing, rw::pathPairsRootAttrs( ing, pthPairs, pthSingleRoot, pthRootPrefix ).rootAttrs, pthTwin, pthSingleRoot, pthRootPrefix ) + pthRootAttr ).c_str(),
                      rw::graphCountFloorAttrXml( g ).c_str() );
         // absent at zero: byte-identical otherwise; the depth cut beside it makes the count (or its absence) a floor
         rw::emitTo( stdout, "{}{}", rw::countAttrXmlOrEmpty( "to_value_refs", pthToValueRefs.count ),
