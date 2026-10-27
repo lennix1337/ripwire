@@ -11,6 +11,7 @@
 #   POSITIVE (target m.py:1 f, a proven edge: the row carries no via="name" hedge; internally prov="import")
 #     c_plain.py     from m import f as g ; g()                         the defect's own shape
 #     c_cond.py      if X: from m import f as g ; g()                   one conditional import: the only target it can bind
+#     c_class.py     from m import Widget as Gadget ; Gadget()          a class (target m.py:9 Widget)
 #   NEAR MISSES (must NOT bind m.py's f)
 #     c_param.py     def call_param(g): g()                             a parameter shadows the import
 #     c_local.py     g = other ; g()                                    a local assignment shadows it
@@ -21,6 +22,9 @@
 #     c_inner.py     outer def binds g ; inner def calls g()            the closure reads the enclosing g
 #     c_disagree.py  from m import f as g ; from m import h as g        two members under one name
 #     c_reexport.py  from pkg import f as g (pkg re-exports _impl.f)    no definition in pkg/__init__.py: no decision (a floor)
+#     c_external.py  from json import dumps as d (jsonish.py has a dumps)  outside the tree: never an in-tree dumps
+#     c_twice.py     m3.py defines f twice                              which one is live is not read: no decision
+#     c_nested.py    from m import method as meth                       m defines `method` only inside class Widget: not a module name
 #   UNCHANGED
 #     c_same.py      from m import h as h ; h()                         alias equals the name: the ladder, as before
 #
@@ -44,7 +48,7 @@ callees(){ ( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --callees="$1" --lege
 # ── 0. presence: every fixture file parses (a fixture that fails to parse would pass the near misses inert) ──
 ( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --skipped --legend=compact ) >"$TMP/skipped" 2>/dev/null
 perl -pe 's/<!--.*?-->//g' "$TMP/skipped" >"$TMP/skipped.body"
-if ! grep -q 'degraded_parse="0"' "$TMP/skipped.body" || ! grep -q 'indexed="18"' "$TMP/skipped.body" || grep -q '<f \|<h ' "$TMP/skipped.body"; then no "a fixture file was skipped or degraded"; sed 's/^/        | /' "$TMP/skipped" | head -5
+if ! grep -q 'degraded_parse="0"' "$TMP/skipped.body" || ! grep -q 'indexed="24"' "$TMP/skipped.body" || grep -q '<f \|<h ' "$TMP/skipped.body"; then no "a fixture file was skipped or degraded"; sed 's/^/        | /' "$TMP/skipped" | head -5
 else ok "every fixture file indexed with no parse degrade"; fi
 
 # ── 1. positive arms ──
@@ -57,14 +61,17 @@ for c in call_plain call_cond; do
         no "$c: expected m.py:1 f (proven, no via=) and no decoy row"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/$c"
     fi
 done
+callees call_class
+if grep -q '<s t="cls" n="Widget" p="m.py:9"/>' "$TMP/call_class"; then ok "call_class binds m.py:9 class Widget as a proven edge"
+else no "call_class: expected m.py:9 Widget"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/call_class"; fi
 ( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --callers=m.py:f --legend=compact ) >"$TMP/callers" 2>/dev/null
 if grep -q 'n="call_plain"' "$TMP/callers" && grep -q 'n="call_cond"' "$TMP/callers"; then ok "--callers=m.py:f names call_plain and call_cond"
 else no "--callers=m.py:f misses an aliased caller"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/callers"; fi
 
 # ── 2. near misses: never m.py's f ──
-for c in call_param call_local call_rebind call_star call_twomod call_fnimport call_inner call_disagree call_reexport; do
+for c in call_param call_local call_rebind call_star call_twomod call_fnimport call_inner call_disagree call_reexport call_nested call_external call_twice; do
     callees "$c"
-    if grep -q 'p="m.py:1"\|p="m2.py:1"' "$TMP/$c"; then
+    if grep -q 'p="m.py:1"\|p="m2.py:1"\|p="m.py:10"\|p="m3.py\|p="jsonish.py' "$TMP/$c"; then
         no "$c: bound through the renamed import (must stay undecided)"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/$c"
     else ok "$c: no import-pinned edge"; fi
 done

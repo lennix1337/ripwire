@@ -7652,7 +7652,9 @@ inline NodeId pythonRenamedImportPin( const IngestResult& ing, const HashMap<std
     for( NodeId c : dit->second )
     {
         const Symbol& s = ing.symbols[ c ];
-        if( s.fileId == mf->second && s.lang == Lang::Python && s.scope.empty() && ( s.kind == SymKind::Function || s.kind == SymKind::Class ) )
+        // module scope = no enclosing def or class by span (a Python class's Symbol::scope is its own name, so scope.empty() cannot say it)
+        if( s.fileId == mf->second && s.lang == Lang::Python && ( s.kind == SymKind::Function || s.kind == SymKind::Class )
+            && pythonClassScopeChain( ing, c ).empty() )
         {
             if( only != kNoNode )
             {
