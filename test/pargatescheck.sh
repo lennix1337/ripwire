@@ -41,8 +41,8 @@ grep -qE '^DEFAULT_TIMEOUT_SEC = 300$' "$PARGATES" \
     && ok "static: DEFAULT_TIMEOUT_SEC is 300 (the flat cap everything NOT overridden still gets)" \
     || no "static: DEFAULT_TIMEOUT_SEC is not the expected 300 — check for an accidental global raise"
 
-grep -qE '"cppbenchcheck\.sh":\s*1200' "$PARGATES" \
-    && ok "static: cppbenchcheck.sh has an honest 1200s budget" \
+grep -qE '"cppbenchcheck\.sh":\s*2400' "$PARGATES" \
+    && ok "static: cppbenchcheck.sh has an honest 2400s budget (CI-FLAKES-2: killed at 1200 s three times on slow macOS draws)" \
     || no "static: cppbenchcheck.sh missing (or wrong) from GATE_BUDGET_SEC"
 
 grep -qE '"bodydialectcheck\.sh":\s*900' "$PARGATES" \

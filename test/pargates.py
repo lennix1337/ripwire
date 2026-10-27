@@ -336,7 +336,15 @@ GATE_BUDGET_SEC = {
     "collectioncapcheck.sh":      900,
                                           # under -j6, rc=124 at the flat cap on both ubuntu PLAIN legs of run
                                           # 33762934972 (Release legs and macOS fit). Warm replay landed with this row.
-    "cppbenchcheck.sh":          1200,
+    # 2026-10-27 (CI-FLAKES-2): 1200 -> 2400. Killed at exactly 1200 s on macOS plain shard 4/4 three times (10-13 #394, 10-23
+    # #434, 10-27 train-39 run 40474282856 attempt 1); green on the retry at 640 s, and ~856 s is the worst green in the comment
+    # above. The 10-27 runner was ~1.5x slower on EVERY gate (paginationcheck 297 -> 466 s, shapingflagcheck 282 -> 453 s), so the
+    # honest slow-draw figure is worst green 856 s x 1.5 = ~1285 s, ALREADY past the 1200 that killed it; a kill proves only
+    # "> 1200", so the budget takes 2x that floor. The gate itself got ~17 % cheaper in the same change (69 -> 57 ripwire calls: the
+    # lock-restoring re-mine no longer re-scores every arm; test/cppbenchcheck.sh header), which is margin, not the basis. Local
+    # (plain, loaded host, load 8-12): 423 s before, 407 s after with 17 % fewer calls at a 14 % higher per-call mean (load, not
+    # code). A budget here is a hang tripwire, never a perf bar.
+    "cppbenchcheck.sh":          2400,
     "regexbombcheck.sh":         1200,
 }
 parallel_gates = [g for g in gates if g not in exclusive]
