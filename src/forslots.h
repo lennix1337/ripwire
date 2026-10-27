@@ -33,6 +33,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <iterator>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -214,6 +216,197 @@ inline std::size_t spliceInitSlots( std::string& sigs, const IngestResult& ing, 
     std::ranges::sort( inserts, {}, &std::pair<std::size_t, std::string>::first );
     std::size_t added = 0;
     for( auto it = inserts.rbegin(); it != inserts.rend(); ++it )   // back to front: earlier offsets stay valid
+    {
+        sigs.insert( it->first, it->second );
+        added += it->second.size();
+    }
+    return added;
+}
+
+// ── SLOT JOIN ROWS (lane fn-slot, IX1-V2) ─────────────────────────────────────────────────────────────────
+// The value index's slot and container joins, on the SHOWN rows of the same posture: a function row the answer names may be
+// reached through a slot it is stored in (a struct field, a variable, a registrar's parameter), which no call edge shows —
+// cockroach's batcheval Put is stored by RegisterReadWriteCommand into Command.EvalRW and run by evaluateCommand's
+// `cmd.EvalRW( … )`; terraform's Local.opPlan is stored in a local `f` that Local.Operation calls. On a shown row:
+//   slot_by="A,B"       a Function/Method row: up to kForSlotByCap functions that MAY call it through such a slot (the --callers
+//                       <vr> called_by= names, slot and container joins alike, first-site order), slot_by_more="N" the rest;
+//   slot_fields="F=K@C" a struct/class row: up to kForSlotByCap of its fields that hold stored functions (by the field's declared
+//                       struct type name), K the distinct functions stored there, C the first function calling through a field F
+//                       (`@C` absent when none), slot_fields_more="N" the rest.
+// MAY-call clues by the index, never a proven call, never in count=. RIPWIRE_NO_SLOT_JOIN_ROWS (any value) turns it off.
+inline constexpr std::ptrdiff_t kForSlotByCap = 4;
+inline bool forSlotJoinRowsOn()
+{
+    return std::getenv( "RIPWIRE_NO_SLOT_JOIN_ROWS" ) == nullptr;
+}
+inline constexpr std::string_view kForCompactSlotJoinLegend =
+    "; d slot_by= functions that MAY call this one through a slot it is stored in, slot_fields= F=K@C a struct field F holding K "
+    "stored functions that C calls through (both by the value index, not calls), _more= the rest";
+inline constexpr std::string_view kForSlotJoinLegend =
+    "; slot_by= on a function d row: up to 4 functions that MAY call it through a slot it is stored in (a struct field, by type or "
+    "by field name, a variable, a parameter of a registrar it is passed to), by the value index, never a proven call, "
+    "slot_by_more= the rest, and slot_fields= on a struct d row: up to 4 fields holding stored functions as F=K@C, K distinct "
+    "functions stored in F, C the first function calling through a field F (absent when none), slot_fields_more= the rest";
+static_assert( kForCompactSlotJoinLegend.find( ';', 1 ) == std::string_view::npos && kForSlotJoinLegend.find( ';', 1 ) == std::string_view::npos
+                   && kForSlotJoinLegend.find( "--" ) == std::string_view::npos && kForCompactSlotJoinLegend.find( "--" ) == std::string_view::npos,
+               "one clause each, and no '--' (the legend is an XML comment)" );
+static_assert( kForSlotByCap == 4, "kForSlotJoinLegend states the cap: move the sentence with the constant" );
+
+namespace slot_detail
+{
+// Appends `name` to `names` once, counting it in `more` past the cap; a name a comma would split is counted, never printed.
+inline void addCapped( std::vector<std::string>& names, std::size_t& more, std::string name )
+{
+    if( name.empty() || std::ranges::find( names, name ) != names.end() )
+    {
+        return;
+    }
+    if( std::ssize( names ) < kForSlotByCap && name.find_first_of( ",=@" ) == std::string::npos )
+    {
+        names.push_back( std::move( name ) );
+        return;
+    }
+    ++more;
+}
+inline std::string joinedRun( std::string_view attr, const std::vector<std::string>& names, std::size_t more, std::vector<char>& esc )
+{
+    std::string run = " " + std::string( attr ) + "=\"";
+    for( std::size_t k = 0; k < names.size(); ++k )
+    {
+        run += k == 0 ? "" : ",";
+        run += escapeXml( names[k], esc );
+    }
+    run += "\"";
+    if( more > 0 )
+    {
+        run += " " + std::string( attr ) + "_more=\"" + std::to_string( more ) + "\"";
+    }
+    return run;
+}
+}   // namespace slot_detail
+
+// THE SPLICE, as spliceInitSlots: appends slot_by= / slot_fields= to the shown rows' heads. Returns the bytes added.
+inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& ing, const std::vector<NodeId>& shownIds )
+{
+    std::vector<std::size_t> cand;
+    for( std::size_t i = 0; i < shownIds.size(); ++i )
+    {
+        const SymKind k = shownIds[i] < ing.symbols.size() ? ing.symbols[ shownIds[i] ].kind : SymKind::Section;
+        if( k == SymKind::Function || k == SymKind::Method || k == SymKind::Class || isStructOrNamedType( k ) )
+        {
+            cand.push_back( i );
+        }
+    }
+    const bool anyValue = std::ranges::any_of( ing.references, []( const Reference& r ) { return r.role == RefRole::Value || r.role == RefRole::Through; } );
+    if( cand.empty() || !anyValue )
+    {
+        return 0;
+    }
+    constexpr std::string_view kOpen = "<d l=\"";
+    std::vector<std::size_t> heads;
+    for( std::size_t at = sigs.find( kOpen ); at != std::string::npos; at = sigs.find( kOpen, at + kOpen.size() ) )
+    {
+        heads.push_back( at );
+    }
+    if( heads.size() != shownIds.size() )
+    {
+        DISCLOSE( Diagnostics::answerUnchanged, "no row carries slot_by=: the answer is the one without slot join rows",
+                  "spliceSlotJoinRows: the <sigs> rows and the shown ids disagree" );
+        return 0;
+    }
+    const ValueRefIndex vri( ing );
+    std::vector<std::pair<std::size_t, std::string>> inserts;
+    std::vector<char> esc;
+    for( const std::size_t i : cand )
+    {
+        const NodeId   id = shownIds[i];
+        const Symbol&  s  = ing.symbols[id];
+        std::vector<std::string> names;
+        std::size_t              more = 0;
+        std::string              run;
+        if( s.kind == SymKind::Function || s.kind == SymKind::Method )
+        {
+            const ValueRefRows rows = valueRefCallerRows( ing, vri, std::span<const NodeId>( &id, 1 ) );
+            for( const ValueRefRow& row : rows.rows )
+            {
+                for( std::size_t at = 0; at < row.calledBy.size(); )
+                {
+                    const std::size_t comma = std::min( row.calledBy.find( ',', at ), row.calledBy.size() );
+                    slot_detail::addCapped( names, more, row.calledBy.substr( at, comma - at ) );
+                    at = comma + 1;
+                }
+                for( const std::uint32_t c : row.slotCalls )
+                {
+                    const NodeId from = ing.references[c].fromSymbol;
+                    slot_detail::addCapped( names, more, from < ing.symbols.size() ? ing.symbols[from].name : std::string() );
+                }
+            }
+            if( !names.empty() )
+            {
+                run = slot_detail::joinedRun( "slot_by", names, more, esc );
+            }
+        }
+        else
+        {
+            std::vector<std::pair<std::string_view, std::vector<std::uint32_t>>> fields;   // field → its value refs, first-seen order
+            for( const auto& [ ref, field ] : vri.slots().valuesOfType( s.name ) )
+            {
+                auto it = std::ranges::find( fields, field, &std::pair<std::string_view, std::vector<std::uint32_t>>::first );
+                if( it == fields.end() )
+                {
+                    fields.emplace_back( field, std::vector<std::uint32_t>{} );
+                    it = fields.end() - 1;
+                }
+                it->second.push_back( ref );
+            }
+            for( const auto& [ field, refs ] : fields )
+            {
+                std::vector<NodeId> fns;
+                std::string         caller;
+                for( const std::uint32_t r : refs )
+                {
+                    std::ranges::copy( vri.targetsOf( r ), std::back_inserter( fns ) );
+                    for( const SlotIndex::Hit& h : vri.slots().callsFor( r ) )
+                    {
+                        const NodeId from = ing.references[h.ref].fromSymbol;
+                        if( caller.empty() && from < ing.symbols.size() )
+                        {
+                            caller = ing.symbols[from].name;
+                        }
+                    }
+                }
+                std::ranges::sort( fns );
+                fns.erase( std::ranges::unique( fns ).begin(), fns.end() );
+                if( fns.empty() || caller.find_first_of( ",=@" ) != std::string::npos )
+                {
+                    ++more;
+                    continue;
+                }
+                std::string item = std::string( field ) + "=" + std::to_string( fns.size() ) + ( caller.empty() ? "" : "@" + caller );
+                if( std::ssize( names ) < kForSlotByCap )
+                {
+                    names.push_back( std::move( item ) );
+                }
+                else
+                {
+                    ++more;
+                }
+            }
+            if( !names.empty() )
+            {
+                run = slot_detail::joinedRun( "slot_fields", names, more, esc );
+            }
+        }
+        if( run.empty() )
+        {
+            continue;
+        }
+        const std::size_t close = sigs.find( '>', heads[i] );
+        ASSUME( close != std::string::npos && ( i + 1 == heads.size() || close < heads[i + 1] ), "a <d> head closes before the next row opens" );
+        inserts.emplace_back( close, std::move( run ) );
+    }
+    std::size_t added = 0;
+    for( auto it = inserts.rbegin(); it != inserts.rend(); ++it )   // cand is in row order: back to front keeps offsets valid
     {
         sigs.insert( it->first, it->second );
         added += it->second.size();

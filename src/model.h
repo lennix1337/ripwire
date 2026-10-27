@@ -573,6 +573,39 @@ inline constexpr char kValueRefDepthCutScope = 'd';
 // declared struct type, or a typedef alias). Distinct from every other scope char.
 inline constexpr char kValueRefSlotCallScope = 's';
 inline constexpr char kValueRefSlotFactScope = 't';
+// IX1-V2 (lane fn-slot): a PARAMETER stored into a slot (`func Reg( impl F ) { … Command{ EvalRW: impl } … }`): role Value,
+// name "" (no row), recvVar = the storing function's name, argCount = the parameter's position (argCountKnown), memberPath =
+// the field, memberCtor = the slot's type ("" unknown). valuerefindex.h SlotIndex re-slots an ARGUMENT row of a bare call of
+// that function at that position (`Reg( Put )`) into the same field. Distinct from every other scope char.
+inline constexpr char kValueRefSlotParamScope = 'q';
+
+// IX-1 / IX1-V2: which languages record a slot join, and how its CALL side is found — the one table both the extractor
+// (ingest_valuerefs.h) and the join (valuerefindex.h) read. byFieldName: a member call `x.F( … )` (an ordinary Call reference
+// with memberCall) is a call through field F when some function value is stored in a field F, joined at index time by the
+// field name (the receiver's type is not read: the name tier, via="slot-name"); otherwise the extractor records the field
+// calls itself (C family: kValueRefSlotCallScope rows, everyFieldCall = every `x->f( … )` in C, the C++ gate otherwise).
+struct VrSlotLang
+{
+    Lang lang;
+    bool everyFieldCall;
+    bool byFieldName;
+};
+inline constexpr VrSlotLang kVrSlotLangs[] = {
+    { Lang::C, true, false },
+    { Lang::Cpp, false, false },
+    { Lang::Go, false, true },
+};
+inline bool slotJoinsByFieldName( Lang l ) noexcept
+{
+    for( const VrSlotLang& row : kVrSlotLangs )
+    {
+        if( row.lang == l )
+        {
+            return row.byFieldName;
+        }
+    }
+    return false;
+}
 // A slot type key written with the `struct` / `union` keyword (`struct thandle`) leads with this mark: a C tag is no typedef
 // name, so the join never reads it through an alias. A slot fact whose composeRel is kValueRefSlotBodyRel declares that its
 // owner's struct BODY is in this file (no field): one tag with bodies in two files is two types, so it joins nothing.
@@ -2328,7 +2361,7 @@ inline bool isSlotJoinRecord( const Reference& r ) noexcept
     {
         return false;
     }
-    return ( r.role == RefRole::Value && r.qualifier[0] == kValueRefSlotFactScope )
+    return ( r.role == RefRole::Value && ( r.qualifier[0] == kValueRefSlotFactScope || r.qualifier[0] == kValueRefSlotParamScope ) )
         || ( r.role == RefRole::Through && r.qualifier[0] == kValueRefSlotCallScope );
 }
 

@@ -7,6 +7,7 @@
 #include "mention.h"           // pathStem — a module path's file stem
 #include "resolve.h"           // includerDir, resolvePreciseInclude — a module path's file
 #include "infra/Diagnostics.h"   // EXPECTS/ENSURES — the window and index invariants
+#include "infra/sortutil.h"      // svLess: the method-name list addMemberCalls binary-searches
 #include "model.h"
 
 #include <algorithm>
@@ -97,22 +98,43 @@ public:
             m_callsBySym[ r.fromSymbol ].push_back( i );
             return true;
         }
+        if( r.role == RefRole::Value && sc == kValueRefSlotParamScope )
+        {
+            // IX1-V2: parameter argCount of `recvVar` is stored into slot memberCtor.memberPath; two different slots for one
+            // (function name, position) — two same-named registrars, or one storing it twice — decide nothing (kConflict)
+            noteFact( m_paramSlot, r.recvVar + "#" + std::to_string( r.argCount ), canonType( r.memberCtor, r.fileId ) + "#" + r.memberPath );
+            return true;
+        }
         return false;
     }
     // After every take: keys the slot values (`values`, ascending, with their resolved `targets`) and the calls by field.
     void build( const IngestResult& ing, std::span<const std::uint32_t> values, std::span<const std::vector<NodeId>> targets )
     {
+        for( std::size_t k = 0; k < values.size(); ++k )
+        {
+            if( targets[k].empty() )
+            {
+                continue;
+            }
+            const Reference& v = ing.references[ values[k] ];
+            if( !v.memberPath.empty() )
+            {
+                m_values.push_back( endOf( ing, values[k] ) );
+            }
+            else if( const std::optional<End> e = paramSlotEnd( v, values[k] ) )
+            {
+                m_values.push_back( *e );   // IX1-V2: `Reg( Put )` where Reg stores that parameter into a field
+            }
+            else
+            {
+                continue;
+            }
+            m_valuesByField[ m_values.back().field ].push_back( static_cast<std::uint32_t>( m_values.size() - 1 ) );
+        }
+        addMemberCalls( ing );
         if( m_calls.empty() )
         {
             return;   // no call through a struct field anywhere: no value needs a slot key
-        }
-        for( std::size_t k = 0; k < values.size(); ++k )
-        {
-            if( !ing.references[ values[k] ].memberPath.empty() && !targets[k].empty() )
-            {
-                m_values.push_back( endOf( ing, values[k] ) );
-                m_valuesByField[ m_values.back().field ].push_back( static_cast<std::uint32_t>( m_values.size() - 1 ) );
-            }
         }
         m_callEnds.reserve( m_calls.size() );
         for( const std::uint32_t c : m_calls )
@@ -126,6 +148,20 @@ public:
     std::vector<Hit> callsFor( std::uint32_t valueIdx ) const { return join( m_values, valueIdx, m_callsByField, m_callEnds ); }
     // The slot value references (with a resolved function) the slot call `callIdx` may call through.
     std::vector<Hit> valuesFor( std::uint32_t callIdx ) const { return join( m_callEnds, callIdx, m_valuesByField, m_values ); }
+    // IX1-V2: the slot value references stored into a field of struct type `type` (the resolved type name), with the field,
+    // in reference order — what --for's slot_fields= lists on a struct row.
+    std::vector<std::pair<std::uint32_t, std::string_view>> valuesOfType( std::string_view type ) const
+    {
+        std::vector<std::pair<std::uint32_t, std::string_view>> out;
+        for( const End& e : m_values )
+        {
+            if( e.type == type )
+            {
+                out.emplace_back( e.ref, e.field );
+            }
+        }
+        return out;
+    }
     // The slot calls made inside function `f`, ascending.
     std::span<const std::uint32_t> callsIn( NodeId f ) const
     {
@@ -230,6 +266,11 @@ private:
         const Reference& r = ing.references[refIdx];
         End              e;
         e.ref = refIdx;
+        if( r.role == RefRole::Call )
+        {
+            e.field = r.calleeName;   // IX1-V2: a member call `x.F( … )` (addMemberCalls): its receiver's type unread, the name tier
+            return e;
+        }
         std::string_view chain = r.memberPath;
         std::string      t     = r.memberCtor.empty() ? std::string() : unalias( canonType( r.memberCtor, r.fileId ), r.fileId );
         for( std::size_t dot = chain.find( '.' ); dot != std::string_view::npos; dot = chain.find( '.' ) )
@@ -244,6 +285,64 @@ private:
         e.type  = std::move( t );
         e.field = std::string( chain );
         return e;
+    }
+    // IX1-V2: an ARGUMENT row of a bare call `Reg( … )` (scope 'a', key "#k") lands in the slot parameter k of Reg is stored
+    // into (a kValueRefSlotParamScope fact), when exactly one slot is recorded for (Reg, k).
+    std::optional<End> paramSlotEnd( const Reference& v, std::uint32_t refIdx ) const
+    {
+        if( m_paramSlot.empty() || !v.argCountKnown || v.recvVar.empty() || v.qualifier.empty() || v.qualifier[0] != 'a' )
+        {
+            return std::nullopt;
+        }
+        const auto it = m_paramSlot.find( v.recvVar + "#" + std::to_string( v.argCount ) );
+        if( it == m_paramSlot.end() || it->second == kConflict )
+        {
+            return std::nullopt;
+        }
+        const std::size_t hash = it->second.rfind( '#' );
+        End               e;
+        e.ref   = refIdx;
+        e.type  = it->second.substr( 0, hash );
+        e.field = it->second.substr( hash + 1 );
+        return e;
+    }
+    // IX1-V2: the member calls `x.F( … )` of a byFieldName language (model.h kVrSlotLangs) whose field F holds a stored function
+    // somewhere, as calls through that slot. Not when that language defines a METHOD named F anywhere in the tree: the call may
+    // then be that method, and the receiver's type is not read here (a named floor, never a guess).
+    void addMemberCalls( const IngestResult& ing )
+    {
+        if( m_valuesByField.empty() )
+        {
+            return;
+        }
+        std::vector<std::string_view> methods;
+        for( const Symbol& s : ing.symbols )
+        {
+            if( s.kind == SymKind::Method && slotJoinsByFieldName( s.lang ) && m_valuesByField.contains( s.name ) )
+            {
+                methods.push_back( s.name );
+            }
+        }
+        std::ranges::sort( methods, rw::sortutil::svLess );
+        const std::size_t before = m_calls.size();
+        for( std::uint32_t i = 0; i < ing.references.size(); ++i )
+        {
+            const Reference& r = ing.references[i];
+            if( r.role == RefRole::Call && r.memberCall && slotJoinsByFieldName( r.lang ) && m_valuesByField.contains( r.calleeName )
+                && !std::ranges::binary_search( methods, std::string_view( r.calleeName ), rw::sortutil::svLess ) )
+            {
+                m_calls.push_back( i );
+                m_callsBySym[ r.fromSymbol ].push_back( i );
+            }
+        }
+        if( before > 0 && m_calls.size() > before )
+        {
+            std::ranges::sort( m_calls );   // join() and callsIn() read them in reference order
+            for( auto& [ sym, calls ] : m_callsBySym )
+            {
+                std::ranges::sort( calls );
+            }
+        }
     }
     static const End* find( const std::vector<End>& ends, std::uint32_t ref ) noexcept
     {
@@ -281,6 +380,7 @@ private:
     HashMap<std::string, std::string>                m_alias;          // typedef name → struct type (kConflict: files disagree)
     HashMap<std::string, std::string>                m_aliasInFile;    // "fileId#name" → struct type, the file's own typedef
     HashMap<std::string, std::string>                m_body;           // struct type → its body's digest (kConflict: files differ)
+    HashMap<std::string, std::string>                m_paramSlot;      // IX1-V2: "fn#k" → "Type#field" its parameter k is stored into
     std::vector<std::uint32_t>                       m_calls;          // slot Through references, ascending
     HashMap<NodeId, std::vector<std::uint32_t>>      m_callsBySym;     // calling function → its slot Through references
     std::vector<End>                                 m_values;         // slot Value rows with a resolved function, by ref
@@ -739,6 +839,22 @@ private:
             return {};
         }
         const VrLangFamily  fam = valueRefFamily( r.lang );
+        if( r.role == RefRole::Value && !r.memberRoot.empty() )
+        {
+            // IX1-V2: a Go method value `b.opPlan` of the enclosing method's receiver (ingest_valuerefs.h methodValueAt): that
+            // receiver type's method of this name in this package, else nothing
+            std::vector<NodeId> out;
+            for( const NodeId id : it->second )
+            {
+                const Symbol& s = m_ing.symbols[id];
+                if( s.kind == SymKind::Method && valueRefFamily( s.lang ) == fam && s.scope == r.memberRoot
+                    && includerDir( m_ing.files[ s.fileId ] ) == includerDir( m_ing.files[ r.fileId ] ) )
+                {
+                    out.push_back( id );
+                }
+            }
+            return out;
+        }
         // A C/C++ PROTOTYPE (a bodyless declaration) names the function its definition lives in: it is the target only
         // when no definition with a body is visible — a prototype in this file never hides the extern definition.
         std::vector<NodeId> sameFile, other, declsHere;
@@ -1043,6 +1159,7 @@ struct ValueRefRow
     std::vector<std::uint32_t> slotCalls;
     bool                       slotTyped    = false;
     std::uint32_t              slotNameAlso = 0;
+    std::uint32_t              slotCands    = 0;   // IX1-V2: distinct functions the first slot call's slot may hold (this one among them)
 };
 
 // IX-1, callees side: one call through a struct field made in the answered functions, and the functions its slot may hold.
@@ -1063,6 +1180,7 @@ struct ValueRefRows
     std::vector<std::uint32_t> patternWideSites;   // IX-3 (callers): too-wide templates whose sides could name the defs
     std::vector<SlotSiteRow>   slotSites;          // IX-1 (callees): calls through a struct field with at least one target
     bool                       slotCallers = false;   // IX-1 (callers): a row carries slot callers (called_at= via=)
+    bool                       slotCands   = false;   // IX1-V2 (callers): a row carries cands= (its slot holds more than one function)
 };
 
 // IX-1: the calling functions of a slot hit list, one per function (its first site, by reference order), by name; `typed`
@@ -1105,6 +1223,8 @@ inline std::vector<std::uint32_t> slotCallers( const IngestResult& ing, std::vec
     return out;
 }
 
+inline SlotSiteRow slotSiteOf( const IngestResult& ing, const ValueRefIndex& idx, std::uint32_t call );
+
 // --callers side: every value reference resolving to one of `defs`.
 inline ValueRefRows valueRefCallerRows( const IngestResult& ing, const ValueRefIndex& idx, std::span<const NodeId> defs )
 {
@@ -1127,6 +1247,11 @@ inline ValueRefRows valueRefCallerRows( const IngestResult& ing, const ValueRefI
         {
             row.slotCalls   = slotCallers( ing, idx.slots().callsFor( r ), row.slotTyped, row.slotNameAlso );   // IX-1
             out.slotCallers = out.slotCallers || !row.slotCalls.empty();
+            if( !row.slotCalls.empty() )
+            {
+                row.slotCands = static_cast<std::uint32_t>( slotSiteOf( ing, idx, row.slotCalls.front() ).targets.size() );   // IX1-V2
+                out.slotCands = out.slotCands || row.slotCands > 1;
+            }
         }
         out.rows.push_back( std::move( row ) );
     }

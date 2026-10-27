@@ -578,6 +578,7 @@ struct ForLensHeaderParts
                                             // <sigs> splice), so its clause defines it
     bool             initSlotsPresent = false;   // FOR-SLOTS (forslots.h): a shown initializer row carries slots= (set after the
                                             // <sigs> splice), so its clause defines it
+    bool             slotJoinPresent = false;    // IX1-V2 (forslots.h spliceSlotJoinRows): a shown row carries slot_by= / slot_fields=
     bool             ctorHopPresent = false;     // OWNER-CTOR-HOP (forctorhop.h): the r=1 row carries ctor_l= (set after the splice)
     bool             callerHopPresent = false; // mf1-nx: a name-exact answer whose body candidates are ONE function in the default
                                             // regime (forcallerhop.h forCallerHopTargets), so a <callers> rides and its clause
@@ -788,6 +789,7 @@ inline constexpr std::string_view presentOnlyClause( bool present, bool compact,
 inline std::string peerRowClauses( const ForLensHeaderParts& p, bool compact )
 {
     std::string out( presentOnlyClause( p.initSlotsPresent, compact, rw::kForCompactInitSlotsLegend, rw::kForInitSlotsLegend ) );
+    out += presentOnlyClause( p.slotJoinPresent, compact, rw::kForCompactSlotJoinLegend, rw::kForSlotJoinLegend );   // IX1-V2
     out += presentOnlyClause( p.ctorHopPresent, compact, rw::kForCompactCtorHopLegend, rw::kForCtorHopLegend );
     out += presentOnlyClause( p.epPresent, compact, rw::kForCompactEpManifestLegend, rw::kForEpManifestLegend );   // ep-manifest
     return out;
@@ -4155,6 +4157,16 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             if( rw::spliceInitSlots( sigsStr, ing, shownSigIds, answerBodies ) > 0 )
             {
                 headerParts.initSlotsPresent = true;   // the clause rides beside the attribute it defines
+                headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+            }
+        }
+        // ── SLOT JOIN ROWS (forslots.h, IX1-V2): slot_by= / slot_fields= on the shown function and struct rows, the same posture
+        if( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forSlotJoinRowsOn() && sigsPreRendered
+            && !enrich.surfaceOff && !enrich.hopsCutMarker )
+        {
+            if( rw::spliceSlotJoinRows( sigsStr, ing, shownSigIds ) > 0 )
+            {
+                headerParts.slotJoinPresent = true;   // the clause rides beside the attributes it defines
                 headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
             }
         }

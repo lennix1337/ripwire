@@ -361,7 +361,11 @@ constexpr std::uint32_t kCacheVersion = 44;           // 44: train 37b — rust-
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 239;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 247;          // bump on any grammar/.scm/extraction change
+                                                      // 247 = 2026-10-27 (lane fn-slot, IX1-V2, placeholder: train 40 renumbers): Go value refs record the
+                                                      //   struct-field slot of a keyed composite-literal element / field assignment (memberPath/memberCtor),
+                                                      //   a method value `b.m` of the method's own receiver (memberRoot = its type) and a parameter stored
+                                                      //   into a field slot (scope 'q' fact); no record format changed.
                                                       // 239 = 2026-10-27 (train 39: lane receiver-fixes, placeholder 237 / rich 238): TS `#private` field declarations and
                                                       //   `this.#f = …` record MemberType; Python `self.f: T` / `T | None` / `Optional[ T ]` annotations and `mod.X( … )`
                                                       //   constructors type fields and locals (a RecvType / MemberType with its qualifier), and `x = mod.X( … )` no longer
