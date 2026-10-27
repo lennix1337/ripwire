@@ -25,6 +25,7 @@
 // the stored functions) is built only when one is found, so an answer with no initializer row pays one scan.
 
 #include "forfold.h"            // fold_detail::overlapsServed — the fold's own "the answer already carries this text" reading
+#include "infra/sortutil.h"   // svLess: the candidate-name list the cost pre-check binary-searches
 #include "filter.h"             // isTestSymbol — slot_by= / slot_fields= list non-test callers first
 #include "formembers.h"         // MemberNamesServed — the bodies the answer serves
 #include "model.h"
@@ -298,8 +299,34 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
             cand.push_back( i );
         }
     }
-    const bool anyValue = std::ranges::any_of( ing.references, []( const Reference& r ) { return r.role == RefRole::Value || r.role == RefRole::Through; } );
-    if( cand.empty() || !anyValue )
+    if( cand.empty() )
+    {
+        return 0;
+    }
+    // COST: the value index is built only when some Value reference can join a candidate — it names a candidate function, or it
+    // is stored into a struct-field slot (a struct row's slot_fields=) — so an answer with none pays one scan, no index.
+    std::vector<std::string_view> fnNames;
+    bool                          structRow = false;
+    for( const std::size_t i : cand )
+    {
+        const Symbol& s = ing.symbols[ shownIds[i] ];
+        if( s.kind == SymKind::Function || s.kind == SymKind::Method )
+        {
+            fnNames.push_back( s.name );
+        }
+        else
+        {
+            structRow = true;
+        }
+    }
+    std::ranges::sort( fnNames, rw::sortutil::svLess );
+    const bool joinable = std::ranges::any_of( ing.references, [ & ]( const Reference& r )
+    {
+        return r.role == RefRole::Value
+            && ( std::ranges::binary_search( fnNames, std::string_view( r.calleeName ), rw::sortutil::svLess )
+                 || ( structRow && ( !r.memberPath.empty() || ( !r.qualifier.empty() && r.qualifier[0] == kValueRefSlotParamScope ) ) ) );
+    } );
+    if( !joinable )
     {
         return 0;
     }

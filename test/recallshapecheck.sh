@@ -799,7 +799,7 @@ cat >"$TMP/chk.py" <<'EOF'
 import os, re, sys
 import xml.etree.ElementTree as ET
 VR_ATTRS = { "in_id", "bind", "into", "called_by", "to", "def", "through", "sites",
-             "called_at", "via", "called_more", "slot_name_also" }   # IX-1 slot join (test/slotjoincheck.sh): none is n=/p=/t=
+             "called_at", "via", "called_more", "slot_name_also", "cands" }   # IX-1 slot join (test/slotjoincheck.sh) + IX1-V2 cands= (test/fnslotcheck.sh): none is n=/p=/t=
 fxdir, outfile, toks = sys.argv[1], sys.argv[2], sys.argv[3:]
 text = open( outfile, encoding="utf-8", errors="replace" ).read()
 marks = {}
