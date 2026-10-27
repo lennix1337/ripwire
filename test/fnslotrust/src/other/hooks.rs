@@ -3,6 +3,10 @@ pub struct Hooks {
 }
 
 impl Hooks {
+    pub fn new(eval: fn(&str) -> usize) -> Self {
+        Hooks { eval: Box::new(eval) }
+    }
+
     pub fn fire(&self, s: &str) -> usize {
         (self.eval)(s)
     }
