@@ -2232,7 +2232,8 @@ inline HashMap<std::string, char> pythonBaseClauseNames( const IngestResult& ing
 // the names a base clause is LOOKED UP under in another file, beyond the clause's first name: a qualified clause's own name (`q.Base`:
 // Base, what a re-export chain hops by) and the member an aliased import of a first name renames (`from pkg.x import a as q`: a, the name
 // pkg's __init__ may bind). pythonReexportChain and pythonImportedBases read the bindings of exactly these (a renamed hop, a package
-// that binds the submodule's name).
+// that binds the submodule's name). PY-IMPORT-ALIAS-CALL adds the member of EVERY renamed
+// member import (`from m import f as g`: f), whose bindings in m pythonRenamedImportPin reads (pythonEndpointBindsOnlyByClass).
 inline void addPythonLookupNames( const IngestResult& ing, HashMap<std::string, char>& names )
 {
     for( const Reference& r : ing.references )
@@ -2244,9 +2245,14 @@ inline void addPythonLookupNames( const IngestResult& ing, HashMap<std::string, 
     }
     for( const Binding& b : ing.bindings )
     {
-        if( b.kind == LocalBindKind::Import && b.importedName.starts_with( kPythonFromMemberMark ) && names.contains( b.var ) )
+        if( b.kind != LocalBindKind::Import || !b.importedName.starts_with( kPythonFromMemberMark ) )
         {
-            names.try_emplace( b.importedName.substr( kPythonFromMemberMark.size() ), '\0' );
+            continue;
+        }
+        const std::string_view member = std::string_view( b.importedName ).substr( kPythonFromMemberMark.size() );
+        if( names.contains( b.var ) || member != b.var )   // a RENAMED import's member: pythonRenamedImportPin asks m's own bindings of it
+        {
+            names.try_emplace( std::string( member ), '\0' );
         }
     }
 }
@@ -7411,7 +7417,7 @@ inline bool pythonFileBindsOnlyByImport( const ExternalVetoTables& v, std::uint3
         && !pythonStarMayBind( v, f, name );
 }
 
-// Is the class `name` a re-export chain finds in Python file `f` the name's binding there? Only when `name` has exactly ONE module-scope
+// Is the class (or, for pythonRenamedImportPin, the def) `name` a re-export chain finds in Python file `f` the name's binding there? Only when `name` has exactly ONE module-scope
 // binding in `f`, its own `class` statement (the def is a VarDecl row like any rebind, so a second row of any form is the later rebind: an
 // assignment, augmented assignment, loop, with or except target, walrus, another def or class, an import of the name, a `global`), and
 // no star import of `f` could bind it (pythonStarMayBind for THIS name). Anything else, or no row at all, is unknown: the chain withholds.
@@ -7591,13 +7597,22 @@ inline void pythonImportedBases( const BaseEvidenceTables& t, const Reference& r
     }
 }
 
-// PY-IMPORT-ALIAS-CALL: "<fileId>#y" → the member a module-scope `from m import x as y` (y != x) renames, for every Python file
-// where EVERY import of y is that one module-scope rename; "" (poisoned) when any import of y in the file is another form, another
-// member, or sits inside a def or class. Built from the shared binds channel's Import records (emitCapturedImportBind: "from:x").
-inline HashMap<std::string, std::string> buildPythonRenamedImports( const IngestResult& ing )
+// PY-IMPORT-ALIAS-CALL: what pythonRenamedImportPin reads. `renamed`: "<fileId>#y" → the member a module-scope `from m import x as y`
+// (y != x) renames, for every Python file where EVERY import of y is that one module-scope rename; "" (poisoned) when any import of y in the
+// file is another form, another member, or sits inside a def or class. Built from the shared binds channel's Import records (emitCapturedImportBind:
+// "from:x"). `shadows`: "<fromSymbol>#y" → the byte span of every site-spanned local binding of y in that def (a comprehension target, a lambda
+// parameter, a typed parameter: the receiver-evidence records localNameSet skips), {0,0} for one that covers the whole def.
+struct PythonRenamedImports
 {
-    HashMap<std::string, std::string> out;
-    std::string                       key;
+    HashMap<std::string, std::string>                   renamed;
+    HashMap<std::string, rw::SmallVec<VarSpan, 1>> shadows;
+    [[nodiscard]] bool empty() const noexcept { return renamed.empty(); }
+};
+
+inline PythonRenamedImports buildPythonRenamedImports( const IngestResult& ing )
+{
+    PythonRenamedImports out;
+    std::string          key;
     for( const Binding& b : ing.bindings )
     {
         if( b.kind != LocalBindKind::Import || b.var.empty() || b.fileId >= ing.files.size() || !isPythonSourcePath( rootRelPath( ing, b.fileId ) ) )
@@ -7606,30 +7621,53 @@ inline HashMap<std::string, std::string> buildPythonRenamedImports( const Ingest
         }
         const bool renamed = b.importedName.starts_with( kPythonFromMemberMark ) && pythonBindScope( ing, b ) == kNoNode;
         const std::string member = renamed ? b.importedName.substr( kPythonFromMemberMark.size() ) : std::string{};
-        const auto [ it, fresh ] = out.try_emplace( fileNameKey( key, b.fileId, b.var ), member );
+        const auto [ it, fresh ] = out.renamed.try_emplace( fileNameKey( key, b.fileId, b.var ), member );
         if( !fresh && it->second != member )
         {
             it->second.clear();   // two imports of one name that disagree: never decided
         }
     }
-    std::erase_if( out, []( const auto& kv ) { return kv.second.empty(); } );
+    std::erase_if( out.renamed, []( const auto& kv ) { return kv.second.empty(); } );
+    if( out.renamed.empty() )
+    {
+        return out;
+    }
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.kind == LocalBindKind::RecvType && b.fromSymbol != kNoNode && !b.var.empty() && b.fileId < ing.files.size()
+            && out.renamed.contains( fileNameKey( key, b.fileId, b.var ) ) )
+        {
+            out.shadows[ fileNameKey( key, b.fromSymbol, b.var ) ].push_back( VarSpan{ b.spanStart, b.spanEnd } );
+        }
+    }
     return out;
+}
+
+// does a site-spanned local binding of `name` in def `sym` cover the byte `at`? A span {0,0} is a whole-def shadow.
+inline bool pythonSpannedLocalCovers( const PythonRenamedImports& t, NodeId sym, std::string_view name, std::uint32_t at )
+{
+    std::string key;
+    const auto  it = t.shadows.find( fileNameKey( key, sym, name ) );
+    return it != t.shadows.end()
+        && std::ranges::any_of( it->second, [ at ]( const VarSpan& s ) { return s.endByte == 0 || ( at >= s.startByte && at < s.endByte ); } );
 }
 
 // PY-IMPORT-ALIAS-CALL: the ONE definition a bare Python call `y()` reaches through `from m import x as y`, else kNoNode. Decided only
 // when y's renamed import is its one binding where the call runs: no local or parameter of y in the caller or any def enclosing it
 // (localNameSet, which also holds a def-scoped import of y), no module-scope rebinding (`y = …`, `def y`, a `global y`, a dynamic
 // namespace write: pythonModuleRebind), and no star import in the file (it may bind y after the rename); and only when m resolves to ONE
-// indexed file (memberImportFile) whose module scope defines exactly one function or class named x. A package that re-exports x
-// defines none there: no decision, the call falls to the unchanged ladder (a floor, not a guess).
-inline NodeId pythonRenamedImportPin( const IngestResult& ing, const HashMap<std::string, std::string>& renamed, const ExternalVetoTables& v,
+// indexed file (memberImportFile) whose module scope binds x ONLY by that one function or class (pythonEndpointBindsOnlyByClass). A package that
+// re-exports x defines none there: no decision, the call falls to the unchanged ladder (a floor, not a guess). A comprehension target or lambda parameter
+// named y that covers the call byte is a binding too (pythonSpannedLocalCovers: the site-spanned records localNameSet skips).
+inline NodeId pythonRenamedImportPin( const IngestResult& ing, const PythonRenamedImports& imports, const ExternalVetoTables& v,
                                       const ExternalVeto& veto, const HashMap<std::string, rw::SmallVec<NodeId, 2>>& byName, const Reference& r )
 {
     std::string key;
-    const auto  rit = renamed.find( fileNameKey( key, r.fileId, r.calleeName ) );
-    if( rit == renamed.end() || r.fromSymbol == kNoNode || r.fromSymbol >= ing.symbols.size()
+    const auto  rit = imports.renamed.find( fileNameKey( key, r.fileId, r.calleeName ) );
+    if( rit == imports.renamed.end() || r.fromSymbol == kNoNode || r.fromSymbol >= ing.symbols.size()
         || v.pythonModuleRebind.contains( key ) || v.pythonModuleRebind.contains( fileNameKey( key, r.fileId, kPythonDynamicBind ) )
-        || ( r.fileId < v.pythonScopes.starTargets.size() && !v.pythonScopes.starTargets[ r.fileId ].empty() ) || veto.hasLocal( r, r.calleeName ) )
+        || ( r.fileId < v.pythonScopes.starTargets.size() && !v.pythonScopes.starTargets[ r.fileId ].empty() ) || veto.hasLocal( r, r.calleeName )
+        || pythonSpannedLocalCovers( imports, r.fromSymbol, r.calleeName, r.startByte ) )
     {
         return kNoNode;
     }
@@ -7637,7 +7675,7 @@ inline NodeId pythonRenamedImportPin( const IngestResult& ing, const HashMap<std
     {
         Reference at = r;
         at.fromSymbol = outer;
-        if( veto.hasLocal( at, r.calleeName ) )
+        if( veto.hasLocal( at, r.calleeName ) || pythonSpannedLocalCovers( imports, outer, r.calleeName, r.startByte ) )
         {
             return kNoNode;   // an enclosing def binds the name: a closure reads that, not the import
         }
@@ -7662,6 +7700,14 @@ inline NodeId pythonRenamedImportPin( const IngestResult& ing, const HashMap<std
             }
             only = c;
         }
+    }
+    // m's own module scope must bind x ONLY by that def or class (pythonEndpointBindsOnlyByClass, the re-export chain's endpoint test): a later
+    // `from fast import x`, a try-import, `x = other`, `x = deco(x)` or a star import that may bind x leaves the name something else at run time
+    // (a star import of a file outside the tree, `from _operator import *`, is unknown: the call keeps the unchanged ladder), and a dynamic
+    // namespace write (`globals()[...]`, a module `__getattr__`) may bind it too
+    if( only != kNoNode && ( !pythonEndpointBindsOnlyByClass( v, mf->second, rit->second ) || v.pythonModuleRebind.contains( fileNameKey( key, mf->second, kPythonDynamicBind ) ) ) )
+    {
+        return kNoNode;
     }
     return only;
 }
@@ -8649,7 +8695,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // ExternalVeto above buildGraph; `vetoExternal` is the refusal: no edge, one header count, one `C external`
     // census row with no target.
     const ExternalVeto externalVeto{ ing, canonByName, fieldNarrow.localNameSet, extVeto };
-    const HashMap<std::string, std::string> pyRenamedImports = buildPythonRenamedImports( ing );   // PY-IMPORT-ALIAS-CALL (pythonRenamedImportPin)
+    const PythonRenamedImports pyRenamedImports = buildPythonRenamedImports( ing );   // PY-IMPORT-ALIAS-CALL (pythonRenamedImportPin)
     // The builtin-method name gate (BuiltinMethodGate above): decides, in Rule 3's place, the calls whose name is a
     // method of the caller language's builtin map/list/set/string type. Inert (active=false) on a corpus with no
     // symbol in a gated language.
