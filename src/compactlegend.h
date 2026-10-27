@@ -363,7 +363,9 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "slot_name_also",    "slot_name_also=K: K name-only callers hidden behind the same-type ones", false, "vr" },
     // HOP1 (src/backhops.h kImpactRingLegend): --impact's hedged slot ring, present-only
     { "reaches_hedged",    "reaches_hedged=N: N functions MAY reach of= through a hedged hop: one or two calls through a struct field or container (3 field calls within 16 callers), plus their proven callers past narrow hops; never in reaches= or any count" },
-    { "calls",             "ring d=2|3 total= shown= next=; rh called_by= called_at= via= calls=: called_by may call calls= through a field or container at called_at=; d=3 the third field hop; slot_fns=|cands=K the functions it may hold; via=queue d=1 a queue hand-off; via=name-key a name-keyed lookup (getattr/o[k] by a template); a hedge, in no count", false, "rh" },
+    { "calls",             "ring d=2|3 total= shown= next=; rh called_by= called_at= via= calls=: called_by may call calls= through a field or container at called_at=; d=3 the third field hop; slot_fns=|cands=K the functions it may hold; via=queue d=1 a queue hand-off; a hedge, in no count", false, "rh" },
+    // STRING-KEYED (src/backhops.h kNameKeyHopLegend): present-only, read only on a <rh via="name-key"> row
+    { "via",               "rh via=name-key: called_by looks calls= up by a name built from a template (getattr(o, 'do_' + c), o['handle' + e]); cands=K the definitions it can name; matched, never traced; a hedge", true, "rh", MapHeaderRead::No, "name-key" },
     // hub-fold (src/backhops.h kImpactHubLegend): the folded ring member, its count and the page cut, present-only
     { "behind",            "hub n= via= d= behind= tested= sample= next=: a ring member with over 16 proven callers, folded: behind= of reaches_hedged= unlisted (tested= a test reaches, sample= first 3: tested, no proven caller, same dir, rank); next= lists them", false, "hub" },
     { "reaches_hedged_hubs", "reaches_hedged_hubs=K: K of them sit behind a hub" },
@@ -605,6 +607,8 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "via",               "via=name: the target was matched by name alone (receiver unproven); every by-name candidate in reach is listed; NOT a claim the edge is false", true, "s", MapHeaderRead::No, "name" },
     { "via",               "via=impl: the receiver's interface/trait/abstract type has ONE implementor in the tree owning the target (an outside or macro-made one may exist)", true, "s", MapHeaderRead::No, "impl" },
     { "via",               "via=link: this edge is a markdown link, not a call", true, "s", MapHeaderRead::No, "link" },
+    // STRING-KEYED (src/pathgaps.h BridgeVia::NameKey): present-only, read only on a bridge <s via="name-key"> row
+    { "via",               "s via=name-key cands=K: the previous row looks this row up by a name built from a template (getattr(o, 'do_' + c), o['handle' + e]); K the definitions it can name; matched, never traced; a hedge", true, "s", MapHeaderRead::No, "name-key" },
     { "anchor",            "anchor=missing: the markdown link named a heading this file does not have, so the edge is the file", true, "s", MapHeaderRead::No, "missing" },
     { "via",               "<c via=\"name\">: that callee matched by name alone (receiver unproven); it does NOT mean the edge is false", true, "c", MapHeaderRead::No, "name" },
     { "via",               "<c via=\"impl\">: the receiver's interface/trait/abstract type has ONE implementor in the tree owning the callee (an outside or macro-made one may exist)", true, "c", MapHeaderRead::No, "impl" },
@@ -840,7 +844,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "gaps", "gaps=kind:N,...: calls there with no edge (declined: nothing chose a candidate; unresolved), a function handed off as a value, a call through a slot, a via=name call whose name is also defined where it has no edge (name); ambiguous and undefined-name calls not counted", true, {}, MapHeaderRead::No, {}, "path" },
     { "gap_syms", "gap_syms=N: searched symbols carrying gaps; <gap t= n= p= gaps=> rows, nearest from= first, are where the search could not see, never a hop; gap_syms_capped=1 more than shown", false, "path", MapHeaderRead::No, {}, "path" },
     // HEDGED BRIDGE and GLOB ENDPOINT (src/pathgaps.h kPathBridgeLegend / kPathGlobLegend), present-only on a reachable=0 answer
-    { "crossings", "bridge proven=0 crossings= hops=: a HEDGED chain, NOT a path; <s via=declined|value|closure|namesake|container|queue|name-key cands=K> the crossing into that row, the rest proven edges", true, "bridge", MapHeaderRead::No, {}, "path" },
+    { "crossings", "bridge proven=0 crossings= hops=: a HEDGED chain, NOT a path; <s via=declined|value|closure|namesake|container|queue cands=K> the crossing into that row, the rest proven edges", true, "bridge", MapHeaderRead::No, {}, "path" },
     // HOP1 (src/backhops.h, kPathBridgeLegend): a slot crossing's row, present-only; up to 3 crossings when every one is a slot
     { "slot_callers", "s via=slot|slot-name slot_callers=N: the previous row calls through a struct field this row is stored in (slot-name: field name only); N calling functions that join names, at most 16 (a crossing wider is not made); a hedge", true, {}, MapHeaderRead::No, {}, "path" },
     { "slot_fns", "s slot_fns=K: K functions that struct field holds (the width the crossing picks from); NOT capped, a wide table is still crossed; a hedge", true, {}, MapHeaderRead::No, {}, "path" },

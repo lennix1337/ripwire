@@ -223,7 +223,9 @@ if t is None:
 else:
     check( re.search( r'<s [^>]*n="handleClick"[^>]*via="name-key"', bridge( t ) ) is not None, "J1 JS this['handle' + e] crosses fire -> handleClick via=name-key" )
 t = run( sh, "--path=main,list_dir" )
-check( t is not None and "container|queue|name-key" in t, "L1 the default (compact) bridge reading names via=name-key" )
+check( t is not None and "s via=name-key cands=K:" in t, "L1 the default (compact) legend reads s via=name-key (present-only)" )
+t = run( f"{tmp}/neg", "--path=main,list_dir" )
+check( t is not None and "via=name-key" not in t, "L1 the compact name-key reading is absent with no name-key row" )
 # M1: the MCP path_between twin crosses the same hop
 req = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"path_between","arguments":{"from":"main","to":"list_dir"}}}\n'
 p = subprocess.run( [ binp, "--mcp", sh, "--no-cache" ], cwd = sh, input = req, capture_output = True, text = True, timeout = 120 )
