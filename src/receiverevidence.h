@@ -3089,7 +3089,16 @@ struct ReceiverEvidence
             return kNoNode;
         }
         key.assign( type );
-        return classNames.contains( key ) ? selfClass( r.fromSymbol ) : kNoNode;
+        return classNames.contains( key ) && !namesTypeAlias( r.lang, type ) ? selfClass( r.fromSymbol ) : kNoNode;
+    }
+    // a TypeScript `type T = …` is indexed as a Struct (queries/typescript/tags.scm @definition.type), and TS has no struct of its
+    // own: T then names whatever the alias spells (a union, a base class), not "a class that is not the caller's". Any alias of the
+    // name in the tree keeps foreignFieldOwner from cutting (a union holds the caller's class too; `type B = Base` may hold a D).
+    bool namesTypeAlias( Lang lang, std::string_view name ) const
+    {
+        NodeId one = kNoNode;
+        return callResultFamilyOf( lang ) == CallResultFamily::TypeScript
+            && types.classesNamed( name, CallResultFamily::TypeScript, [ & ]( NodeId c ) { return ing.symbols[ c ].kind == SymKind::Struct; }, one ) != 0;
     }
     // TypeScript: a type name the caller's file imports by name from a module (`import { Router } from "./fmt/router"`) that the
     // import tables pin to no class — their export table holds functions and classes, never an interface — names the ONE

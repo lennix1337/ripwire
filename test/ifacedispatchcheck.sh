@@ -287,11 +287,15 @@ for root, sel, want, tag, why in (
         ( B1KT, "run", [ ( "apply", "A.kt:3", "name" ) ], "kt_fun_object", "Kotlin: `fun interface Op` with a lambda and an `object : Op` expression" ),
         ( B1KT, "runTwo", [ ( "first", "B.kt:3", "name" ) ], "kt_object", "Kotlin: a two-method interface with an `object : Two { … }` expression" ),
         ( B1KT, "runLam", [ ( "call", "C.kt:3", "name" ) ], "kt_fun", "Kotlin: `fun interface Lam` a lambda implements (`runLam { it + 1 }`)" ),
-        ( B1RS, "send_500", [ ( "send_response", "src/mock.rs:10", "name" ) ], "rs_automock",
-          "Rust: `#[cfg_attr(any(test, feature = \"mock\"), automock)]` writes MockFilter, an implementor no source holds (envoy send_500)" ),
         ):
     a = ask( root, "callees", sel )
     say( rows_are( a, want ), "[P] k_%s" % tag, "--callees=%s: main's by-name rows %s, no via=\"impl\" -- %s" % ( sel, [ w[ 1 ] for w in want ], why ), a.why() )
+# Rust: `#[cfg_attr(any(test, feature = "mock"), automock)]` writes MockFilter, an implementor no source holds (envoy send_500). Lane receiver-fixes
+# (fix 1, F4): the open list's one visible candidate (FilterImpl) no longer falls to main's by-name row — it DECLINES (cands=1, gate=iface, bound=F:
+# Filter), never an edge and never via="impl" (a mock may override it).
+a = ask( B1RS, "callees", "send_500" )
+say( a.ok and not a.rows and one_dc( a, "send_response", "16", "1", "iface", "F: Filter" ), "[P] k_rs_automock",
+     "--callees=send_500: one <dc gate=\"iface\" cands=\"1\"> (FilterImpl; MockFilter is unseen), no edge, no via=\"impl\" -- Rust automock (envoy send_500)", a.why() )
 # Rust (train 34, fc2 x L6): `impl Render for Square` under `use mystery_crate::Render` (no module, no std sibling, no declared dependency) is
 # undecided, dropped from the implementor map (--lego=Render says implementors_floor=1): the list is open, so Circle is not the proven only
 # implementor. Lane receiver-fixes (RUST-DYN-NAMESAKE): an open trait list now DECLINES over every `impl Render for X` block's draw (Square's

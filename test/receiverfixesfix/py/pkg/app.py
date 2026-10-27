@@ -4,6 +4,7 @@ from typing import Optional
 import requests
 from pkg.sub import checker
 from pkg.sub.checker import Manager
+from pkg.sub.strat import FastStrategy, Strategy
 
 
 class AppA:
@@ -16,6 +17,7 @@ class AppA:
         self.m6: typing.Optional[checker.Manager] = None
         self.ext: requests.Session | None = None
         self.both: Manager | AppA | None = None
+        self.both2: Manager | AppA = None
 
     def make(self):
         self.m3 = checker.Manager()
@@ -44,6 +46,9 @@ class AppA:
     def goBoth(self):
         self.both.start()
 
+    def goBoth2(self):
+        self.both2.start()
+
     def start(self):
         return 0
 
@@ -60,3 +65,15 @@ def goExtLocal():
 
 def goParam(p: Manager | None):
     p.start()
+
+
+class AppC:
+    def __init__(self):
+        self.s10: Strategy = FastStrategy()
+        self.s11: Strategy = None
+
+    def go10(self):
+        self.s10.run()
+
+    def go11(self):
+        self.s11.run()

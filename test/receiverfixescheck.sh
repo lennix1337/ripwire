@@ -50,8 +50,8 @@ def run( sub, flag, legend = "compact" ):
         env = { k: v for k, v in os.environ.items() if not k.startswith( "RIPWIRE_" ) }
         env.update( HOME = home, TMPDIR = home + "/" )
         p = subprocess.run( [ BIN, root, "--no-cache", flag, "--legend=" + legend ], cwd = root, env = env, capture_output = True, text = True, timeout = 300 )
-    if p.returncode != 0:
-        print( "  rc=%d for %s %s: %s" % ( p.returncode, sub, flag, p.stderr[:200] ) )
+    if p.returncode != 0:   # an absence arm over a crashed run would pass: a nonzero rc is its own failure
+        say( False, "run " + sub + " " + flag, "ripwire exited %d" % p.returncode, p.stderr[:200] )
     return p.stdout
 def rows( out ):
     out = re.sub( r"<!--.*?-->", "", out, flags = re.S )
@@ -72,6 +72,8 @@ o = run( "ts", "--callees=viaPrivBox" ); e = edges( o )
 say( len( e ) == 1 and e[ 0 ].get( "p" ) == "src/exec/box.ts:2" and "via" not in e[ 0 ], "P T3 viaPrivBox", "`#boxp: Box` → the one proven Box.provide edge", str( e ) )
 o = run( "ts", "--callers=exec/executor.ts:Executor.provide" ); e = edges( o )
 say( not any( x.get( "n" ) in ( "viaPublic", "viaLate", "viaPrivBox" ) for x in e ), "P T4 callers", "no via=name caller row from a stated-field call", str( e ) )
+say( any( x.get( "n" ) == "viaSelfField" for x in e ) and any( x.get( "n" ) == "viaUntyped" and x.get( "via" ) == "name" for x in e ), "C T4 control",
+     "the same callers run lists the proven own-class caller and the untyped field's by-name caller (the absence above is not an empty run)", str( e ) )
 o = run( "ts", "--callees=flush" ); e = edges( o )
 say( not any( x.get( "p" ) == "src/exec/solo.ts:5" for x in e ), "P T5 flush", "`out: Sink` (an interface no class implements) never binds Solo's own write", str( e ) )
 o = run( "ts", "--callees=viaSelfField" ); e = edges( o )
@@ -95,17 +97,32 @@ o = run( "ts", "--callees=viaSingle", "full" ); e, d = edges( o ), declines( o )
 say( not e and len( d ) == 1 and d[ 0 ].get( "gate" ) == "iface" and d[ 0 ].get( "cands" ) == "1" and "driver/single-impl.ts:3" in d[ 0 ].get( "cand", "" ),
      "P T11 viaSingle", 'an interface with ONE (structural, unproven) implementor behind a stated field: <dc gate="iface" cands="1">, never the own run', "edges=%s dc=%s" % ( e, d ) )
 
+o = run( "tsalias", "--callees=viaUnion" ); e = edges( o )
+say( any( x.get( "p" ) == "src/alias.ts:6" for x in e ), "P T12 viaUnion",
+     "a field typed by a UNION alias (`type Either = Provider | Exec`) names no one class: the caller's own provide stays a candidate", str( e ) )
+o = run( "tsalias", "--callees=viaBase" ); e = edges( o )
+say( any( x.get( "p" ) == "src/alias.ts:18" for x in e ), "P T13 viaBase",
+     "a field typed by an alias of a BASE (`type B = Base`, `f: B`) keeps the caller's own ping: the field may hold the caller's class", str( e ) )
+
 print( "(Y) Python: annotations and module-qualified constructors type fields and locals" )
 for sym in ( "go1", "go2", "go3", "go4", "go5", "go6", "go8", "goParam" ):
     o = run( "py", "--callees=" + sym ); e = edges( o )
     m = [ x for x in e if x.get( "n" ) == "Manager.start" ]
     say( len( m ) == 1 and "via" not in m[ 0 ] and "prov" not in m[ 0 ] and not any( x.get( "n" ) == "AppA.start" for x in e ), "P Y1 " + sym,
          "Manager.start proven, never AppA.start", str( e ) )
-for sym, what in ( ( "goExt", "`requests.Session | None` (an outside qualifier)" ), ( "goBoth", "`Manager | AppA | None` (two classes)" ), ( "goExtLocal", "`requests.Manager()`" ) ):
+for sym, what in ( ( "goExt", "`requests.Session | None` (an outside qualifier)" ), ( "goBoth", "`Manager | AppA | None` (two classes)" ),
+                   ( "goBoth2", "`Manager | AppA` (two classes, no None: the union itself, not an Optional)" ), ( "goExtLocal", "`requests.Manager()`" ) ):
     o = run( "py", "--callees=" + sym ); e = edges( o )
     say( not any( x.get( "n" ) == "Manager.start" and "via" not in x for x in e ), "C Y2 " + sym, what + " proves no Manager.start", str( e ) )
+    say( any( x.get( "n" ) == "AppA.start" and x.get( "via" ) == "name" for x in e ), "C Y2 presence " + sym, "the run hedges: the by-name AppA.start row is listed (not an empty run)", str( e ) )
 o = run( "py", "--callees=goExt" ); e = edges( o )
 say( any( x.get( "n" ) == "AppA.start" and x.get( "via" ) == "name" for x in e ), "FLOOR Y3 goExt", "a field typed outside the tree keeps the by-name rows", str( e ) )
+o = run( "py", "--callees=go10" ); e = edges( o )
+say( any( x.get( "n" ) == "FastStrategy.run" and "via" not in x for x in e ) and not any( x.get( "n" ) == "Strategy.run" for x in e ), "P Y5 go10",
+     "`self.f: Strategy = FastStrategy()`: the constructed in-tree value beats the annotation (as a local does): FastStrategy.run proven, never the Strategy stub", str( e ) )
+o = run( "py", "--callees=go11" ); e = edges( o )
+say( any( x.get( "n" ) == "Strategy.run" and "via" not in x for x in e ), "C Y5 go11",
+     "`self.f: Strategy = None`: no value names a class, the annotation types the field (Strategy.run proven)", str( e ) )
 o = run( "pydup", "--callees=goDup" ); e = edges( o )
 say( len( e ) == 2 and all( x.get( "prov" ) == "split" for x in e ) and not any( x.get( "n" ) == "App.start" for x in e ), "P Y4 goDup",
      "T named by two classes: a split over both (never proven), never App.start", str( e ) )
@@ -122,6 +139,12 @@ for sym, line in ( ( "execute", "10" ), ( "boxed", "13" ) ):
 o = run( "rsdup", "--callees=execute" ); e, d = edges( o ), declines( o )
 say( not any( x.get( "gate" ) == "iface" for x in d ) and len( [ x for x in e if "render" in x.get( "n", "" ) ] ) == 3, "FLOOR R3 rsdup",
      "a trait name two in-tree traits share: the open-list rule answers nothing (impl blocks are keyed by name), the by-name rows stay", "edges=%s dc=%s" % ( e, d ) )
+o = run( "rsone", "--callees=by_name", "full" ); e, d = edges( o ), declines( o )
+say( not e and len( d ) == 1 and d[ 0 ].get( "gate" ) == "iface" and d[ 0 ].get( "cands" ) == "1" and d[ 0 ].get( "cand" ) == "src/api.rs:3", "P R4 by_name",
+     'an open list whose one candidate is the trait default declines (<dc gate="iface" cands="1">), never the by-name inherent Local::name', "edges=%s dc=%s" % ( e, d ) )
+o = run( "rsone", "--callees=by_render", "full" ); e, d = edges( o ), declines( o )
+say( not e and len( d ) == 1 and d[ 0 ].get( "cands" ) == "2" and d[ 0 ].get( "cand", "" ).split() == [ "src/one.rs:4", "src/two.rs:3" ], "P R5 by_render",
+     "an impl of a trait written through a path that leaves the tree (`impl other_crate::Renderer for Foreign`) is not an in-tree implementor: not in cand=", "edges=%s dc=%s" % ( e, d ) )
 print( "receiverfixescheck: %d passed, %d failed" % ( npass, nfail ) )
 sys.exit( 1 if nfail else 0 )
 PY

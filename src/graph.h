@@ -10306,6 +10306,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             ifaceCand.clear();
             bool                   proven = true;
             bool                   statedField = false;   // TS-FIELD-SELF: the receiver is `this.f` with f stated as another type
+            bool                   openList    = false;   // RUST-DYN-NAMESAKE: the candidates are the open trait's visible impl bodies
             std::string_view       bound;
             const bool             cppSplit = narrowed;
             if( cppSplit )
@@ -10332,6 +10333,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 proven      = ans.proven;
                 bound       = recv.bound;
                 statedField = !ifaceCand.empty() && recvEv.foreignFieldOwner( r ) != kNoNode;
+                openList    = !ifaceCand.empty() && ans.open;
             }
             if( ifaceCand.size() > 1 && std::any_of( ifaceCand.begin(), ifaceCand.end(), [ & ]( NodeId c ) { return !arityCannotTake( r, c ); } ) )
             {
@@ -10345,8 +10347,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
             // TS-FIELD-SELF: one unproven candidate (a structural language's floor) behind a stated field declines too — the name tiers
             // would bind whatever else shares the name in the caller's directory (kysely `this.#compiler.compileQuery` → a sibling
-            // executor's own compileQuery); the row says cands="1" and names it, never an edge
-            else if( ifaceCand.size() > 1 || ( statedField && !proven && !cppSplit ) )
+            // executor's own compileQuery); the row says cands="1" and names it, never an edge. The same for an OPEN Rust trait list
+            // with one candidate (the trait's default): an implementor the tree cannot list may override it, and the name tiers would
+            // bind an unrelated inherent `name` (RUST-DYN-NAMESAKE)
+            else if( ifaceCand.size() > 1 || ( ( statedField || openList ) && !proven && !cppSplit ) )
             {
                 recordDecline( r, std::span<const NodeId>( ifaceCand.data(), ifaceCand.size() ), DeclinedSiteKind::Iface );
                 if( !bound.empty() )

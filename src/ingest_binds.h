@@ -7002,19 +7002,33 @@ inline ReceiverEvidenceHook receiverEvidenceHookOf( Lang l ) noexcept
     }
 }
 
-// PY-CTOR-ANNOT: the class a `self.f = v` / `self.f: A = v` field holds — the annotation's (`T`, `T | None`, `Optional[ T ]`; a class
-// the annotation names wins over the value, so `= None` leaves it typed), else the constructor it is assigned (`X( … )`, `mod.X( … )`),
-// as TS's `f: T = …` reads. `whole`: a qualified spelling's whole text, for build()'s written-qualifier check.
+// PY-CTOR-ANNOT: the class a `self.f = v` / `self.f: A = v` field holds. A CONSTRUCTOR value (`X( … )`, `mod.X( … )`, X capitalized
+// as Python classes are: `make()` / `helpers.build()` name no class) beats the annotation, as it does for a local — `self.s: Strategy
+// = FastStrategy()` holds a FastStrategy, whatever the stub above it says; ReceiverEvidence::build then types the field only when
+// that name is an in-tree class (an outside or unresolved one leaves it untyped: a hedge, never the annotation). Otherwise the
+// annotation (`T`, `T | None`, `Optional[ T ]`; `= None` leaves it typed), else the value as read. `whole`: a qualified spelling's
+// whole text, for build()'s written-qualifier check.
 inline std::string_view pySelfFieldType( const BindCtx& cx, TSNode ann, TSNode rhs, std::uint32_t at, std::string_view& whole )
 {
-    const std::string_view written = ts_node_is_null( ann ) ? std::string_view{} : writtenClass( cx, pyOptionalInner( ann, cx.src ), at, &whole );
+    whole = {};
+    std::string_view value = constructedBy( rhs, cx.lang, cx.src );
+    if( value.empty() )
+    {
+        value = pyQualifiedConstructed( rhs, cx.src, whole );
+    }
+    const std::string_view valueWhole = whole;
+    if( ts_node_is_null( ann ) || ( !value.empty() && value.front() >= 'A' && value.front() <= 'Z' ) )
+    {
+        return value;
+    }
+    whole = {};
+    const std::string_view written = writtenClass( cx, pyOptionalInner( ann, cx.src ), at, &whole );
     if( !written.empty() )
     {
         return written;
     }
-    whole = {};
-    const std::string_view bare = constructedBy( rhs, cx.lang, cx.src );
-    return bare.empty() ? pyQualifiedConstructed( rhs, cx.src, whole ) : bare;
+    whole = valueWhole;
+    return value;
 }
 
 inline void captureReceiverEvidence( BindCtx& cx, TSNode n, const char* t )
@@ -7114,17 +7128,20 @@ inline void captureReceiverEvidence( BindCtx& cx, TSNode n, const char* t )
 // lane L6 fix round 1 (reports/dispatch-classes.md §(a) 4 and 5): the blocks that implement a type, as ImplBlock records over the
 // node (model.h LocalBindKind::ImplBlock). The implemented name is the written type's final segment, generic arguments dropped.
 // An implementor the index keeps no class for records no implementor name; graph.h then opens the type's implementors list.
+// A trait written through a path (`impl other_crate::Renderer for X`) keeps the whole path, generics dropped, in importedName: the
+// reader asks whether that path leaves the tree (ifacedispatch.h openTraitAnswer).
 inline void pushImplBlock( BindCtx& cx, TSNode n, std::string_view written, std::string_view implementor )
 {
     std::string_view name = written.substr( 0, std::min( written.find( '<' ), written.size() ) );
-    const std::size_t cut = name.find_last_of( ".:" );
-    name = name.substr( cut == std::string_view::npos ? 0 : cut + 1 );
     while( !name.empty() && ( name.back() == ' ' || name.back() == '\n' || name.back() == '\t' || name.back() == '\r' || name.back() == '?' ) )
     {
         name.remove_suffix( 1 );
     }
-    pushRawBind( cx.fileId, cx.lang, name, std::string( implementor ), BindSite{ ts_node_start_byte( n ), ts_node_start_byte( n ), ts_node_end_byte( n ) },
-                 LocalBindKind::ImplBlock, *cx.binds );
+    const std::string_view path = name;
+    const std::size_t      cut  = name.find_last_of( ".:" );
+    name = name.substr( cut == std::string_view::npos ? 0 : cut + 1 );
+    pushTypedBind( cx.fileId, cx.lang, name, DeclType{ std::string( implementor ), name.size() < path.size() ? std::string( path ) : std::string{} },
+                   BindSite{ ts_node_start_byte( n ), ts_node_start_byte( n ), ts_node_end_byte( n ) }, LocalBindKind::ImplBlock, *cx.binds );
 }
 
 // Rust (langfacts.h traitImplBlocks): `impl T for X { … }` — its methods are X's methods for T, never inherent ones; the names are
@@ -7144,7 +7161,7 @@ inline void rustImplBlockOf( BindCtx& cx, TSNode n, const char* t )
     const TSNode type  = ts_node_is_null( trait ) ? TSNode{} : fieldChild( n, NodeField::Type );
     if( !ts_node_is_null( type ) )
     {
-        pushImplBlock( cx, n, finalSegment( nodeTextOf( trait, cx.src ) ), finalSegment( nodeTextOf( type, cx.src ) ) );
+        pushImplBlock( cx, n, nodeTextOf( trait, cx.src ), finalSegment( nodeTextOf( type, cx.src ) ) );
     }
 }
 

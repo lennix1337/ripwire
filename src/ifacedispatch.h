@@ -56,6 +56,7 @@ struct IfaceDispatchAnswer
 {
     bool                fired  = false;
     bool                proven = false;
+    bool                open   = false;   // the list is what the tree shows of an implementors list it cannot close (openTraitAnswer): never a proof
     std::vector<NodeId> cand;
 };
 
@@ -382,13 +383,29 @@ private:
         {
             const Symbol& m = ing_.symbols[ c ];
             if( std::ranges::any_of( blocks->second, [ & ]( const Binding* b )
-                { return b->fileId == m.fileId && b->spanStart <= m.sigStartByte && m.endByte <= b->spanEnd; } ) )
+                { return b->fileId == m.fileId && b->spanStart <= m.sigStartByte && m.endByte <= b->spanEnd && !traitPathLeavesTree( *b ); } ) )
             {
                 out.cand.push_back( c );
             }
         }
         settle( out );
+        out.open = out.fired;
         return out;
+    }
+
+    // an `impl other_crate::Renderer for X` block names the trait through a path that provably leaves the tree (the block records
+    // the written path in importedName): it implements ANOTHER crate's Renderer, not the in-tree T the name matches. A cut walk
+    // or a path into the tree keeps the block.
+    bool traitPathLeavesTree( const Binding& b ) const
+    {
+        if( b.importedName.empty() )
+        {
+            return false;
+        }
+        const CallResultTypes& types = recvEv_.types;
+        types.pathCut                = false;
+        const bool outside           = types.rustPathOutside( b.fileId, b.startByte, b.importedName );
+        return outside && !types.pathCut;
     }
 
     // the bodyless members are an interface's or abstract class's contract; in a lambda-convertible language (langfacts.h) they are
