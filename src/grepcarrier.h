@@ -68,6 +68,8 @@ struct GrepCarrier
     std::vector<GrepCarrierSite> at;                   // the first kGrepCarrierShown of them, in tier, path, line order (not the order the uses verb prints)
     std::vector<GrepCarrierVal>  vals;                 // the first kGrepCarrierShown stored function values
     std::uint32_t                valsTotal  = 0;       // every stored function value on the row
+    std::string                  defPath;              // A3: the row's ONE carrier definition's file ("" when the row groups several)
+    std::uint32_t                defLine    = 0;       // ... and its line; p= anchors a vals= @line that names no path
 };
 
 // Does the uses verb see reads of a definition of `s`'s language at that path? (countfloor.h countFloorNext's rule.)
@@ -278,6 +280,12 @@ inline std::vector<GrepCarrier> grepCarriers( const IngestResult& ing, const Val
             continue;
         }
         out[r].isCarrier  = true;
+        if( rows[r].ids.size() == 1 && ing.symbols[ rows[r].ids.front() ].fileId < ing.files.size() )
+        {
+            const Symbol& def = ing.symbols[ rows[r].ids.front() ];   // exact or none: a row grouping several defs has no one place
+            out[r].defPath    = ing.files[ def.fileId ];
+            out[r].defLine    = def.line;
+        }
         out[r].readsKnown = reads != nullptr && grepCarrierReadsVisible( ing, ing.symbols[ rows[r].ids.front() ] );
         anyReads          = anyReads || out[r].readsKnown;
         carrierIds.insert( carrierIds.end(), rows[r].ids.begin(), rows[r].ids.end() );
@@ -311,9 +319,11 @@ inline std::string grepCarrierNext( const IngestResult& ing, std::span<const Gre
 }
 
 // The two list attributes as plain text items (the emitters escape them for their own dialect): reads_at= as
-// path:line, vals= as slot=fn@line / slot=fn@path:line / slot=fn — paths root-relative exactly when the hit rows' are.
+// path:line, vals= as slot=fn@line / slot=fn@path:line / slot=fn, and at (p=) the carrier's own path:line beside vals= — paths
+// root-relative exactly when the hit rows' are.
 struct GrepCarrierText
 {
+    std::string              at;        // A3: p= — the carrier's own definition as path:line, only on a row that prints vals= ("" otherwise)
     std::vector<std::string> readsAt;
     std::vector<std::string> vals;
 };
@@ -337,6 +347,10 @@ inline GrepCarrierText grepCarrierText( const GrepCarrier& c, bool singleRoot, s
             item += "@" + ( v.path.empty() ? std::string() : rel( v.path ) + ":" ) + std::to_string( v.line );
         }
         t.vals.push_back( std::move( item ) );
+    }
+    if( !t.vals.empty() && !c.defPath.empty() && c.defLine != 0 )
+    {
+        t.at = rel( c.defPath ) + ":" + std::to_string( c.defLine );   // the file a path-less vals= @line is in (storedVal's rule)
     }
     return t;
 }

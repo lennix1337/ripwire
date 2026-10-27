@@ -61,6 +61,10 @@ std::string grepCarrierAttrs( const rw::GrepCarrier& c, bool singleRoot, std::st
         return out;
     };
     std::string out;
+    if( !t.at.empty() )
+    {
+        out += " p=\"" + std::string( rw::escapeXml( t.at, esc ) ) + "\"";   // A3: the anchor of a path-less vals= @line
+    }
     if( !t.readsAt.empty() )
     {
         out += " reads=\"" + std::to_string( c.reads ) + "\" reads_at=\"" + joined( t.readsAt ) + "\"";
@@ -327,7 +331,8 @@ inline constexpr const char* kGrepCarrierClause =
     "file:line in tier, path, line order (source before tests, then path and line, not the order the uses verb prints); vals= names up to three function values the "
     "carrier itself stores (resolved by name to an indexed function), as slot=function@line: the slot key (absent for a "
     "plain assignment) and the line of the one definition that name resolves to (path:line when it is in another file, no "
-    "line when the name resolves to several); vals_total= counts all of them when more than three. When the top hit sits in a carrier with "
+    "line when the name resolves to several); vals_total= counts all of them when more than three; p= beside vals= is the "
+    "carrier's own definition as file:line (a row of one definition), the file a path-less line is in. When the top hit sits in a carrier with "
     "reads=, the root next= is the uses verb on that carrier instead of the at verb. ";
 
 // L4: the root's disclosure when the memory guard stopped the rich ingest that counts reads (grepReadsIngest) — spliced

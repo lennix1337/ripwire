@@ -1023,6 +1023,10 @@ inline std::string grepCarrierJson( const GrepCarrier& c, bool singleRoot, std::
         return list + "]";
     };
     std::string out;
+    if( !t.at.empty() )
+    {
+        out += ",\"p\":\"" + mcpdetail::jsonEscape( t.at ) + "\"";   // A3: the CLI <enc> p= twin
+    }
     if( !t.readsAt.empty() )
     {
         out += ",\"reads\":" + std::to_string( c.reads ) + ",\"reads_at\":" + jsonList( t.readsAt );
