@@ -2293,9 +2293,65 @@ inline constexpr std::string_view kSubjectOpenQuotes[]  = { "\xC2\xAB", "\xE2\x8
 inline constexpr std::string_view kSubjectCloseQuotes[] = { "\xC2\xBB", "\xE2\x80\x9D", "\xE2\x80\x99", "\xE3\x80\x8D", "\xE3\x80\x8F", "\xEF\xBC\x89" };   // » ” ’ 」 』 ）
 inline constexpr std::string_view kSubjectFullStops[]   = { "\xE3\x80\x82", "\xEF\xBC\x9B", "\xEF\xBC\x9A", "\xEF\xBC\x81", "\xEF\xBC\x9F", "\xEF\xBC\x8C", "\xE3\x80\x81" };   // 。 ； ： ！ ？ ， 、
 
-// one slot: the span's words up to its first qualifier / clause word or its first sentence stop (a word ending `. ; : ! ? ,`
-// or a full-width stop is the span's LAST word), stripped of quote/bracket/sentence punctuation; a trailing `()` makes the token
-// code-like (it is stripped AFTER the test). candidates = code-like tokens last-first, then `main` if the span holds it. Writes the read span.
+// One span word, stripped: `raw` = the word up to a full-width stop (the disclosure keeps it), `text` = raw without its edge
+// quotes / brackets / sentence punctuation, `stop` = a sentence stop ended it (`. , ; : ! ?` or a full-width one), `parens` = it
+// ended in `()` (a call: code-like although the `()` is dropped).
+struct GraphSubjectWord
+{
+    std::string_view raw, text;
+    bool             stop   = false;
+    bool             parens = false;
+};
+
+inline GraphSubjectWord graphSubjectTrimWord( std::string_view w )
+{
+    GraphSubjectWord r;
+    for( const std::string_view fs : kSubjectFullStops )
+    {
+        if( const std::size_t at = w.find( fs ); at != std::string_view::npos )
+        {
+            w      = w.substr( 0, at );
+            r.stop = true;
+        }
+    }
+    r.raw = w;
+    for( bool moved = true; moved && !w.empty(); )   // leading quote/bracket
+    {
+        moved = std::string_view( "`'\"([{" ).find( w.front() ) != std::string_view::npos;
+        w.remove_prefix( moved ? 1 : 0 );
+        for( const std::string_view q : kSubjectOpenQuotes )
+        {
+            if( !moved && w.starts_with( q ) ) { w.remove_prefix( q.size() ); moved = true; }
+        }
+    }
+    for( bool moved = true; moved && !w.empty(); )   // trailing quote/bracket/sentence punctuation; `()` is remembered, then dropped
+    {
+        const char c = w.back();
+        moved        = true;
+        if( w.size() > 2 && w.ends_with( "()" ) ) { r.parens = true; w.remove_suffix( 2 ); }
+        else if( std::string_view( ".,;:?!" ).find( c ) != std::string_view::npos ) { r.stop = true; w.remove_suffix( 1 ); }
+        else if( std::string_view( "`'\")]}[{(" ).find( c ) != std::string_view::npos ) { w.remove_suffix( 1 ); }
+        else
+        {
+            moved = false;
+            for( const std::string_view q : kSubjectCloseQuotes )
+            {
+                if( !moved && w.ends_with( q ) ) { w.remove_suffix( q.size() ); moved = true; }
+            }
+        }
+    }
+    r.text = w;
+    return r;
+}
+
+// `e.g.` / `i.e.` are prose, `*` would be a --path glob: neither is a name the task wrote
+inline bool graphSubjectNameable( std::string_view t ) noexcept
+{
+    return !t.empty() && t.find( '*' ) == std::string_view::npos && t != "e.g" && t != "i.e" && t != "E.g" && t != "I.e";
+}
+
+// one slot: the span's words up to its first qualifier / clause word or its first sentence stop (the stop word is the span's LAST
+// word); candidates = code-like tokens last-first, then `main` if the span holds it. Writes the read span.
 inline std::vector<std::string> graphSubjectCandidates( std::span<const std::string_view> words, std::string& spanOut )
 {
     std::vector<std::string> codeLike;
@@ -2306,53 +2362,15 @@ inline std::vector<std::string> graphSubjectCandidates( std::span<const std::str
         {
             break;
         }
-        bool stop = false;
-        for( const std::string_view fs : kSubjectFullStops )
-        {
-            if( const std::size_t at = w.find( fs ); at != std::string_view::npos )
-            {
-                w    = w.substr( 0, at );
-                stop = true;
-            }
-        }
+        const GraphSubjectWord t = graphSubjectTrimWord( w );
         spanOut += spanOut.empty() ? "" : " ";
-        spanOut += w;
-        bool parens = false;
-        for( bool moved = true; moved && !w.empty(); )   // leading quote/bracket
+        spanOut += t.raw;
+        if( graphSubjectNameable( t.text ) )
         {
-            moved = false;
-            if( std::string_view( "`'\"([{" ).find( w.front() ) != std::string_view::npos ) { w.remove_prefix( 1 ); moved = true; continue; }
-            for( const std::string_view q : kSubjectOpenQuotes )
-            {
-                if( w.starts_with( q ) ) { w.remove_prefix( q.size() ); moved = true; break; }
-            }
+            if( t.parens || graphSubjectCodeLike( t.text ) ) { codeLike.emplace_back( t.text ); }
+            else if( t.text == "main" ) { hasMain = true; }
         }
-        for( bool moved = true; moved && !w.empty(); )   // trailing quote/bracket/sentence punctuation; `()` is remembered, then dropped
-        {
-            moved = false;
-            if( w.size() > 2 && w.ends_with( "()" ) ) { parens = true; w.remove_suffix( 2 ); moved = true; continue; }
-            const char c = w.back();
-            if( std::string_view( ".,;:?!" ).find( c ) != std::string_view::npos ) { stop = true; w.remove_suffix( 1 ); moved = true; continue; }
-            if( std::string_view( "`'\")]}[{(" ).find( c ) != std::string_view::npos ) { w.remove_suffix( 1 ); moved = true; continue; }
-            for( const std::string_view q : kSubjectCloseQuotes )
-            {
-                if( w.ends_with( q ) ) { w.remove_suffix( q.size() ); moved = true; break; }
-            }
-        }
-        // `e.g.` / `i.e.` are prose, not a name
-        const bool prose = w == "e.g" || w == "i.e" || w == "E.g" || w == "I.e";
-        if( !w.empty() && !prose && w.find( '*' ) == std::string_view::npos )   // a `*` would be a --path glob, not a name the task wrote
-        {
-            if( parens || graphSubjectCodeLike( w ) )
-            {
-                codeLike.emplace_back( w );
-            }
-            else if( w == "main" )
-            {
-                hasMain = true;
-            }
-        }
-        if( stop )
+        if( t.stop )
         {
             break;
         }

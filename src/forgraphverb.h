@@ -52,8 +52,36 @@ struct GraphSubjectOpen
     std::size_t nameTestHops = 0;
 };
 
+// The candidate combinations, in the order they are tried (at most kGraphSubjectAttempts). A two-endpoint form ranks (a,b) by
+// index sum, then a's index (parse.py).
+inline std::vector<std::vector<std::string>> graphSubjectCombinations( const GraphSubject& gs )
+{
+    std::vector<std::vector<std::string>> combos;
+    if( gs.slots.size() == 1 )
+    {
+        for( std::size_t a = 0; a < gs.slots[0].size() && combos.size() < kGraphSubjectAttempts; ++a )
+        {
+            combos.push_back( { gs.slots[0][a] } );
+        }
+        return combos;
+    }
+    const std::size_t na = std::min( gs.slots[0].size(), kGraphSubjectSlotCands );
+    const std::size_t nb = std::min( gs.slots[1].size(), kGraphSubjectSlotCands );
+    for( std::size_t sum = 0; sum + 2 <= na + nb && combos.size() < kGraphSubjectAttempts; ++sum )
+    {
+        for( std::size_t a = 0; a < na && a <= sum && combos.size() < kGraphSubjectAttempts; ++a )
+        {
+            if( sum - a < nb )
+            {
+                combos.push_back( { gs.slots[0][a], gs.slots[1][sum - a] } );
+            }
+        }
+    }
+    return combos;
+}
+
 // The first candidate combination whose every endpoint the verb's own resolver finds; nullopt when the task is not
-// a graph question or no combination resolves. Two-endpoint forms rank (a,b) by index sum, then a's index (parse.py).
+// a graph question or no combination resolves.
 inline std::optional<GraphSubjectArgs> chooseGraphSubjectArgs( const IngestResult& ing, std::string_view task )
 {
     const std::optional<GraphSubject> gs = parseGraphSubject( task );
@@ -73,29 +101,7 @@ inline std::optional<GraphSubjectArgs> chooseGraphSubjectArgs( const IngestResul
         }
         return false;
     };
-    std::vector<std::vector<std::string>> combos;
-    if( gs->slots.size() == 1 )
-    {
-        for( std::size_t a = 0; a < gs->slots[0].size() && combos.size() < kGraphSubjectAttempts; ++a )
-        {
-            combos.push_back( { gs->slots[0][a] } );
-        }
-    }
-    else
-    {
-        const std::size_t na = std::min( gs->slots[0].size(), kGraphSubjectSlotCands );
-        const std::size_t nb = std::min( gs->slots[1].size(), kGraphSubjectSlotCands );
-        for( std::size_t sum = 0; sum + 2 <= na + nb && combos.size() < kGraphSubjectAttempts; ++sum )
-        {
-            for( std::size_t a = 0; a < na && a <= sum && combos.size() < kGraphSubjectAttempts; ++a )
-            {
-                if( sum - a < nb )
-                {
-                    combos.push_back( { gs->slots[0][a], gs->slots[1][sum - a] } );
-                }
-            }
-        }
-    }
+    const std::vector<std::vector<std::string>> combos = graphSubjectCombinations( *gs );
     std::vector<std::pair<std::string, bool>> memo;   // a spelling is resolved once however many combinations hold it
     const auto found = [ & ]( const std::string& spec ) -> bool
     {
@@ -164,6 +170,35 @@ inline std::size_t graphSubjectNameTestHops( std::string_view doc )
     return n;
 }
 
+// ` from_span="…" to_span="…"` | ` of_span="…" [and_span="…"]`
+inline std::string graphSubjectSpanAttrs( const GraphSubjectArgs& a )
+{
+    static constexpr std::string_view kPathSpans[]   = { "from_span", "to_span" };
+    static constexpr std::string_view kCommonSpans[] = { "of_span", "and_span" };
+    std::string       out;
+    std::vector<char> esc;
+    for( std::size_t k = 0; k < a.spans.size() && k < 2; ++k )
+    {
+        const std::string_view name = a.form == GraphSubjectForm::Path ? kPathSpans[k] : a.form == GraphSubjectForm::Common ? kCommonSpans[k] : "of_span";
+        out += " " + std::string( name ) + "=\"" + std::string( escapeXml( a.spans[k], esc ) ) + "\"";
+    }
+    return out;
+}
+
+// ` tried="N" unresolved="a b"` — only when an earlier combination did not resolve
+inline std::string graphSubjectTriedAttrs( const GraphSubjectArgs& a )
+{
+    if( a.tried <= 1 )
+    {
+        return {};
+    }
+    std::string       out = " tried=\"" + std::to_string( a.tried ) + "\"";
+    std::string       names;
+    std::vector<char> esc;
+    for( const std::string& u : a.unresolved ) { names += ( names.empty() ? "" : " " ) + u; }
+    return out + ( names.empty() ? "" : " unresolved=\"" + std::string( escapeXml( names, esc ) ) + "\"" );
+}
+
 // The opening of the block: its own legend (present only with the block; no `--` inside the comment), then
 // <graph_verb endpoints="subject" verb=… from_span=/to_span= | of_span= [| and_span=] [tried= unresolved=] [dialect=] [held=] [name_test_hops=]>.
 // tried=/unresolved= are present only when an earlier combination did not resolve; every other clause only with its attribute.
@@ -181,21 +216,7 @@ inline std::string graphSubjectOpenXml( const GraphSubjectArgs& a, const GraphSu
                   : "; the verb's own legend follows; the answer above is unchanged, and these bytes are not in est_tokens --><graph_verb endpoints=\"subject\"";
     const auto [ flag, value ] = graphSubjectVerbFlag( a );
     out += nextAttrXml( nextFlag( flag, value ), "verb" );
-    static constexpr std::string_view kPathSpans[]   = { "from_span", "to_span" };
-    static constexpr std::string_view kCommonSpans[] = { "of_span", "and_span" };
-    std::vector<char> esc;
-    for( std::size_t k = 0; k < a.spans.size() && k < 2; ++k )
-    {
-        const std::string_view name = a.form == GraphSubjectForm::Path ? kPathSpans[k] : a.form == GraphSubjectForm::Common ? kCommonSpans[k] : "of_span";
-        out += " " + std::string( name ) + "=\"" + std::string( escapeXml( a.spans[k], esc ) ) + "\"";
-    }
-    if( a.tried > 1 )
-    {
-        out += " tried=\"" + std::to_string( a.tried ) + "\"";
-        std::string names;
-        for( const std::string& u : a.unresolved ) { names += ( names.empty() ? "" : " " ) + u; }
-        out += names.empty() ? "" : " unresolved=\"" + std::string( escapeXml( names, esc ) ) + "\"";
-    }
+    out += graphSubjectSpanAttrs( a ) + graphSubjectTriedAttrs( a );
     out += o.jsonDialect ? " dialect=\"json\"" : "";
     out += o.held ? " held=\"budget\"" : "";
     out += o.nameTestHops > 0 ? " name_test_hops=\"" + std::to_string( o.nameTestHops ) + "\"" : "";
