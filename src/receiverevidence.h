@@ -1355,6 +1355,13 @@ struct CallResultTypes
         }
         return rustReexportOutside( crate, module, item, depth );
     }
+    // rustPathOutside, as a verdict: the path provably leaves the tree (an `impl other_crate::Renderer for X` names ANOTHER crate's
+    // trait, not the in-tree one of that name). A cut walk, an empty path or a path into the tree is false.
+    bool rustPathProvablyOutside( std::uint32_t f, std::uint32_t at, std::string_view path ) const
+    {
+        pathCut = false;
+        return rustPathOutside( f, at, path ) && !pathCut;
+    }
     // the files holding module (crate, module)'s own level: a file module's files, or (`inlineMod` set) the one file of an
     // inline `mod`, kept in `ownFile`; empty when no such module
     std::span<const std::uint32_t> rustModuleFiles( std::uint32_t crate, const std::string& module, NodeId& inlineMod, std::uint32_t& ownFile ) const
