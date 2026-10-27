@@ -150,7 +150,8 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 // lane rust-degraded's placeholder 42.
 // 44 (train 37b, lane rust-degraded; its placeholder was 42): the FILE record gains a sixth FileHealth u32, useBoundsBlanked
 // (the Rust precise-capture re-parse, src/rustusebounds.h), so an older cache must be rejected. 44 is above train 36's 43.
-constexpr std::uint32_t kCacheVersion = 44;           // 44: train 37b — rust-degraded FileHealth::useBoundsBlanked (above 43 / placeholder 42)
+constexpr std::uint32_t kCacheVersion = 45;           // 45: PLACEHOLDER (lane js-def-naming; train 39 renumbers) — LocalBindKind gained JsObjectLiteral (appended)
+                                                      // 44: train 37b — rust-degraded FileHealth::useBoundsBlanked (above 43 / placeholder 42)
                                                       // 43: train 36 — #155 Kotlin trailingLambda ref byte (above 40 / 41 / 42)
                                                       // 40: train 34 — strictly above main 39 and every live value (train-33 refs, #432 39; #427 / #429 38): the
                                                       //    fc3-js-rebind record change (LocalBindKind JsRebind, appended) lands; no other train-34 lane changed a format.
@@ -361,7 +362,10 @@ constexpr std::uint32_t kCacheVersion = 44;           // 44: train 37b — rust-
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 235;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 238;          // bump on any grammar/.scm/extraction change
+                                                      // 238 = PLACEHOLDER (lane js-def-naming, above lane receiver-fixes' 237; train 39 renumbers): a JS bare
+                                                      //   `module.exports = <anonymous fn>` is a function named by its file's stem, and a module-scope `NAME = { … }`
+                                                      //   object literal records its binding name (LocalBindKind::JsObjectLiteral)
                                                       // 235 = 2026-10-27 (train 38: lane queue-hop, placeholder 228 / rich 229): a Python queue call (put/put_nowait/get/get_nowait)
                                                       //   carrying keyword arguments records them on its call reference's composeRel (model.h pyKwTag), so QueueHops reads
                                                       //   `put( v, timeout=1 )` as one item. Strictly above train 37b's 233 (rich 234). Rich file tag 236. No record format

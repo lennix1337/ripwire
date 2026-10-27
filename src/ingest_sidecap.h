@@ -1846,7 +1846,8 @@ enum class TagsCapture : std::uint8_t { Full, DefinitionsOnly };
 /// file's tags pass runs later, at the prewarm flush).
 void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t fileId, std::string_view src, TSNode root,
                        std::vector<RawDef>& defs, std::vector<RawRef>& refs, std::vector<RawBind>& binds, std::vector<Include>& includes,
-                       const std::vector<PreprocDeadRange>& ppDead, ExtractShortfall& shortfall, TagsCapture mode = TagsCapture::Full )
+                       const std::vector<PreprocDeadRange>& ppDead, ExtractShortfall& shortfall, TagsCapture mode = TagsCapture::Full,
+                       std::string_view fileStem = {} )   // the file's stem: the name of a bare `module.exports = <anonymous fn>` (JS)
 {
     const bool full = mode == TagsCapture::Full;
     if( cursor == nullptr )
@@ -2309,6 +2310,14 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             d.kind      = kind;
             d.lang      = le.lang;
             d.name      = isTestMacroBlock ? std::string( nameTxt ) : defNameFromCapture( le.lang, nameTxt );   // LB-E: a title is a display string — see testMacroTitleOf
+            if( defCapSv == "definition.cjsexport" && isCjsModuleExportsItself( nameNode, src ) )
+            {   // lane js-def-naming: the module's own export function, named by the file's stem (ingest_names.h isCjsModuleExportsItself)
+                if( fileStem.empty() )
+                {
+                    continue;   // no path to name it by: no row, as before
+                }
+                d.name = std::string( fileStem );
+            }
             if( le.lang == Lang::Elixir && elixirTarget( roleNode, src ) == "test" )
             {
                 // Static ExUnit title; interpolation was rejected by elixirKeepCapture.

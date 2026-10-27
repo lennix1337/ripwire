@@ -415,6 +415,33 @@ inline JsDecl jsHoistedDeclScope( TSNode node )
     return { nameNode, parent };
 }
 
+// Lane js-def-naming: one LocalBindKind::JsObjectLiteral per declarator of a module-scope `const|let|var NAME = { … }` (model.h),
+// the literal's binding name over its own span — the name its members' owner has, which the index stores nowhere else.
+inline void recordJsObjectLiterals( TSNode decl, Lang lang, std::uint32_t fileId, std::string_view src, std::vector<RawBind>& binds )
+{
+    ChildCursor         cursor( decl );
+    std::vector<TSNode> declarators;
+    collectChildren( decl, cursor.cur, declarators );
+    for( const TSNode variable : declarators )
+    {
+        const TSNode name  = jsNodeIs( variable, "variable_declarator" ) ? fieldChild( variable, NodeField::Name ) : TSNode{};
+        const TSNode value = ts_node_is_null( name ) ? TSNode{} : fieldChild( variable, NodeField::Value );
+        if( !jsNodeIs( name, "identifier" ) || !jsNodeIs( value, "object" ) )
+        {
+            continue;
+        }
+        RawBind bind;
+        bind.fileId    = fileId;
+        bind.lang      = lang;
+        bind.startByte = ts_node_start_byte( variable );
+        bind.kind      = LocalBindKind::JsObjectLiteral;
+        bind.var       = std::string( pattern::nodeText( name, src ) );
+        bind.spanStart = ts_node_start_byte( value );
+        bind.spanEnd   = ts_node_end_byte( value );
+        binds.push_back( std::move( bind ) );
+    }
+}
+
 inline void captureJsImportFacts( TSNode root, Lang lang, std::uint32_t fileId, std::string_view src, std::vector<RawBind>& binds )
 {
     if( lang != Lang::TypeScript && lang != Lang::JavaScript ) { return; }
@@ -494,6 +521,7 @@ inline void captureJsImportFacts( TSNode root, Lang lang, std::uint32_t fileId, 
         }
         else if( jsNodeIs( stmt, "lexical_declaration" ) || jsNodeIs( stmt, "variable_declaration" ) )
         {
+            recordJsObjectLiterals( stmt, lang, fileId, src, binds );
             captureJsModuleAliases( stmt, src, aliasDecls, [ & ]( TSNode declarator, std::string local, std::string source, std::string member, bool fromIdentifier )
             {
                 imported.try_emplace( local, 1 );
@@ -554,6 +582,7 @@ inline void captureJsImportFacts( TSNode root, Lang lang, std::uint32_t fileId, 
             }
             else if( jsNodeIs( decl, "lexical_declaration" ) || jsNodeIs( decl, "variable_declaration" ) )
             {
+                recordJsObjectLiterals( decl, lang, fileId, src, binds );
                 ChildCursor declCursor( decl );
                 std::vector<TSNode> declarators;
                 collectChildren( decl, declCursor.cur, declarators );

@@ -533,7 +533,7 @@ inline void emitPathAnswerRows( std::FILE* out, const IngestResult& ing, const G
 // MCP path_between read their via=/link/anchor/split/owner clauses and the root's chain from here, one rule for both.
 struct PathShownMarks
 {
-    bool via = false, link = false, miss = false, split = false, owner = false;
+    bool via = false, link = false, miss = false, split = false, owner = false, ownerContained = false;
 };
 inline PathShownMarks pathShownMarks( const IngestResult& ing, const Graph& g, const PathPairs& pp, std::span<const NodeId> path )
 {
@@ -544,7 +544,9 @@ inline PathShownMarks pathShownMarks( const IngestResult& ing, const Graph& g, c
         m.link  = m.link || pathHasNameOnlyHop( g, c, kEdgeLink );
         m.miss  = m.miss || pathHasNameOnlyHop( g, c, 0 );
         m.split = m.split || pathEndpointBinding( g, 1, 1, c ).splitHop;
-        m.owner = m.owner || anyPathHopOwner( pathHopOwners( ing, c ) );
+        const MemberOwnerRows owners = memberOwnerRows( ing, c );   // the rows pathHopOwners prints, and whether a TS/JS owner was read by containment
+        m.owner          = m.owner || owners.any;
+        m.ownerContained = m.ownerContained || owners.contained;
         return false;   // visit every printed chain
     };
     if( pp.active() )
