@@ -25,6 +25,7 @@
 // the stored functions) is built only when one is found, so an answer with no initializer row pays one scan.
 
 #include "forfold.h"            // fold_detail::overlapsServed — the fold's own "the answer already carries this text" reading
+#include "langfacts.h"         // langFacts().memberSeparator — slot_by= names a method as its rows do
 #include "infra/sortutil.h"   // svLess: the candidate-name list the cost pre-check binary-searches
 #include "filter.h"             // isTestSymbol — slot_by= / slot_fields= list non-test callers first
 #include "formembers.h"         // MemberNamesServed — the bodies the answer serves
@@ -278,8 +279,7 @@ inline std::string ownerName( const Symbol& s )
     {
         return s.name;
     }
-    const bool colons = s.lang == Lang::C || s.lang == Lang::Cpp || s.lang == Lang::Rust;
-    return s.scope + ( colons ? "::" : "." ) + s.name;
+    return s.scope + std::string( langFacts( s.lang ).memberSeparator ) + s.name;   // the language's own (`Local.Operation`, `Editor::run`)
 }
 inline std::string joinedRun( std::string_view attr, const std::vector<std::string>& names, std::size_t more, std::vector<char>& esc )
 {
