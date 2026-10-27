@@ -2569,6 +2569,13 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                     {
                         r.trailingLambda = kotlinTrailingLambda( roleNode );   // #155: `x.run { }` / `with( x ) { }` — graph.h FalseEdgeRules' Kotlin arm
                     }
+                    if( isQueueLang( le.lang ) && isQueueCallName( r.name ) )
+                    {
+                        if( const std::uint8_t kw = callKeywords( nameNode, src ); kw != 0 )
+                        {
+                            r.composeRel = pyKwTag( kw );                                // a queue call's keywords, for QueueHops (model.h pyKwTag)
+                        }
+                    }
                 }
                 refs.push_back( std::move( r ) );
             }

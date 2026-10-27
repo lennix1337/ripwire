@@ -895,6 +895,50 @@ struct LocalNameFact
 // The prefix of a C++ call's memberPath that marks an ELEMENT-ACCESS receiver (Reference::memberPath, its C++ reading).
 inline constexpr std::string_view kCppElementMark = "[]";
 
+// A Python queue call's KEYWORD arguments (isQueueCallName), carried on its call reference's composeRel (a call is no compose record and no value-ref slot, so the
+// field is free there): "" none, else "k<count>" and a trailing "o" when any keyword is spelled other than `timeout` / `block` (the two
+// keywords queue.Queue.put/get and asyncio.Queue take). argCount counts them too (the resolver's arity filter needs that), so
+// QueueHops (backhops.h) subtracts the count to read the positional arguments. Written by ingest_sidecap.h, read by pyKwArgsOf.
+inline constexpr std::uint8_t kCallKwCount = 0x7F;   // the count's mask in callArity's keyword byte (saturating)
+inline constexpr std::uint8_t kCallKwOther = 0x80;   // …and the flag: a keyword other than timeout / block
+// The four calls QueueHops reads (backhops.h): the only Python calls whose keyword arguments ingest records.
+inline bool isQueueCallName( std::string_view name ) noexcept
+{
+    static constexpr std::string_view kQueueCalls[] = { "get", "get_nowait", "put", "put_nowait" };
+    return std::ranges::contains( kQueueCalls, name );
+}
+// The languages whose queue operations the hop rule reads (a per-kind table, as backhops.h selfKeyword's: Go channels need an ingest record first).
+// Ingest records the queue calls' keywords for these; QueueHops (backhops.h) pairs only their symbols.
+inline bool isQueueLang( Lang lang ) noexcept
+{
+    static constexpr Lang kQueueLangs[] = { Lang::Python };
+    return std::ranges::contains( kQueueLangs, lang );
+}
+inline std::string pyKwTag( std::uint8_t kw )
+{
+    return "k" + std::to_string( unsigned( kw & kCallKwCount ) ) + ( ( kw & kCallKwOther ) != 0 ? "o" : "" );
+}
+struct PyKwArgs
+{
+    std::uint32_t count = 0;
+    bool          other = false;
+};
+inline PyKwArgs pyKwArgsOf( std::string_view composeRel ) noexcept
+{
+    PyKwArgs out;
+    if( composeRel.size() < 2 || composeRel[ 0 ] != 'k' )
+    {
+        return out;
+    }
+    std::size_t i = 1;
+    for( ; i < composeRel.size() && composeRel[ i ] >= '0' && composeRel[ i ] <= '9'; ++i )
+    {
+        out.count = out.count * 10 + std::uint32_t( composeRel[ i ] - '0' );
+    }
+    out.other = i < composeRel.size() && composeRel[ i ] == 'o';
+    return out;
+}
+
 struct Reference
 {
     NodeId        fromSymbol = kNoNode;   // enclosing symbol (caller); kNoNode if file-scope

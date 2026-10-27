@@ -30,10 +30,10 @@ a small explicit bound" is safe only when nothing inside the group repeats; it i
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 283 | 112 | 168 | **115** |
+| 286 | 113 | 170 | **116** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 283 + 7 is the 290 constants this generator parses out of `src/`.
+are not counted as caps, and 286 + 7 is the 293 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -51,8 +51,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **140 of 283 caps are classified
-(50 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 143 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **140 of 286 caps are classified
+(50 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 146 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -102,7 +102,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 112 files that declare a cap — the 283 caps counted above, and no parameter.
+One table for each of the 113 files that declare a cap — the 286 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -137,6 +137,7 @@ Discloses: **none**
 | --- | --- | --- | --- |
 | `kBackHopWidth` | `16` | — | — |
 | `kImpactRingRowCap` | `16` | — | — |
+| `kImpactRingSlotDepth` | `3` | — | a field-only chain's depth; pathgaps.h pins it to kBridgeSlotCrossings |
 
 ### `src/binstale.h`
 
@@ -869,6 +870,15 @@ Discloses: `gap_syms_capped`, `rows_capped`
 | `kNearSinkDepth` | `2` | — | proven caller hops back from to= (1 = a direct caller) |
 | `kNearSinkRows` | `4` | — | <ns> rows printed; rows= counts them all, rows_capped="1" says so |
 | `kPathGapRows` | `3` | — | <gap> rows printed; gap_syms= counts them all, gap_syms_capped="1" says so |
+
+### `src/pathpairs.h`
+
+Discloses: `alt_capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kPathPairAltRows` | `12` | — | knob: <alt> rows printed; alt= counts them all, alt_capped="1" says rows were cut |
+| `kPathPairMaxDstGroups` | `16` | — | knob: reverse walks per answer; more to= groups keep today's answer |
 
 ### `src/pattern.h`
 
