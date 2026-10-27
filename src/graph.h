@@ -1878,6 +1878,14 @@ inline bool javaLeadingShadowed( const FieldNarrowTables& t, NodeId from, std::s
     return false;
 }
 
+// does any of these byte spans hold the byte `at` (a site-spanned local binding's reach)? ONE answer for the JS shadow table and the Python
+// renamed-import pin: a span is [startByte, endByte).
+template<typename Spans>
+inline bool varSpansCover( const Spans& spans, std::uint32_t at ) noexcept
+{
+    return std::ranges::any_of( spans, [ at ]( const VarSpan& s ) { return at >= s.startByte && at < s.endByte; } );
+}
+
 // Prove a Java method-reference receiver is a type, not a value, and RETURN the type it names —
 // the receiver's LAST segment, which is the type the member must be resolved against. Empty view
 // ⇒ not proven; a proof never yields an empty name, so the two are distinguishable.
@@ -5734,8 +5742,7 @@ struct FalseEdgeRules
     bool shadowedAt( const Reference& r, std::string_view name ) const
     {
         const auto it = shadows.find( fileNameKey( key, r.fileId, name ) );
-        return it != shadows.end()
-            && std::any_of( it->second.begin(), it->second.end(), [ & ]( const VarSpan& s ) { return r.startByte >= s.startByte && r.startByte < s.endByte; } );
+        return it != shadows.end() && varSpansCover( it->second, r.startByte );
     }
     // the file binds `name` at this site: an import or alias of it, or a declaration whose scope holds the site
     bool jsFileBinds( const Reference& r, std::string_view name ) const
@@ -7648,8 +7655,7 @@ inline bool pythonSpannedLocalCovers( const PythonRenamedImports& t, NodeId sym,
 {
     std::string key;
     const auto  it = t.shadows.find( fileNameKey( key, sym, name ) );
-    return it != t.shadows.end()
-        && std::ranges::any_of( it->second, [ at ]( const VarSpan& s ) { return at >= s.startByte && at < s.endByte; } );
+    return it != t.shadows.end() && varSpansCover( it->second, at );
 }
 
 // PY-IMPORT-ALIAS-CALL: the ONE definition a bare Python call `y()` reaches through `from m import x as y`, else kNoNode. Decided only
