@@ -120,6 +120,44 @@ std::vector<std::uint32_t> memberCalls( const IngestResult& ing, const Holds& ho
     }
     return out;
 }
+// The registrars' parameters stored into field slots (model.h kValueRefSlotParamScope facts): an ARGUMENT row of a bare call
+// `Reg( … )` (scope 'a', key "#k") lands in the slot parameter k of Reg is stored into, when exactly one slot is recorded for
+// (Reg, k) — two same-named registrars, or one storing it in two fields, decide nothing.
+class ParamSlots
+{
+public:
+    void take( std::uint32_t refIdx ) { m_refs.push_back( refIdx ); }
+    void build( const IngestResult& ing )
+    {
+        for( const std::uint32_t q : m_refs )
+        {
+            const Reference& r    = ing.references[q];
+            const std::string to  = goTypeKey( ing, r ) + "#" + r.memberPath;
+            std::string&      have = m_slot[ r.recvVar + "#" + std::to_string( r.argCount ) ];
+            have = have.empty() || have == to ? to : std::string( kConflict );
+        }
+    }
+    // (type, field) of argument row `v`'s slot, or nothing.
+    std::optional<std::pair<std::string, std::string>> slotOf( const Reference& v ) const
+    {
+        if( m_slot.empty() || !v.argCountKnown || v.recvVar.empty() || v.qualifier.empty() || v.qualifier[0] != 'a' )
+        {
+            return std::nullopt;
+        }
+        const auto it = m_slot.find( v.recvVar + "#" + std::to_string( v.argCount ) );
+        if( it == m_slot.end() || it->second == kConflict )
+        {
+            return std::nullopt;
+        }
+        const std::size_t hash = it->second.rfind( '#' );
+        return std::pair{ it->second.substr( 0, hash ), it->second.substr( hash + 1 ) };
+    }
+
+private:
+    static constexpr std::string_view kConflict = "\x01";
+    std::vector<std::uint32_t>        m_refs;   // the facts, keyed in build() (the type is package-qualified by its file)
+    HashMap<std::string, std::string> m_slot;   // "fn#k" → "Type#field" (kConflict: two different slots)
+};
 }   // namespace slot_join
 
 // ── IX-1 slot-type join ──────────────────────────────────────────────────────────────────────────────────
@@ -154,14 +192,7 @@ public:
         }
         if( r.role == RefRole::Value && sc == kValueRefSlotParamScope )
         {
-            if( slotJoinsByFieldName( r.lang ) )
-            {
-                m_paramFactRefs.push_back( i );   // keyed in build(): its type is package-qualified by its file (goTypeKey)
-                return true;
-            }
-            // IX1-V2: parameter argCount of `recvVar` is stored into slot memberCtor.memberPath; two different slots for one
-            // (function name, position) — two same-named registrars, or one storing it twice — decide nothing (kConflict)
-            noteFact( m_paramSlot, r.recvVar + "#" + std::to_string( r.argCount ), canonType( r.memberCtor, r.fileId ) + "#" + r.memberPath );
+            m_params.take( i );   // IX1-V2: a registrar's parameter stored into a field slot
             return true;
         }
         return false;
@@ -169,11 +200,7 @@ public:
     // After every take: keys the slot values (`values`, ascending, with their resolved `targets`) and the calls by field.
     void build( const IngestResult& ing, std::span<const std::uint32_t> values, std::span<const std::vector<NodeId>> targets )
     {
-        for( const std::uint32_t q : m_paramFactRefs )
-        {
-            const Reference& r = ing.references[q];
-            noteFact( m_paramSlot, r.recvVar + "#" + std::to_string( r.argCount ), slot_join::goTypeKey( ing, r ) + "#" + r.memberPath );
-        }
+        m_params.build( ing );
         for( std::size_t k = 0; k < values.size(); ++k )
         {
             if( targets[k].empty() )
@@ -185,9 +212,9 @@ public:
             {
                 m_values.push_back( endOf( ing, values[k] ) );
             }
-            else if( const std::optional<End> e = paramSlotEnd( v, values[k] ) )
+            else if( const auto ps = m_params.slotOf( v ) )
             {
-                m_values.push_back( *e );   // IX1-V2: `Reg( Put )` where Reg stores that parameter into a field
+                m_values.push_back( { values[k], ps->first, ps->second } );   // IX1-V2: `Reg( Put )`, Reg storing that parameter in a field
             }
             else
             {
@@ -369,26 +396,6 @@ private:
         e.field = std::string( chain );
         return e;
     }
-    // IX1-V2: an ARGUMENT row of a bare call `Reg( … )` (scope 'a', key "#k") lands in the slot parameter k of Reg is stored
-    // into (a kValueRefSlotParamScope fact), when exactly one slot is recorded for (Reg, k).
-    std::optional<End> paramSlotEnd( const Reference& v, std::uint32_t refIdx ) const
-    {
-        if( m_paramSlot.empty() || !v.argCountKnown || v.recvVar.empty() || v.qualifier.empty() || v.qualifier[0] != 'a' )
-        {
-            return std::nullopt;
-        }
-        const auto it = m_paramSlot.find( v.recvVar + "#" + std::to_string( v.argCount ) );
-        if( it == m_paramSlot.end() || it->second == kConflict )
-        {
-            return std::nullopt;
-        }
-        const std::size_t hash = it->second.rfind( '#' );
-        End               e;
-        e.ref   = refIdx;
-        e.type  = it->second.substr( 0, hash );
-        e.field = it->second.substr( hash + 1 );
-        return e;
-    }
     static const End* find( const std::vector<End>& ends, std::uint32_t ref ) noexcept
     {
         const auto it = std::ranges::lower_bound( ends, ref, {}, &End::ref );
@@ -425,8 +432,7 @@ private:
     HashMap<std::string, std::string>                m_alias;          // typedef name → struct type (kConflict: files disagree)
     HashMap<std::string, std::string>                m_aliasInFile;    // "fileId#name" → struct type, the file's own typedef
     HashMap<std::string, std::string>                m_body;           // struct type → its body's digest (kConflict: files differ)
-    std::vector<std::uint32_t>                       m_paramFactRefs;  // IX1-V2: byFieldName parameter facts, keyed in build()
-    HashMap<std::string, std::string>                m_paramSlot;      // IX1-V2: "fn#k" → "Type#field" its parameter k is stored into
+    slot_join::ParamSlots                            m_params;         // IX1-V2: registrars' parameters stored into field slots
     std::vector<std::uint32_t>                       m_calls;          // slot Through references, ascending
     HashMap<NodeId, std::vector<std::uint32_t>>      m_callsBySym;     // calling function → its slot Through references
     std::vector<End>                                 m_values;         // slot Value rows with a resolved function, by ref

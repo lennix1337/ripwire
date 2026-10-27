@@ -270,6 +270,17 @@ inline void addCapped( std::vector<std::string>& names, std::size_t& more, std::
     }
     ++more;
 }
+// A caller as the <sigs> rows name it: the owner joined (`Local.Operation`, `Editor::run`), so two same-named methods of two
+// types (terraform's Local.Operation and Cloud.Operation) never read as one.
+inline std::string ownerName( const Symbol& s )
+{
+    if( s.scope.empty() )
+    {
+        return s.name;
+    }
+    const bool colons = s.lang == Lang::C || s.lang == Lang::Cpp || s.lang == Lang::Rust;
+    return s.scope + ( colons ? "::" : "." ) + s.name;
+}
 inline std::string joinedRun( std::string_view attr, const std::vector<std::string>& names, std::size_t more, std::vector<char>& esc )
 {
     std::string run = " " + std::string( attr ) + "=\"";
@@ -360,14 +371,14 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
             {
                 for( const NodeId f : vri.calledBy( row.ref ) )
                 {
-                    by.emplace_back( isTestSymbol( ing, f ), ing.symbols[f].name );
+                    by.emplace_back( isTestSymbol( ing, f ), slot_detail::ownerName( ing.symbols[f] ) );
                 }
                 for( const std::uint32_t c : row.slotCalls )
                 {
                     const NodeId from = ing.references[c].fromSymbol;
                     if( from < ing.symbols.size() )
                     {
-                        by.emplace_back( isTestSymbol( ing, from ), ing.symbols[from].name );
+                        by.emplace_back( isTestSymbol( ing, from ), slot_detail::ownerName( ing.symbols[from] ) );
                     }
                 }
             }
@@ -408,7 +419,7 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
                         const NodeId from = ing.references[h.ref].fromSymbol;
                         if( from < ing.symbols.size() && ( caller.empty() || ( callerIsTest && !isTestSymbol( ing, from ) ) ) )
                         {
-                            caller       = ing.symbols[from].name;   // the first non-test caller, else the first caller
+                            caller       = slot_detail::ownerName( ing.symbols[from] );   // the first non-test caller, else the first caller
                             callerIsTest = isTestSymbol( ing, from );
                         }
                     }
