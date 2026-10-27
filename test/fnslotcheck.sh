@@ -54,6 +54,7 @@ o="$( run --callees=evaluateCommand )"
 has   "A4 the callees side: the slot call and its targets" "$o" '<vs l="8" through="cmd.EvalRW" slot=".EvalRW" via="slot-name" targets="3" shown="3"><t n="Assigned" p="batcheval/cmd_put.go:13"/><t n="Direct" p="batcheval/cmd_put.go:9"/><t n="Put" p="batcheval/cmd_put.go:7"/></vs>'
 o="$( run --callers=local/backend.go:Local.opPlan )"
 has   "B1 a method value of the receiver, called through the local in a closure" "$o" 'into="f" called_by="Operation"'
+hasnt "N1b and no row binds it to the receiver's type either" "$o" 'bind="local/backend.go:19"'
 o="$( run --callers=Remote.opPlan )"
 hasnt "N1 a method value of a non-receiver parameter makes no row" "$o" '<vr '
 o="$( run --callers=closeHook )"
@@ -65,9 +66,10 @@ o="$( run --callers=ambiguous )"
 has   "N4a the argument row prints" "$o" 'into="Reg#arg0"'
 hasnt "N4 two same-named registrars storing different fields decide nothing" "$o" 'called_by='
 o="$( run '--for=how does evaluateCommand run the Command EvalRW of Put' )"
-has   "F1a slot_fields= on batcheval.Command" "$o" 'n="Command" p="batcheval/command.go" r="2" slot_fields="DeclareKeys=1,EvalRW=2@evaluateCommand"'
-hasnt "N5 batcheval.Command never lists cobra.Command's field" "$o" 'slot_fields="DeclareKeys=1,EvalRW=2@evaluateCommand,RunE'
-has   "F1b slot_by= on the stored function" "$o" 'n="Put" p="batcheval/cmd_put.go" cx="1" r="11" slot_by="evaluateCommand"'
+row(){ printf '%s' "$1" | grep -o "<d [^>]*n=\"$2\" p=\"$3\"[^>]*>" | head -1; }   # row ANSWER NAME PATH: that row's head
+has   "F1a slot_fields= on batcheval.Command" "$( row "$o" Command batcheval/command.go )" 'slot_fields="DeclareKeys=1,EvalRW=2@evaluateCommand"'
+hasnt "N5 batcheval.Command never lists cobra.Command's field" "$( row "$o" Command batcheval/command.go )" 'RunE'
+has   "F1b slot_by= on the stored function" "$( row "$o" Put batcheval/cmd_put.go )" 'slot_by="evaluateCommand"'
 has   "F1c the clause rides beside the attributes" "$o" 'd slot_by= functions that MAY call this one'
 o="$( RIPWIRE_NO_SLOT_JOIN_ROWS=1 run '--for=how does evaluateCommand run the Command EvalRW of Put' )"
 hasnt "F2 the A/B handle turns the rows and the clause off" "$o" 'slot_by'
