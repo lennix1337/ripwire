@@ -65,7 +65,10 @@ inline bool builtinSpelledCall( const Reference& call ) noexcept
 //   (1) the record is a Ladder or an Iface decline (graph.h DeclinedSiteKind): the resolver's own builtin-method gate ran on this
 //       call and ADMITTED in-tree candidates — it did not decline it as the builtin (that is DeclinedSiteKind::Builtin). A field
 //       the class states as an in-tree interface reaches the dispatch tier (gate="iface"), whose list is the implementors';
-//   (2) its stored candidate list is complete: kept, two or more candidates, at most kBackHopWidth;
+//   (2) its candidate list is stored (the graph stores a declined set whole), of any width: a consumer applies its own bound
+//       (kBackHopWidth, the bridge's kBridgeFanOut), so a 17-wide interface is no longer read as the builtin (--path near_sink said
+//       "external" for its sink) and an interface with ONE in-tree implementor counts too: the same hedge a non-builtin name
+//       already crosses as cands=1 (never proven: an open interface may have out-of-tree implementors);
 //   (3) the receiver is ONE field `f` of an object whose class the index knows: the enclosing class's own instance — `this.f`
 //       (JS/TS) or `self.f` (Python, Ruby), the language's keyword only (checklist 37: a local named `self` in JS is an ordinary
 //       name) — or a parameter or local of the calling function whose class the source states (`app: Hono<E>`, a
@@ -172,11 +175,6 @@ private:
         if( list == kNoDeclinedList || list + 1 >= m_g.declinedListOff.size() )
         {
             return false;   // (2) no stored list: nothing says the set is complete
-        }
-        const std::size_t fan = m_g.declinedListOff[ list + 1 ] - m_g.declinedListOff[ list ];
-        if( fan < 2 || fan > kBackHopWidth )
-        {
-            return false;   // (2) a single or too-wide set
         }
         const ReceiverEvidence::Chain ch     = ReceiverEvidence::chainOf( r );
         const NodeId                  caller = m_g.declinedSiteCaller[ site ];
