@@ -1360,9 +1360,10 @@ private:
             return {};
         }
         std::string arg( rel );
-        if( std::string_view( verb ).ends_with( "jest" ) && !isShellSafePath( rel ) )
+        if( std::string_view( verb ).ends_with( "jest" ) && ( !cd.empty() || !isShellSafePath( rel ) ) )
         {
-            // jest reads the argument as a regex: escape the metacharacters a route path carries
+            // jest reads the argument as a regex: escape the metacharacters a route path carries. A package below root= always
+            // gets it (a plain dot would also match `aXtest.js`); a package at root= keeps its stored spelling unless it needs quoting
             std::string esc;
             for( const char c : rel )
             {

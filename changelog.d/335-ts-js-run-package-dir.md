@@ -10,8 +10,8 @@ of its options and drops the file filter, so the row ran the whole suite. vitest
 Two paths get no `run=` now. A path that starts with `-` has no spelling that runs it. Node's test runner globs its
 file arguments, so a bracketed path under `node --test` matches no file and the runner exits 1. Both rows print `run_unknown="1"`.
 
-jest reads its argument as a regular expression, so a path with a bracket or a parenthesis has those bytes escaped with a backslash.
+jest reads its argument as a regular expression, so a path under a package below `root=` has every regex byte escaped with a backslash, a dot included (`a.test.js` would also match `aXtest.js`).
 
-A package at `root=` keeps its command. A path there that is not shell-safe loses the `--`. For `node --test`, a glob byte in the path gives `run_unknown="1"`.
+A package at `root=` keeps its command. A path there that is not shell-safe loses the `--` and has its regex bytes escaped. For `node --test`, a glob byte in the path gives `run_unknown="1"`.
 
-Limit: jest escapes a path only when it has a byte a shell would quote. A plain dot stays a regex dot, so the filter may also match a sibling such as `route/test.ts`.
+Limit: a jest package at `root=` keeps a plain dot as a regex dot when the path is shell-safe, so its filter may also match a sibling such as `route/test.ts`.
