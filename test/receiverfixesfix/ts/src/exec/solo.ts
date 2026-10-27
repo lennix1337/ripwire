@@ -9,3 +9,6 @@ export class Solo {
     return this.out.write(1)
   }
 }
+export function write(x: number): number {
+  return x + 1
+}

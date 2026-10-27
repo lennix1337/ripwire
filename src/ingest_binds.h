@@ -7002,6 +7002,21 @@ inline ReceiverEvidenceHook receiverEvidenceHookOf( Lang l ) noexcept
     }
 }
 
+// PY-CTOR-ANNOT: the class a `self.f = v` / `self.f: A = v` field holds — the annotation's (`T`, `T | None`, `Optional[ T ]`; a class
+// the annotation names wins over the value, so `= None` leaves it typed), else the constructor it is assigned (`X( … )`, `mod.X( … )`),
+// as TS's `f: T = …` reads. `whole`: a qualified spelling's whole text, for build()'s written-qualifier check.
+inline std::string_view pySelfFieldType( const BindCtx& cx, TSNode ann, TSNode rhs, std::uint32_t at, std::string_view& whole )
+{
+    const std::string_view written = ts_node_is_null( ann ) ? std::string_view{} : writtenClass( cx, pyOptionalInner( ann, cx.src ), at, &whole );
+    if( !written.empty() )
+    {
+        return written;
+    }
+    whole = {};
+    const std::string_view bare = constructedBy( rhs, cx.lang, cx.src );
+    return bare.empty() ? pyQualifiedConstructed( rhs, cx.src, whole ) : bare;
+}
+
 inline void captureReceiverEvidence( BindCtx& cx, TSNode n, const char* t )
 {
     const Lang             lang = cx.lang;
@@ -7080,22 +7095,8 @@ inline void captureReceiverEvidence( BindCtx& cx, TSNode n, const char* t )
                 const TSNode attr = fieldChild( lhs, NodeField::Attribute );
                 if( !ts_node_is_null( obj ) && !ts_node_is_null( attr ) && kindIs( ts_node_type( obj ), "identifier" ) && nodeTextOf( obj, src ) == "self" )
                 {
-                    // PY-CTOR-ANNOT: the field's class — its annotation (`self.f: T`, `T | None`, `Optional[ T ]`; a class the
-                    // annotation names wins over the value, so `= None` leaves it typed), else the constructor it is assigned
-                    // (`X( … )`, `mod.X( … )`), as TS's `f: T = …` reads; a qualified spelling carries its whole text for build()'s
-                    // written-qualifier check
-                    std::string_view whole;
-                    const TSNode     ann  = fieldChild( n, NodeField::Type );
-                    std::string_view type = ts_node_is_null( ann ) ? std::string_view{} : writtenClass( cx, pyOptionalInner( ann, src ), at, &whole );
-                    if( type.empty() )
-                    {
-                        whole = {};
-                        type = constructedBy( rhs, lang, src );
-                        if( type.empty() )
-                        {
-                            type = pyQualifiedConstructed( rhs, src, whole );
-                        }
-                    }
+                    std::string_view       whole;
+                    const std::string_view type = pySelfFieldType( cx, fieldChild( n, NodeField::Type ), rhs, at, whole );
                     pushEvidenceBind( cx, LocalBindKind::MemberType, nodeTextOf( attr, src ), type, type.empty() ? std::string_view{} : whole, at, false );
                 }
             }

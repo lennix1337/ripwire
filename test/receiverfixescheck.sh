@@ -73,7 +73,7 @@ say( len( e ) == 1 and e[ 0 ].get( "p" ) == "src/exec/box.ts:2" and "via" not in
 o = run( "ts", "--callers=exec/executor.ts:Executor.provide" ); e = edges( o )
 say( not any( x.get( "n" ) in ( "viaPublic", "viaLate", "viaPrivBox" ) for x in e ), "P T4 callers", "no via=name caller row from a stated-field call", str( e ) )
 o = run( "ts", "--callees=flush" ); e = edges( o )
-say( not any( x.get( "n" ) == "write" for x in e ), "P T5 flush", "`out: Sink` (an interface no class implements) never binds Solo's own write", str( e ) )
+say( not any( x.get( "p" ) == "src/exec/solo.ts:5" for x in e ), "P T5 flush", "`out: Sink` (an interface no class implements) never binds Solo's own write", str( e ) )
 o = run( "ts", "--callees=viaSelfField" ); e = edges( o )
 say( len( e ) == 1 and e[ 0 ].get( "p" ) == "src/exec/executor.ts:19" and "via" not in e[ 0 ], "C T6 viaSelfField", "a field of the caller's own class keeps its own provide (proven)", str( e ) )
 o = run( "ts", "--callees=Peer.provide", "full" ); d = [ x for x in declines( o ) if x.get( "gate" ) == "iface" ]
@@ -81,6 +81,19 @@ say( len( d ) == 1 and "exec/peer.ts:5" in d[ 0 ].get( "cand", "" ), "P T7 Peer 
 o = run( "ts", "--callees=viaUntyped" ); e = edges( o )
 say( any( x.get( "p" ) == "src/exec/executor.ts:19" and x.get( "via" ) == "name" for x in e ), "FLOOR T8 viaUntyped",
      "an UNTYPED field proves nothing: the by-name rows stay (own namesake included)", str( e ) )
+
+o = run( "ts", "--callees=flush" ); e = edges( o )
+say( any( x.get( "n" ) == "write" and x.get( "p" ) == "src/exec/solo.ts:12" for x in e ), "C T5b flush",
+     "the cut drops the caller's own METHOD only: a same-file free function `write` stays a by-name candidate", str( e ) )
+o = run( "ts", "--callees=viaBase" ); e = edges( o )
+say( any( x.get( "p" ) == "src/exec/shape.ts:11" for x in e ), "C T9 viaBase",
+     "a field typed as one of the caller's BASES (`other: Shape`, Shape defines no area) keeps the caller's own area", str( e ) )
+o = run( "ts", "--callees=viaExt" ); e = edges( o )
+say( any( x.get( "p" ) == "src/exec/shape.ts:12" and x.get( "via" ) == "name" for x in e ), "FLOOR T10 viaExt",
+     "a field typed as an OUTSIDE type (`ext: Widget` from a package) proves nothing: the by-name rows stay", str( e ) )
+o = run( "ts", "--callees=viaSingle", "full" ); e, d = edges( o ), declines( o )
+say( not e and len( d ) == 1 and d[ 0 ].get( "gate" ) == "iface" and d[ 0 ].get( "cands" ) == "1" and "driver/single-impl.ts:3" in d[ 0 ].get( "cand", "" ),
+     "P T11 viaSingle", 'an interface with ONE (structural, unproven) implementor behind a stated field: <dc gate="iface" cands="1">, never the own run', "edges=%s dc=%s" % ( e, d ) )
 
 print( "(Y) Python: annotations and module-qualified constructors type fields and locals" )
 for sym in ( "go1", "go2", "go3", "go4", "go5", "go6", "go8", "goParam" ):
@@ -106,6 +119,9 @@ for sym, line in ( ( "execute", "10" ), ( "boxed", "13" ) ):
     cand = iface[ 0 ].get( "cand", "" ).split() if iface else []
     say( len( cand ) == 4 and cand[ -1 ] == "tests/suite/renderer.rs:5" and all( c.startswith( "zcrates/" ) for c in cand[ :3 ] ), "P R2 " + sym,
          "cand= the non-test impls first, the test crate's Spy last", str( cand ) )
+o = run( "rsdup", "--callees=execute" ); e, d = edges( o ), declines( o )
+say( not any( x.get( "gate" ) == "iface" for x in d ) and len( [ x for x in e if "render" in x.get( "n", "" ) ] ) == 3, "FLOOR R3 rsdup",
+     "a trait name two in-tree traits share: the open-list rule answers nothing (impl blocks are keyed by name), the by-name rows stay", "edges=%s dc=%s" % ( e, d ) )
 print( "receiverfixescheck: %d passed, %d failed" % ( npass, nfail ) )
 sys.exit( 1 if nfail else 0 )
 PY
