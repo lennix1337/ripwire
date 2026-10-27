@@ -104,6 +104,20 @@ o = run( "tsalias", "--callees=viaBase" ); e = edges( o )
 say( any( x.get( "p" ) == "src/alias.ts:18" for x in e ), "P T13 viaBase",
      "a field typed by an alias of a BASE (`type B = Base`, `f: B`) keeps the caller's own ping: the field may hold the caller's class", str( e ) )
 
+def bridge( out ):
+    out = re.sub( r"<!--.*?-->", "", out, flags = re.S )
+    m = re.search( r"<bridge .*?</bridge>", out, flags = re.S )
+    return m.group( 0 ) if m else ""
+for sym, what in ( ( "dispatch", "`this.router.match( … )`" ), ( "viaParam", "`app.router.match( … )` on a parameter typed App" ) ):
+    o = run( "tshop", "--path=%s,routers/a.ts:match" % sym ); b = bridge( o )
+    say( 'p="src/routers/a.ts:3" via="declined" cands="2"' in b, "P H1 " + sym,
+         what + " (router: Router, an in-tree interface with 2 implementors) is a hedged bridge crossing via=declined cands=2, not near_sink why=external", b[ -300: ] or o[ -300: ] )
+o = run( "tshop", "--callees=dispatch", "full" ); d = declines( o )
+say( len( d ) == 1 and d[ 0 ].get( "gate" ) == "iface" and d[ 0 ].get( "cands" ) == "2", "P H2 dispatch",
+     'the interface field keeps the L6 decline: one <dc gate="iface" cands="2"> (the bridge above rides on it)', str( d ) )
+o = run( "tshop", "--path=label,routers/a.ts:match" )
+say( bridge( o ) == "" and "<path " in o, "C H3 label", "`this.name.match( re )` (name: string, no in-tree class) is no crossing: the builtin reading stands", o[ -300: ] )
+
 print( "(Y) Python: annotations and module-qualified constructors type fields and locals" )
 for sym in ( "go1", "go2", "go3", "go4", "go5", "go6", "go8", "goParam" ):
     o = run( "py", "--callees=" + sym ); e = edges( o )
@@ -148,3 +162,11 @@ say( not e and len( d ) == 1 and d[ 0 ].get( "cands" ) == "2" and d[ 0 ].get( "c
 print( "receiverfixescheck: %d passed, %d failed" % ( npass, nfail ) )
 sys.exit( 1 if nfail else 0 )
 PY
+rc=$?   # the harness's own status, read immediately: 0 every arm passed, 1 an arm failed, anything else a crash
+fail=0
+if [ "$rc" -ne 0 ]; then
+    printf '  FAIL  the arm harness exited %s (an arm failed above, or the harness crashed)\n' "$rc"
+    fail=1
+fi
+[ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
+exit "$fail"

@@ -60,8 +60,9 @@ inline bool builtinSpelledCall( const Reference& call ) noexcept
 // #11 (HOP1 Stage 0, hono `this.router.match( method, path )`): builtinSpelledCall reads the NAME alone, so a declined call on a
 // receiver the source TYPES as an in-tree class was dropped as "probably String.prototype.match". DeclinedCrossRule keeps the
 // name rule and lifts it for exactly one shape, all of whose facts the index holds:
-//   (1) the record is a Ladder decline (graph.h DeclinedSiteKind::Ladder): the resolver's own builtin-method gate ran on this call
-//       and ADMITTED in-tree candidates — it did not decline it as the builtin (that is DeclinedSiteKind::Builtin);
+//   (1) the record is a Ladder or an Iface decline (graph.h DeclinedSiteKind): the resolver's own builtin-method gate ran on this
+//       call and ADMITTED in-tree candidates — it did not decline it as the builtin (that is DeclinedSiteKind::Builtin). A field
+//       the class states as an in-tree interface reaches the dispatch tier (gate="iface"), whose list is the implementors';
 //   (2) its stored candidate list is complete: kept, two or more candidates, at most kBackHopWidth;
 //   (3) the receiver is ONE field `f` of an object whose class the index knows: the enclosing class's own instance — `this.f`
 //       (JS/TS) or `self.f` (Python, Ruby), the language's keyword only (checklist 37: a local named `self` in JS is an ordinary
@@ -145,7 +146,7 @@ private:
 
     bool receiverTypedInTree( std::uint32_t site, const Reference& r ) const
     {
-        if( m_g.declinedSiteKind[ site ] != DeclinedSiteKind::Ladder )
+        if( const DeclinedSiteKind kind = m_g.declinedSiteKind[ site ]; kind != DeclinedSiteKind::Ladder && kind != DeclinedSiteKind::Iface )
         {
             return false;   // (1) the gate declined it as the builtin, or another rule declined it
         }
