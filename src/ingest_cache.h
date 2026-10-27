@@ -361,7 +361,11 @@ constexpr std::uint32_t kCacheVersion = 44;           // 44: train 37b — rust-
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 233;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 235;          // bump on any grammar/.scm/extraction change
+                                                      // 235 = 2026-10-27 (train 38: lane queue-hop, placeholder 228 / rich 229): a Python queue call (put/put_nowait/get/get_nowait)
+                                                      //   carrying keyword arguments records them on its call reference's composeRel (model.h pyKwTag), so QueueHops reads
+                                                      //   `put( v, timeout=1 )` as one item. Strictly above train 37b's 233 (rich 234). Rich file tag 236. No record format
+                                                      //   changed (the tag rides the existing composeRel string of writeRef/readRef): kCacheVersion stays 44.
                                                       // 233 = 2026-10-26 (train 37b: lane rust-degraded, placeholder 229 / rich 230): a Rust file whose
                                                       //   first parse holds error bytes is re-parsed with its precise-capturing use<..> bounds blanked
                                                       //   (src/rustusebounds.h) — different defs. Strictly above train 36's 231 (rich 232). Rich file tag 234.
