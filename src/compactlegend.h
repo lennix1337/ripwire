@@ -1013,6 +1013,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "reads_at", "reads_at=: the first three of those sites, file:line, tier/path/line order; the root next= is then the uses verb", true, "enc", MapHeaderRead::No, {}, "grep" },
     { "vals", "vals=: up to three function values the carrier stores, slot=fn@line of its one resolved def (path:line elsewhere; no @ if several)", true, "enc", MapHeaderRead::No, {}, "grep" },
     { "vals_total", "vals_total=N: every stored function value, when more than vals= shows", true, "enc", MapHeaderRead::No, {}, "grep" },
+    { "p", "p= beside vals=: the carrier's one definition, file:line; a path-less vals= @line is in that file", true, "enc", MapHeaderRead::No, {}, "grep" },
     { "reads_skipped", "reads_skipped=memory_stop|hard_limit: the memory guard stopped the index that counts the top carrier's reads; no reads= on any row", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "reads_next", "reads_next=: the uses verb on the top hit's carrier, the call that lists the reads reads_skipped= left out", false, "grep", MapHeaderRead::No, {}, "grep" },
     // count-floor + CALLSITE-LINE on safe-delete (src/verbs_navigate.h runSafeDelete): root markers beside the counts they qualify.
