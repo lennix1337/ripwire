@@ -363,10 +363,9 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
                   "spliceSlotJoinRows: the <sigs> rows and the shown ids disagree" );
         return 0;
     }
-    // fix1 (RSS): the NARROW index (ValueRefIndex::Narrow) — the shown functions' values and every slot store, not the whole
+    // fix1 (RSS): the NARROW index (ValueRefIndex::narrowFor) — the shown functions' values and every slot store, not the whole
     // tree's value references. RIPWIRE_SLOT_INDEX_FULL (any value) builds the full one: the A/B handle that proves the rows equal.
-    const ValueRefIndex::Narrow narrow{ fnNames };
-    const ValueRefIndex         vri( ing, std::getenv( "RIPWIRE_SLOT_INDEX_FULL" ) == nullptr ? &narrow : nullptr );
+    const ValueRefIndex vri = std::getenv( "RIPWIRE_SLOT_INDEX_FULL" ) == nullptr ? ValueRefIndex::narrowFor( ing, fnNames ) : ValueRefIndex( ing );
     std::vector<std::pair<std::size_t, std::string>> inserts;
     std::vector<char> esc;
     for( const std::size_t i : cand )
@@ -414,7 +413,7 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
         else
         {
             std::vector<std::pair<std::string_view, std::vector<std::uint32_t>>> fields;   // field → its value refs, first-seen order
-            const std::string typeKey = slotJoinsByFieldName( s.lang ) ? slot_join::goTypeKeyOf( ing, s ) : s.name;   // fix1 F-2: the ONE key
+            const std::string typeKey = slotJoinsByFieldName( s.lang ) ? vri.slots().goTypeKeyOf( s ) : s.name;   // fix1 F-2: the ONE key
             for( const auto& [ ref, field ] : vri.slots().valuesOfType( typeKey ) )
             {
                 auto it = std::ranges::find( fields, field, &std::pair<std::string_view, std::vector<std::uint32_t>>::first );
