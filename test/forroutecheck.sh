@@ -7,6 +7,7 @@
 #   (p1) path form: the --path answer for the two named symbols, reachable="1", once, right before </ctx>, well-formed
 #   (p2) the qualifier tail is cut (to_span= stops before "for"), and `main` is the one plain word that is an endpoint
 #   (c1) callers form: the --callers answer (both callers listed); (c2) the qualifier tail "with ..." is cut
+#   (v1)/(v2) the block's verb answer is byte-identical to the bare --path= / --callers= call (default caps, compact legend)
 #   (m1) common-callers form: the --connect answer for both names
 #   (t1) an unresolved last-first candidate falls through to the next one, and tried="2" says so
 #   (n1) "path from X to serialising a dict" does NOT fire, though `dict` is a symbol here
@@ -59,24 +60,38 @@ xmlok(){ if command -v xmllint >/dev/null 2>&1; then xmllint --noout "$1" 2>/dev
 run --for="path from startEntry to leaf_sink" >"$TMP/p1.xml"
 f="$( facts "$TMP/p1.xml" )"
 if [ "$f" = "n=1 endpoints=subject verb=--path=startEntry,leaf_sink from=startEntry to=leaf_sink of=- and=- tried=- tail=1 legdash=0" ] \
-   && grep -q '<path from="startEntry" to="leaf_sink"[^>]* reachable="1" hops="2"' "$TMP/p1.xml" && xmlok "$TMP/p1.xml"
+   && grep -q '<path [^>]*from="startEntry" to="leaf_sink"[^>]* reachable="1" hops="2"' "$TMP/p1.xml" && xmlok "$TMP/p1.xml"
 then ok "(p1) path form: one <graph_verb endpoints=\"subject\"> with the --path answer (reachable=1 hops=2) right before </ctx>, well-formed"
 else no "(p1) path form: $f"; fi
 
 run --for="path from main to leaf_sink for a script file" >"$TMP/p2.xml"
 f="$( facts "$TMP/p2.xml" )"
-case "$f" in *"verb=--path=main,leaf_sink from=main to=leaf_sink "*) ok "(p2) the qualifier tail is cut and \`main\` is an endpoint: $f";; *) no "(p2) $f";; esac
+case "$f" in *"verb=--path=main,leaf_sink from=main to=leaf_sink of=- "*) ok "(p2) the qualifier tail is cut and \`main\` is an endpoint: $f";; *) no "(p2) $f";; esac
 
 run --for="who are the callers of leaf_sink" >"$TMP/c1.xml"
 f="$( facts "$TMP/c1.xml" )"
 if [ "${f%% tried=*}" = "n=1 endpoints=subject verb=--callers=leaf_sink from=- to=- of=leaf_sink and=-" ] \
-   && grep -q '<callers of="leaf_sink"' "$TMP/c1.xml" && grep -q 'n="mid_hop"' "$TMP/c1.xml" && grep -q 'n="other_caller"' "$TMP/c1.xml"
+   && grep -q '<callers [^>]*of="leaf_sink"' "$TMP/c1.xml" && grep -q 'n="mid_hop"' "$TMP/c1.xml" && grep -q 'n="other_caller"' "$TMP/c1.xml"
 then ok "(c1) callers form: the --callers answer for leaf_sink, both callers listed"
 else no "(c1) callers form: $f"; fi
 
 run --for="callers of leaf_sink with the local backend" >"$TMP/c2.xml"
 f="$( facts "$TMP/c2.xml" )"
-case "$f" in *" of=leaf_sink "*) ok "(c2) the \"with ...\" tail is cut: of_span=leaf_sink";; *) no "(c2) $f";; esac
+case "$f" in *" of=leaf_sink and=- "*) ok "(c2) the \"with ...\" tail is cut: of_span=leaf_sink";; *) no "(c2) $f";; esac
+
+inner(){ python3 -c '
+import re, sys
+s = open( sys.argv[1], encoding="utf8", errors="replace" ).read()
+m = re.search( r"<graph_verb [^>]*>(.*)</graph_verb></ctx>$", s, re.S )
+sys.stdout.write( m.group( 1 ) if m else "NO-BLOCK" )' "$1"; }
+for arm in "v1|p1|--path=startEntry,leaf_sink" "v2|c1|--callers=leaf_sink"
+do
+    id="${arm%%|*}"; rest="${arm#*|}"; src="${rest%%|*}"; flag="${rest#*|}"
+    run "$flag" >"$TMP/$id.bare"; inner "$TMP/$src.xml" >"$TMP/$id.inner"
+    if [ -s "$TMP/$id.bare" ] && cmp -s "$TMP/$id.bare" "$TMP/$id.inner"
+    then ok "($id) the block's verb answer is byte-identical to the bare $flag call (same default caps, same compact legend)"
+    else no "($id) the block's verb answer differs from the bare $flag call ($( wc -c <"$TMP/$id.inner" ) vs $( wc -c <"$TMP/$id.bare" ) B)"; fi
+done
 
 run --for="common callers of mid_hop and other_caller" >"$TMP/m1.xml"
 f="$( facts "$TMP/m1.xml" )"
@@ -111,7 +126,7 @@ for line in sys.stdin:
     if c: print( c[0].get( "text", "" ), end="" )'; }
 mcp_for "path from startEntry to leaf_sink" >"$TMP/x1.xml"
 cli_tag="$( grep -o '<graph_verb [^>]*>' "$TMP/p1.xml" )"; mcp_tag="$( grep -o '<graph_verb [^>]*>' "$TMP/x1.xml" )"
-if [ -n "$cli_tag" ] && [ "$cli_tag" = "$mcp_tag" ] && grep -q '<path from="startEntry" to="leaf_sink"[^>]* reachable="1" hops="2"' "$TMP/x1.xml" \
+if [ -n "$cli_tag" ] && [ "$cli_tag" = "$mcp_tag" ] && grep -q '<path [^>]*from="startEntry" to="leaf_sink"[^>]* reachable="1" hops="2"' "$TMP/x1.xml" \
    && [ "$( facts "$TMP/x1.xml" | sed 's/.* tail=/tail=/' )" = "tail=1 legdash=0" ]
 then ok "(x1) MCP for: the same <graph_verb> tag and the path answer, before </ctx>"
 else no "(x1) MCP for: cli=[$cli_tag] mcp=[$mcp_tag] $( facts "$TMP/x1.xml" )"; fi

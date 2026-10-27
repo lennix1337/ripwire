@@ -17,6 +17,9 @@
 #include <optional>          // the redaction-tally snapshots a degraded pre-render restores
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
+// FOR-ROUTE-DECLINED: the compact-legend layer's key for a captured verb answer (main.cpp, defined with that layer)
+static std::string_view compactLegendHint( const rw::Config& c, std::string_view doc );
+
 // verbs_for.h — the QUERY family (§A2's contiguous dispatch block), moved VERBATIM from main.cpp in
 // the 2026-08-29 split: computeLensRanking (THE shared lens ranking — the change family's
 // --plan-lanes calls it too, which is why this section is included before verbs_change.h),
@@ -2677,13 +2680,49 @@ inline void appendSubjectGraphVerb( const MainDispatch& d )
     }
     const MainDispatch sd{ sub, d.ing, d.g, d.root, d.multiRoot, d.ws, d.fanIn, d.fanInPtr, d.qmetrics, d.ampPtr, d.cboPtr, d.testedPtr,
                            d.lcom4Ptr, d.impurePtr, d.forChurn, d.redactCounts, d.redactPtr, d.notesPtr, d.notesDegraded, d.grepPhases, d.valueUses };
+    const auto runVerb = [ & ]
+    {
+        switch( args->form )
+        {
+            case rw::GraphSubjectForm::Path: (void)runPath( sd ); break;
+            case rw::GraphSubjectForm::Callers: (void)runCallHierarchy( sd ); break;
+            case rw::GraphSubjectForm::Common: (void)runConnect( sd ); break;
+        }
+    };
     rw::emitRaw( stdout, rw::graphSubjectOpenXml( *args ).c_str() );
     std::fflush( stdout );
-    switch( args->form )
+    // The bare verb's answer is shaped by main.cpp's whole-stdout compact layer (runWithCompactLegend), which skips --for; so
+    // the verb is captured here and compacted by the same applyCompactDialect + compactLegendHint, and the block carries the
+    // bytes the bare call prints. A capture that cannot be set up emits the verb's FULL legend instead (a superset; only cost).
+    std::FILE* const capture = sub.legend == "compact" ? std::tmpfile() : nullptr;
+    const int        saved   = capture != nullptr ? rw::os::dup( STDOUT_FILENO ) : -1;
+    if( capture == nullptr || saved < 0 || rw::os::dup2( rw::os::fileno( capture ), STDOUT_FILENO ) < 0 )
     {
-        case rw::GraphSubjectForm::Path: (void)runPath( sd ); break;
-        case rw::GraphSubjectForm::Callers: (void)runCallHierarchy( sd ); break;
-        case rw::GraphSubjectForm::Common: (void)runConnect( sd ); break;
+        if( sub.legend == "compact" )
+        {
+            DISCLOSE( Diagnostics::answerUnchanged, "the full legend is a correct superset of the compact one: only the cost grows",
+                      "appendSubjectGraphVerb: no capture buffer — the graph verb's FULL legend is emitted" );
+        }
+        if( saved >= 0 ) { rw::os::close( saved ); }
+        if( capture != nullptr ) { std::fclose( capture ); }
+        runVerb();
+    }
+    else
+    {
+        runVerb();
+        std::fflush( stdout );
+        rw::os::dup2( saved, STDOUT_FILENO );
+        rw::os::close( saved );
+        std::string doc;
+        std::rewind( capture );
+        char buf[ 65536 ];
+        for( std::size_t got; ( got = std::fread( buf, 1, sizeof( buf ), capture ) ) > 0; )
+        {
+            doc.append( buf, got );
+        }
+        std::fclose( capture );
+        (void)rw::applyCompactDialect( doc, ::compactLegendHint( sub, doc ) );   // not shaped → the bytes as emitted (the DEFAULT posture's rule)
+        std::fwrite( doc.data(), 1, doc.size(), stdout );
     }
     rw::emitRaw( stdout, std::string( rw::kGraphSubjectCloseXml ).c_str() );
 }
