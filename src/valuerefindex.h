@@ -854,6 +854,155 @@ private:
     mutable HashMap<std::string, std::uint32_t>          m_fileIndex;   // root-relative normalised path → fileId, built on first import
 };
 
+// The class DEFINITIONS of the armed languages and what relates them: a definition's enclosing class (the innermost Class symbol
+// of its file whose span holds it: a symbol identity, so a class of the same name in another file is another class, and a JS/TS
+// method, whose Symbol::scope is empty, is owned too), and the family of a class (itself, its ancestors, its subclasses). A base
+// written by name binds to the class of that name in the derived class's own file, else to every class of it (a base imported from
+// another module); name-keyed beyond that, as the census. Built on first use; one place for PatternIndex (IX-3) and any later reader.
+class ClassFamilies
+{
+public:
+    explicit ClassFamilies( const IngestResult& ing ) : m_ing( ing ) {}
+
+    // The class definition that owns definition `d` (never `d` itself); kNoNode when none. Memoised: a walk asks once per symbol.
+    NodeId ownerOf( NodeId d ) const
+    {
+        buildSpans();
+        if( m_ownerDone[d] == 0 )
+        {
+            m_ownerDone[d]   = 1;
+            const Symbol& s  = m_ing.symbols[d];
+            auto          it = std::ranges::upper_bound( m_spans, std::pair( s.fileId, s.sigStartByte ), std::less<>(),
+                                                         []( const ClassSpan& c ) { return std::pair( c.fileId, c.begin ); } );
+            for( ; it != m_spans.begin(); )
+            {
+                --it;
+                if( it->fileId != s.fileId )
+                {
+                    break;
+                }
+                if( it->id != d && it->begin <= s.sigStartByte && s.endByte <= it->end )
+                {
+                    m_owner[d] = it->id;
+                    break;
+                }
+            }
+        }
+        return m_owner[d];
+    }
+    // Is class `member` in the family of class `site`: `site` itself, an ancestor of it, or a subclass of it?
+    bool sameFamily( NodeId site, NodeId member ) const
+    {
+        return site == member || isAncestor( site, member ) || isAncestor( member, site );
+    }
+
+private:
+    struct ClassSpan
+    {
+        std::uint32_t fileId = 0;
+        std::uint32_t begin  = 0;
+        std::uint32_t end    = 0;
+        NodeId        id     = kNoNode;
+    };
+    // Is `to` an ancestor of `from` (through the bound bases, 4096 classes at most)?
+    bool isAncestor( NodeId from, NodeId to ) const
+    {
+        buildBases();
+        std::vector<NodeId> todo { from };
+        std::vector<NodeId> seen;
+        while( !todo.empty() && seen.size() < 4096 )
+        {
+            const NodeId c = todo.back();
+            todo.pop_back();
+            if( std::ranges::find( seen, c ) != seen.end() )
+            {
+                continue;
+            }
+            seen.push_back( c );
+            if( const auto it = m_basesOf.find( c ); it != m_basesOf.end() )
+            {
+                if( std::ranges::find( it->second, to ) != it->second.end() )
+                {
+                    return true;
+                }
+                todo.insert( todo.end(), it->second.begin(), it->second.end() );
+            }
+        }
+        return false;
+    }
+    // The class spans of the armed languages, sorted (file, begin, end descending): an inner class sorts after its outer one.
+    void buildSpans() const
+    {
+        if( m_spansBuilt )
+        {
+            return;
+        }
+        m_spansBuilt = true;
+        m_owner.assign( m_ing.symbols.size(), kNoNode );
+        m_ownerDone.assign( m_ing.symbols.size(), 0 );
+        for( const Symbol& c : m_ing.symbols )
+        {
+            if( c.kind == SymKind::Class && valueRefFamily( c.lang ) != VrLangFamily::None )
+            {
+                m_spans.push_back( ClassSpan{ c.fileId, c.sigStartByte, c.endByte, c.id } );
+            }
+        }
+        std::ranges::sort( m_spans, []( const ClassSpan& a, const ClassSpan& b )
+        {
+            return std::tie( a.fileId, a.begin, b.end, a.id ) < std::tie( b.fileId, b.begin, a.end, b.id );
+        } );
+    }
+    // Bind one inherit reference's written base name to class definitions: the one of that name in the derived class's file, else all.
+    void bindBase( const Reference& r, const HashMap<std::string_view, std::vector<NodeId>>& byName ) const
+    {
+        const auto named = byName.find( std::string_view( r.calleeName ) );
+        if( named == byName.end() )
+        {
+            return;
+        }
+        const std::uint32_t file = m_ing.symbols[ r.fromSymbol ].fileId;
+        std::vector<NodeId> bound;
+        std::ranges::copy_if( named->second, std::back_inserter( bound ), [ & ]( NodeId b ) { return m_ing.symbols[b].fileId == file; } );
+        std::vector<NodeId>& out = m_basesOf[ r.fromSymbol ];
+        for( const NodeId b : bound.empty() ? named->second : bound )
+        {
+            if( b != r.fromSymbol && std::ranges::find( out, b ) == out.end() )
+            {
+                out.push_back( b );
+            }
+        }
+    }
+    void buildBases() const
+    {
+        if( m_basesBuilt )
+        {
+            return;
+        }
+        m_basesBuilt = true;
+        buildSpans();
+        HashMap<std::string_view, std::vector<NodeId>> byName;
+        for( const ClassSpan& c : m_spans )
+        {
+            byName[ m_ing.symbols[ c.id ].name ].push_back( c.id );
+        }
+        for( const Reference& r : m_ing.references )
+        {
+            if( ( r.isInherit || r.role == RefRole::Extends ) && r.fromSymbol < m_ing.symbols.size() && m_ing.symbols[ r.fromSymbol ].kind == SymKind::Class )
+            {
+                bindBase( r, byName );
+            }
+        }
+    }
+
+    const IngestResult&                          m_ing;
+    mutable std::vector<ClassSpan>               m_spans;
+    mutable std::vector<NodeId>                  m_owner;       // per symbol: its enclosing class definition (ownerOf)
+    mutable std::vector<char>                    m_ownerDone;   // per symbol: m_owner is decided
+    mutable bool                                 m_spansBuilt = false;
+    mutable HashMap<NodeId, std::vector<NodeId>> m_basesOf;     // class definition -> the class definitions its base names bind to
+    mutable bool                                 m_basesBuilt = false;
+};
+
 // ── IX-3 name-template dispatch ───────────────────────────────────────────────────────────────────────────────
 // The Pattern references (model.h RefRole::Pattern) and what they may name. Its own index beside ValueRefIndex, built
 // from the same IngestResult: a template site (indices into ing.references, in reference order) can name a class member
@@ -868,7 +1017,7 @@ private:
 class PatternIndex
 {
 public:
-    PatternIndex( const IngestResult& ing, const ValueRefIndex& vri ) : m_ing( ing )
+    PatternIndex( const IngestResult& ing, const ValueRefIndex& vri ) : m_ing( ing ), m_classes( ing )
     {
         for( std::uint32_t i = 0; i < ing.references.size(); ++i )
         {
@@ -951,157 +1100,19 @@ private:
         const std::string_view recv = r.recvVar;
         if( ( recv == "self" || recv == "this" || recv == "cls" ) && r.fromSymbol < m_ing.symbols.size() )
         {
-            if( const NodeId site = ownerClass( r.fromSymbol ); site != kNoNode )
+            if( const NodeId site = m_classes.ownerOf( r.fromSymbol ); site != kNoNode )
             {
-                const NodeId member = ownerClass( s.id );
-                return member != kNoNode && inClassFamily( site, member );
+                const NodeId member = m_classes.ownerOf( s.id );
+                return member != kNoNode && m_classes.sameFamily( site, member );
             }
         }
         return true;
     }
-    // The class definition that owns definition `d`: the innermost Class symbol of d's file whose span holds it (never `d`
-    // itself); kNoNode when none. Memoised: a walk asks once per symbol.
-    NodeId ownerClass( NodeId d ) const
-    {
-        buildSpans();
-        if( m_ownerDone[d] == 0 )
-        {
-            m_ownerDone[d]   = 1;
-            const Symbol& s  = m_ing.symbols[d];
-            auto          it = std::ranges::upper_bound( m_spans, std::pair( s.fileId, s.sigStartByte ), std::less<>(),
-                                                         []( const ClassSpan& c ) { return std::pair( c.fileId, c.begin ); } );
-            for( ; it != m_spans.begin(); )
-            {
-                --it;
-                if( it->fileId != s.fileId )
-                {
-                    break;
-                }
-                if( it->id != d && it->begin <= s.sigStartByte && s.endByte <= it->end )
-                {
-                    m_owner[d] = it->id;
-                    break;
-                }
-            }
-        }
-        return m_owner[d];
-    }
-    // Is class `member` in the family of class `site`: `site` itself, an ancestor of it, or a subclass of it?
-    bool inClassFamily( NodeId site, NodeId member ) const
-    {
-        if( site == member )
-        {
-            return true;
-        }
-        buildBases();
-        const auto ancestor = [ & ]( NodeId from, NodeId to )   // `to` is an ancestor of `from`
-        {
-            std::vector<NodeId> todo { from };
-            std::vector<NodeId> seen;
-            while( !todo.empty() && seen.size() < 4096 )
-            {
-                const NodeId c = todo.back();
-                todo.pop_back();
-                if( std::ranges::find( seen, c ) != seen.end() )
-                {
-                    continue;
-                }
-                seen.push_back( c );
-                if( const auto it = m_basesOf.find( c ); it != m_basesOf.end() )
-                {
-                    for( const NodeId b : it->second )
-                    {
-                        if( b == to )
-                        {
-                            return true;
-                        }
-                        todo.push_back( b );
-                    }
-                }
-            }
-            return false;
-        };
-        return ancestor( site, member ) || ancestor( member, site );
-    }
-    struct ClassSpan
-    {
-        std::uint32_t fileId = 0;
-        std::uint32_t begin  = 0;
-        std::uint32_t end    = 0;
-        NodeId        id     = kNoNode;
-    };
-    // The class spans of the armed languages, sorted (file, begin, end descending): an inner class sorts after its outer one.
-    void buildSpans() const
-    {
-        if( m_spansBuilt )
-        {
-            return;
-        }
-        m_spansBuilt = true;
-        m_owner.assign( m_ing.symbols.size(), kNoNode );
-        m_ownerDone.assign( m_ing.symbols.size(), 0 );
-        for( const Symbol& c : m_ing.symbols )
-        {
-            if( c.kind == SymKind::Class && valueRefFamily( c.lang ) != VrLangFamily::None )
-            {
-                m_spans.push_back( ClassSpan{ c.fileId, c.sigStartByte, c.endByte, c.id } );
-            }
-        }
-        std::ranges::sort( m_spans, []( const ClassSpan& a, const ClassSpan& b )
-        {
-            return std::tie( a.fileId, a.begin, b.end, a.id ) < std::tie( b.fileId, b.begin, a.end, b.id );
-        } );
-    }
-    // class definition → the class definitions its written base names bind to (built on first use): the class of that name in the
-    // derived class's own file, else every class of it (a base imported from another module); name-keyed beyond that, as the census
-    void buildBases() const
-    {
-        if( m_basesBuilt )
-        {
-            return;
-        }
-        m_basesBuilt = true;
-        buildSpans();
-        HashMap<std::string_view, std::vector<NodeId>> byName;
-        for( const ClassSpan& c : m_spans )
-        {
-            byName[ m_ing.symbols[ c.id ].name ].push_back( c.id );
-        }
-        for( const Reference& r : m_ing.references )
-        {
-            if( ( r.isInherit || r.role == RefRole::Extends ) && r.fromSymbol < m_ing.symbols.size() && m_ing.symbols[ r.fromSymbol ].kind == SymKind::Class )
-            {
-                const auto named = byName.find( std::string_view( r.calleeName ) );
-                if( named == byName.end() )
-                {
-                    continue;
-                }
-                const std::uint32_t file = m_ing.symbols[ r.fromSymbol ].fileId;
-                std::vector<NodeId> bound;
-                std::ranges::copy_if( named->second, std::back_inserter( bound ), [ & ]( NodeId b ) { return m_ing.symbols[b].fileId == file; } );
-                const std::vector<NodeId>& use = bound.empty() ? named->second : bound;
-                std::vector<NodeId>&       out = m_basesOf[ r.fromSymbol ];
-                for( const NodeId b : use )
-                {
-                    if( b != r.fromSymbol && std::ranges::find( out, b ) == out.end() )
-                    {
-                        out.push_back( b );
-                    }
-                }
-            }
-        }
-    }
-
     const IngestResult&                                    m_ing;
     std::vector<std::uint32_t>                             m_patterns;       // usable Pattern references, in reference order
     std::vector<std::uint32_t>                             m_patternsWide;   // too-wide Pattern references
     std::vector<std::uint8_t>                              m_member;         // per symbol: 1 = a class member (all 0 when no Pattern reference exists)
-    mutable std::vector<ClassSpan>                         m_spans;          // buildSpans
-    mutable std::vector<NodeId>                            m_owner;          // per symbol: its enclosing class definition (ownerClass)
-    mutable std::vector<char>                              m_ownerDone;      // per symbol: m_owner is decided
-    mutable bool                                           m_spansBuilt = false;
-    mutable HashMap<NodeId, std::vector<NodeId>>           m_basesOf;        // class definition → the class definitions its base names bind to (buildBases)
-    mutable bool                                           m_basesBuilt = false;
+    ClassFamilies                                          m_classes;        // a self/this/cls receiver's class family
 };
 
 // ── the rows every surface serves ─────────────────────────────────────────────────────────────────────────────

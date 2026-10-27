@@ -1247,26 +1247,18 @@ inline void sizeImpactRing( ImpactRing& ring, int pageLimit, std::size_t provenS
     ring.cutNext   = ring.cut == 0 ? std::string() : nextFlag( "--impact=", sym ) + " --limit=" + std::to_string( provenTotal + rowsDefault + ring.hubs.size() );
 }
 
-// reaches_hedged_via="name-key": present only when a counted function joined through a name-key hop (a d=1 hop has no row of its own, so the
-// count could not otherwise say what it holds).
-inline std::string impactRingViaXml( const ImpactRing& ring )
+// The ring's root fields (XML attributes, or JSON members): reaches_hedged=, reaches_hedged_via="name-key" (present only when a counted
+// function joined through a name-key hop: a d=1 hop has no row of its own, so the count could not otherwise say what it holds),
+// reaches_hedged_hubs=, ring_cut=.
+inline std::string impactRingFields( const ImpactRing& ring, bool json )
 {
-    return ring.hedged > 0 && ring.nameKey ? " reaches_hedged_via=\"name-key\"" : std::string();
+    const bool        via = ring.hedged > 0 && ring.nameKey;
+    const std::string viaField = !via ? std::string() : json ? std::string( ",\"reaches_hedged_via\":\"name-key\"" ) : std::string( " reaches_hedged_via=\"name-key\"" );
+    return countFieldOrEmpty( "reaches_hedged", ring.hedged, json ) + viaField + countFieldOrEmpty( "reaches_hedged_hubs", ring.hubbed, json )
+         + countFieldOrEmpty( "ring_cut", ring.cut, json );
 }
-inline std::string impactRingViaJson( const ImpactRing& ring )
-{
-    return ring.hedged > 0 && ring.nameKey ? ",\"reaches_hedged_via\":\"name-key\"" : std::string();
-}
-inline std::string impactRingAttrXml( const ImpactRing& ring )
-{
-    return countFieldOrEmpty( "reaches_hedged", ring.hedged, /*json=*/false ) + impactRingViaXml( ring ) + countFieldOrEmpty( "reaches_hedged_hubs", ring.hubbed, /*json=*/false )
-         + countFieldOrEmpty( "ring_cut", ring.cut, /*json=*/false );
-}
-inline std::string impactRingKeyJson( const ImpactRing& ring )
-{
-    return countFieldOrEmpty( "reaches_hedged", ring.hedged, /*json=*/true ) + impactRingViaJson( ring ) + countFieldOrEmpty( "reaches_hedged_hubs", ring.hubbed, /*json=*/true )
-         + countFieldOrEmpty( "ring_cut", ring.cut, /*json=*/true );
-}
+inline std::string impactRingAttrXml( const ImpactRing& ring ) { return impactRingFields( ring, /*json=*/false ); }
+inline std::string impactRingKeyJson( const ImpactRing& ring ) { return impactRingFields( ring, /*json=*/true ); }
 
 // A hub's selector: file:name, so a namesake in another file is never the one --impact lists (checklist 16).
 inline std::string impactHubSelector( const IngestResult& ing, const ImpactHubRow& hub, const VrRender& rr )

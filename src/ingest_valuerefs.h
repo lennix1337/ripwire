@@ -2682,6 +2682,7 @@ private:
         bool        isTemplate = false;
         std::string prefix;
         std::string suffix;
+        bool        callable = true;   // false: the name is tested or stored, never called through (hasattr, `o[ 'p' + e ] = fn`)
     };
     bool isPlainStringNode( TSNode n ) const noexcept
     {
@@ -2781,7 +2782,7 @@ private:
             return ( c >= 'a' && c <= 'z' ) || ( c >= 'A' && c <= 'Z' ) || ( c >= '0' && c <= '9' ) || c == '_' || c == '$';
         } );
     }
-    void emitPattern( TSNode site, TSNode recv, const VrTemplate& t, bool callable )
+    void emitPattern( TSNode site, TSNode recv, const VrTemplate& t )
     {
         if( !t.isTemplate || ( t.prefix.empty() && t.suffix.empty() ) )
         {
@@ -2797,7 +2798,7 @@ private:
         r.role       = RefRole::Pattern;
         // "" = a lookup the name-key hop may follow; "t" = a presence test or a store (no call is made through it: still a <pd> clue,
         // never a name-key hop); "w" = too wide: counted, never matched
-        r.qualifier  = !( pre || suf ) ? "w" : callable ? "" : "t";
+        r.qualifier  = !( pre || suf ) ? "w" : t.callable ? "" : "t";
         // an unusable side is no constraint: a template `x_{a}.{b}` keeps only its usable prefix; a too-wide one keeps
         // both sides as written (valuerefindex.h counts the members they could name, pattern_too_wide=)
         r.fieldName  = pre || !suf ? t.prefix : std::string();
@@ -2860,7 +2861,9 @@ private:
             {
                 recv = pos[0];
             }
-            emitPattern( call, recv, templateOf( pos[ form.nameArg ] ), !form.testOnly );
+            VrTemplate t = templateOf( pos[ form.nameArg ] );
+            t.callable   = !form.testOnly;
+            emitPattern( call, recv, t );
             return;
         }
     }
@@ -2877,7 +2880,9 @@ private:
                                 && ts_node_eq( child( parent, m_fLeft ), sub ) )
                            || kindIs( pk, "update_expression" )
                            || ( kindIs( pk, "unary_expression" ) && text( child( parent, m_fOperator ) ) == "delete" );
-        emitPattern( sub, child( sub, m_fObject ), templateOf( child( sub, m_fIndex ) ), !store );
+        VrTemplate t = templateOf( child( sub, m_fIndex ) );
+        t.callable   = !store;
+        emitPattern( sub, child( sub, m_fObject ), t );
     }
 
     // Record one call through the container `obj` (written callee `f`), routed by where `obj` is declared.
