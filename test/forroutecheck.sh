@@ -21,6 +21,7 @@
 #   (n5b) a `*` token is never an endpoint (a glob --path the task did not write)
 #   (t1) unresolved= names the spelling that failed; (s4a)(s4b)(s4c) `dict()`, «guillemets», full-width ？ endpoints are read
 #   (x2) the MCP callers block carries its JSON as CDATA with dialect="json" (no &quot;); (b1)(b2) a token budget holds the verb back (held="budget")
+#   (n8) `e.g.` is prose, never a candidate; (h3) MCP name_test_hops
 #   (h1)(h2) a path hop matched by name alone into a test file says so (name_test_hops=); the same hop into a source file does not
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
@@ -154,6 +155,12 @@ do
     else no "($id) a block for \"$q\": $( facts "$TMP/$id.xml" )"; fi
 done
 
+# `e.g.` is prose: it never becomes a (failing) first candidate, so tried= stays absent
+run --for="callers of leaf_sink e.g. the mock" >"$TMP/n8.xml"
+if [ "$( attr "$TMP/n8.xml" verb )" = "--callers=leaf_sink" ] && [ "$( attr "$TMP/n8.xml" tried )" = "-" ]
+then ok "(n8) \"e.g.\" is prose: --callers=leaf_sink with no tried="
+else no "(n8) verb=[$( attr "$TMP/n8.xml" verb )] tried=[$( attr "$TMP/n8.xml" tried )] unresolved=[$( attr "$TMP/n8.xml" unresolved )]"; fi
+
 # S2: a token budget holds the verb back: the self-closed tag names it, verb= is the call, no verb body
 for arm in "b1a|--token-budget=4100" "b1b|--max-tokens=4100"
 do
@@ -207,6 +214,8 @@ run --for="path from startOne to endOne" >"$TMP/h1.xml"
 if [ "$( attr "$TMP/h1.xml" name_test_hops )" = "1" ] && grep -q 'via="name"' "$TMP/h1.xml" && xmlok "$TMP/h1.xml"
 then ok "(h1) a by-name hop into tests/fake.test.ts: name_test_hops=1"
 else no "(h1) name_test_hops=[$( attr "$TMP/h1.xml" name_test_hops )] $( facts "$TMP/h1.xml" )"; fi
+mcp_call "path from startOne to endOne" >"$TMP/h3.xml"
+if [ "$( attr "$TMP/h3.xml" name_test_hops )" = "1" ]; then ok "(h3) MCP for: the same name_test_hops=1"; else no "(h3) MCP name_test_hops=[$( attr "$TMP/h3.xml" name_test_hops )]"; fi
 run --for="path from startTwo to endTwo" >"$TMP/h2.xml"
 if [ "$( attr "$TMP/h2.xml" name_test_hops )" = "-" ] && grep -q 'via="name"' "$TMP/h2.xml" && grep -q '<graph_verb ' "$TMP/h2.xml"
 then ok "(h2) the same shape through a source file: no name_test_hops"
