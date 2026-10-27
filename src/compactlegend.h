@@ -363,9 +363,11 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "slot_name_also",    "slot_name_also=K: K name-only callers hidden behind the same-type ones", false, "vr" },
     // HOP1 (src/backhops.h kImpactRingLegend): --impact's hedged slot ring, present-only
     { "reaches_hedged",    "reaches_hedged=N: N functions MAY reach of= through a hedged hop: one or two calls through a struct field or container (3 field calls within 16 callers), plus their proven callers past narrow hops; never in reaches= or any count" },
+    // STRING-KEYED (src/backhops.h kNameKeyHopLegend): present-only, on the impact root when a counted function joined through a name-key hop (a d=1 hop has no row)
+    { "reaches_hedged_via", "reaches_hedged_via=name-key: reaches_hedged= also counts functions that look a method up by a name built from a template (getattr(o, 'do_' + c), o['handle' + e]) that fits of=; matched, never traced; hasattr and a store are no lookup; a hedge" },
     { "calls",             "ring d=2|3 total= shown= next=; rh called_by= called_at= via= calls=: called_by may call calls= through a field or container at called_at=; d=3 the third field hop; slot_fns=|cands=K the functions it may hold; via=queue d=1 a queue hand-off; a hedge, in no count", false, "rh" },
     // STRING-KEYED (src/backhops.h kNameKeyHopLegend): present-only, read only on a <rh via="name-key"> row
-    { "via",               "rh via=name-key: called_by looks calls= up by a name built from a template (getattr(o, 'do_' + c), o['handle' + e]); cands=K the definitions it can name; matched, never traced; a hedge", true, "rh", MapHeaderRead::No, "name-key" },
+    { "via",               "rh via=name-key cands=K: called_by looks calls= up the same way; K the definitions it can name", true, "rh", MapHeaderRead::No, "name-key" },
     // hub-fold (src/backhops.h kImpactHubLegend): the folded ring member, its count and the page cut, present-only
     { "behind",            "hub n= via= d= behind= tested= sample= next=: a ring member with over 16 proven callers, folded: behind= of reaches_hedged= unlisted (tested= a test reaches, sample= first 3: tested, no proven caller, same dir, rank); next= lists them", false, "hub" },
     { "reaches_hedged_hubs", "reaches_hedged_hubs=K: K of them sit behind a hub" },
@@ -854,6 +856,8 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "rows", "near_sink depth= callers= rows=: to='s proven callers up to depth= back; rows_capped=1 cut; next= the first row's callers", true, "near_sink", MapHeaderRead::No, {}, "path" },
     { "d", "ns d= t= n= p= callers= why=: hops back, symbol, its callers; why= un-edged ways in (declined|value|through|name|closure), external: none found; never a hop", true, "ns", MapHeaderRead::No, {}, "path" },
     { "site", "ns in= site= met=1: one such site; met=1 the forward search reached in=", true, "ns", MapHeaderRead::No, {}, "path" },
+    // STRING-KEYED (src/pathgaps.h kNearSinkNameKeyLegend): present-only, read only on an ns row whose site is a name-key lookup
+    { "via", "ns via=name-key cands=K: why=declined here is a template lookup by name (getattr(o, 'do_' + c), o['handle' + e]) in=, naming K definitions incl. this one; matched, never traced, the bridge crosses at most 16; a hedge", true, "ns", MapHeaderRead::No, "name-key", "path" },
     { "withheld", "ns withheld=name:N: N callers whose by-name calls fail a name rule; not counted as a way in, never external", true, "ns", MapHeaderRead::No, {}, "path" },
     // quality-delta: src/verbs_quality.h (root emit) + src/quality.h identityDisclosure
     { "stale", "stale=N: ack ledger rows whose target no longer applies (sa rows); never gating", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },

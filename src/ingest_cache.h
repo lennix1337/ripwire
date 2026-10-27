@@ -361,7 +361,11 @@ constexpr std::uint32_t kCacheVersion = 44;           // 44: train 37b — rust-
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 239;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 241;          // bump on any grammar/.scm/extraction change
+                                                      // 241 = 2026-10-27 (lane string-keyed fix round 1, placeholder 241 / rich 242; the train renumbers): a Pattern
+                                                      //   reference (IX-3 name template) records qualifier "t" at a Python hasattr test and at a JS/TS `o[ 'p' + e ]`
+                                                      //   assignment / update / delete target: still a <pd> clue, never a name-key hop (no call is made through it).
+                                                      //   No record format changed: kCacheVersion stays 44.
                                                       // 239 = 2026-10-27 (train 39: lane receiver-fixes, placeholder 237 / rich 238): TS `#private` field declarations and
                                                       //   `this.#f = …` record MemberType; Python `self.f: T` / `T | None` / `Optional[ T ]` annotations and `mod.X( … )`
                                                       //   constructors type fields and locals (a RecvType / MemberType with its qualifier), and `x = mod.X( … )` no longer

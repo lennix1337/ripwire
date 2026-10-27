@@ -179,12 +179,13 @@ struct VrPatternLookup
     std::uint8_t     nameArg        = 0;
     bool             dictGet        = false;
     bool             computedMember = false;
+    bool             testOnly       = false;   // a capability test (hasattr): the name is looked up for its presence, never to call it
 };
 inline constexpr VrPatternLookup kVrPatternLookups[] = {
-    { VrFam::Py, "getattr", 1, false, false },
-    { VrFam::Py, "hasattr", 1, false, false },
-    { VrFam::Py, "__dict__", 0, true, false },
-    { VrFam::Js, "", 0, false, true },
+    { VrFam::Py, "getattr", 1, false, false, false },
+    { VrFam::Py, "hasattr", 1, false, false, true },
+    { VrFam::Py, "__dict__", 0, true, false, false },
+    { VrFam::Js, "", 0, false, true, false },
 };
 // IX-1 SLOT-TYPE JOIN: which field calls are calls through a stored function, per language, as data (lang-specific-layer
 // §2: a family-owned row; a language with no row records no slot call and no slot fact). C has no member functions, so
@@ -2780,7 +2781,7 @@ private:
             return ( c >= 'a' && c <= 'z' ) || ( c >= 'A' && c <= 'Z' ) || ( c >= '0' && c <= '9' ) || c == '_' || c == '$';
         } );
     }
-    void emitPattern( TSNode site, TSNode recv, const VrTemplate& t )
+    void emitPattern( TSNode site, TSNode recv, const VrTemplate& t, bool callable )
     {
         if( !t.isTemplate || ( t.prefix.empty() && t.suffix.empty() ) )
         {
@@ -2794,7 +2795,9 @@ private:
         r.line       = ts_node_start_point( site ).row + 1;
         r.lang       = m_lang;
         r.role       = RefRole::Pattern;
-        r.qualifier  = pre || suf ? "" : "w";   // too wide: counted, never matched
+        // "" = a lookup the name-key hop may follow; "t" = a presence test or a store (no call is made through it: still a <pd> clue,
+        // never a name-key hop); "w" = too wide: counted, never matched
+        r.qualifier  = !( pre || suf ) ? "w" : callable ? "" : "t";
         // an unusable side is no constraint: a template `x_{a}.{b}` keeps only its usable prefix; a too-wide one keeps
         // both sides as written (valuerefindex.h counts the members they could name, pattern_too_wide=)
         r.fieldName  = pre || !suf ? t.prefix : std::string();
@@ -2857,7 +2860,7 @@ private:
             {
                 recv = pos[0];
             }
-            emitPattern( call, recv, templateOf( pos[ form.nameArg ] ) );
+            emitPattern( call, recv, templateOf( pos[ form.nameArg ] ), !form.testOnly );
             return;
         }
     }
@@ -2867,7 +2870,14 @@ private:
         {
             return;
         }
-        emitPattern( sub, child( sub, m_fObject ), templateOf( child( sub, m_fIndex ) ) );
+        // `o[ 'on' + e ] = fn` stores a function under the name (an assignment target, `++`, `delete`): no lookup, so no call
+        const TSNode parent = ts_node_parent( sub );
+        const char*  pk     = ts_node_is_null( parent ) ? "" : ts_node_type( parent );
+        const bool   store  = ( ( kindIs( pk, "assignment_expression" ) || kindIs( pk, "augmented_assignment_expression" ) )
+                                && ts_node_eq( child( parent, m_fLeft ), sub ) )
+                           || kindIs( pk, "update_expression" )
+                           || ( kindIs( pk, "unary_expression" ) && text( child( parent, m_fOperator ) ) == "delete" );
+        emitPattern( sub, child( sub, m_fObject ), templateOf( child( sub, m_fIndex ) ), !store );
     }
 
     // Record one call through the container `obj` (written callee `f`), routed by where `obj` is declared.

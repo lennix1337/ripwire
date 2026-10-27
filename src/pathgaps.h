@@ -442,6 +442,7 @@ struct NearSinkSite
     NodeId        in     = kNoNode;    // its enclosing definition (kNoNode: file scope)
     NearSinkKind  kind   = NearSinkKind::Declined;
     bool          met    = false;      // the forward search reached `in`
+    std::uint32_t cands  = 0;          // a NAME-KEY lookup's width (the definitions its template can name): 0 = not a name-key site
 };
 
 struct NearSinkRow
@@ -755,7 +756,7 @@ inline bool nearSinkSiteBetter( const IngestResult& ing, const NearSinkSite& a, 
 // forward search reached. Deterministic: BFS in in-edge order from the to= definitions in the order given, one pass over the
 // declined records, the value index in reference order, one pass over the name-only edges, and a total order on the rows.
 inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::span<const NodeId> dstDefs, std::span<const NodeId> forwardCone,
-                                  const ValueRefIndex& values )
+                                  const ValueRefIndex& values, const NameKeyHops& names )
 {
     constexpr std::uint32_t kNone = std::numeric_limits<std::uint32_t>::max();
     const std::size_t       S     = ing.symbols.size();
@@ -800,11 +801,11 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
         }
     }
     out.callers = out.rows.size() - std::size_t( std::ranges::count_if( out.rows, []( const NearSinkRow& r ) { return r.depth == 0; } ) );
-    const auto offerAt = [ & ]( std::uint32_t row, NearSinkKind kind, std::uint32_t fileId, std::uint32_t line, std::uint32_t order, NodeId in )
+    const auto offerAt = [ & ]( std::uint32_t row, NearSinkKind kind, std::uint32_t fileId, std::uint32_t line, std::uint32_t order, NodeId in, std::uint32_t cands = 0 )
     {
         NearSinkRow& r = out.rows[row];
         ++r.counts[ std::size_t( kind ) ];
-        const NearSinkSite cand{ true, fileId, line, order, in, kind, in < S && met[in] != 0 };
+        const NearSinkSite cand{ true, fileId, line, order, in, kind, in < S && met[in] != 0, cands };
         if( nearSinkSiteBetter( ing, cand, r.site ) )
         {
             r.site = cand;
@@ -855,6 +856,18 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
             {
                 offer( row, NearSinkKind::Declined, g.declinedSiteRef[site], g.declinedSiteCaller[site] );
             }
+        }
+    }
+
+    // NAME-KEY (string-keyed, the same vocabulary as a declined call: why=declined): a function that looks a method up by a name built
+    // from a template (backhops.h NameKeyHops) which fits the row names it with no edge, whatever the width of its candidate set (the
+    // bridge crosses at most kBridgeFanOut: a wider lookup is a way in the answer would otherwise call external). cands= says the width.
+    for( std::uint32_t row = 0; row < out.rows.size(); ++row )
+    {
+        for( const std::uint32_t site : names.sitesNaming( out.rows[row].id ) )
+        {
+            const Reference& sr = ing.references[site];
+            offerAt( row, NearSinkKind::Declined, sr.fileId, sr.line, site, sr.fromSymbol, std::uint32_t( names.targets( site ).size() ) );
         }
     }
 
@@ -1028,9 +1041,16 @@ inline constexpr std::string_view kNearSinkLegend =
     "fail a name rule (either one): not counted as a way in, and never read as external; in= site= name one such site (its enclosing definition, file:line), met=1 when the forward search reached in= (it met that "
     "hand-off and could not follow it). A row is where the backward search could not see, never a hop and not proof a path exists; "
     "rows= counts them, rows_capped=1 = more than shown; next= on the block lists the first row's callers and declined sites. ";
-inline std::string_view nearSinkLegend( bool on ) noexcept
+// Present-only: rides with a SHOWN <ns> row whose site is a name-key lookup (via="name-key" cands=).
+inline constexpr std::string_view kNearSinkNameKeyLegend =
+    "ns via=name-key cands=K: the declined site is a NAME-KEYED lookup, not a call: in= looks a method up by a name built from a template "
+    "(getattr(o, 'do_' + c), o['on' + e]) that fits this row, a template that can name K definitions including it; matched, never traced; "
+    "the bridge crosses a lookup of at most 16, so a wider one is a way in with no bridge row. ";
+inline std::string nearSinkLegend( const PathNearSink& ns )
 {
-    return on ? kNearSinkLegend : std::string_view();
+    const std::size_t shown = std::min( ns.rows.size(), kNearSinkRows );
+    const bool        nameKey = std::any_of( ns.rows.begin(), ns.rows.begin() + std::ptrdiff_t( shown ), []( const NearSinkRow& r ) { return r.site.valid && r.site.cands > 0; } );
+    return ns.rows.empty() ? std::string() : std::string( kNearSinkLegend ) + ( nameKey ? std::string( kNearSinkNameKeyLegend ) : std::string() );
 }
 
 // The <near_sink> block (empty string when there is no row). `rootPrefix` empty ⇒ p= stays as indexed (multi-root).
@@ -1061,7 +1081,8 @@ inline std::string pathNearSinkXml( const IngestResult& ing, const PathNearSink&
         if( r.site.valid )
         {
             rows += ( r.site.in < ing.symbols.size() ? " in=\"" + ex( ing.symbols[ r.site.in ].name ) + "\"" : std::string() ) + " site=\""
-                  + ex( rel( r.site.fileId ) ) + ":" + std::to_string( r.site.line ) + "\"" + ( r.site.met ? " met=\"1\"" : "" );
+                  + ex( rel( r.site.fileId ) ) + ":" + std::to_string( r.site.line ) + "\"" + ( r.site.met ? " met=\"1\"" : "" )
+                  + ( r.site.cands > 0 ? " via=\"name-key\" cands=\"" + std::to_string( r.site.cands ) + "\"" : std::string() );
         }
         rows += "/>";
     }
