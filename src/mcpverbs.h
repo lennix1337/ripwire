@@ -3762,7 +3762,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     }
     // TRACE-EP: the CLI's reaching definition pairs, by the same call (src/pathpairs.h)
     const PathPairs ptPairs = pth.empty() || srcGlob || dstGlob ? PathPairs{}
-        : pathReachingPairs( ing, g, srcDefs, dstDefs, pth, [ & ]( std::span<const NodeId> dstMembers )
+        : pathReachingPairs( ing, g, srcDefs, dstDefs, pth, std::string( from ) + "," + std::string( to ), [ & ]( std::span<const NodeId> dstMembers )
           {
               if( !ptBackHops )
               {
@@ -3779,12 +3779,13 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     const std::string         ptKindLegend = std::string( viaNameLegend( ptMarks.via ) ) + viaLinkLegend( ptMarks.link ) + anchorMissLegend( ptMarks.miss );
     const PathEndpointBinding ptBound      = pathEndpointBinding( g, endpointDefinitionCount( ing, srcDefs ), endpointDefinitionCount( ing, dstDefs ), ptShown );   // attrib-multidef, as on the CLI
     const bool                ptHasSplit = ptMarks.split;
+    const PathTestTwin        ptTwin     = srcGlob || dstGlob ? PathTestTwin{} : pathTestTwins( ing, srcDefs, dstDefs, ptShown, ptBound.from, ptBound.to );   // zed-03, as on the CLI
     const std::vector<std::string_view> ptOwners = pathHopOwners( ing, pth );   // PATH-OWNERS, as on the CLI
     const bool                ptHasOwner = ptMarks.owner;
     rw::emitTo( mem, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                        "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + ptKindLegend
                                                            + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to )
-                                                           + memberOwnerLegend( ptHasOwner ) + std::string( pathPairsLegend( ptPairs ) ) ).c_str(),
+                                                           + memberOwnerLegend( ptHasOwner ) + pathPairsLegend( ptPairs, ptTwin ) ).c_str(),
                   ( std::string( toValueRefsLegend( ptToValueRefs.count > 0 ) ) + valueRefsDepthLegend( ptToValueRefs.depthCut.files > 0 ) ).c_str(),
                   ( pathGapsLegend( ptGaps.any(), !ptSinkCallers.empty() ) + std::string( pathBridgeLegend( ptBridge.found() ) )
                     + std::string( nearSinkLegend( !ptNear.rows.empty() ) ) + std::string( pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
@@ -3794,7 +3795,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
                   ptBound.to ? " to_p=\"" + loc( dstUsed ) + "\"" : std::string(),
                   srcDefs.size(), dstDefs.size(), ( unprovenDefsAttrXml( unprovenDefs ) + pathGlobAttrXml( srcGlob, dstGlob ) ).c_str(),   // H1: as the CLI root carries it; ix2-slice: a glob endpoint
                   pth.empty() ? 0 : 1, ptShown.empty() ? std::size_t( 0 ) : ptShown.size() - 1,
-                  ( pathPairsRootAttrs( ing, ptPairs, ptSingleRoot, ptRootPrefix ).rootAttrs + ptRootAttr ).c_str(),
+                  ( pathPairsRootAttrs( ing, ptPairs, ptTwin, from, to, ptSingleRoot, ptRootPrefix ).rootAttrs + ptRootAttr ).c_str(),
                   graphCountFloorAttrXml( g ).c_str()  );   // M15: gauge + marker
     rw::emitTo( mem, "{}{}", countAttrXmlOrEmpty( "to_value_refs", ptToValueRefs.count ),   // absent at zero, as on the CLI
                   valueRefsDepthAttrXml( ing, ptToValueRefs.depthCut, VrRender{ ptSingleRoot, ptRootPrefix } ).c_str() );   // + the depth cut, as the CLI

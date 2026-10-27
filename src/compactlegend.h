@@ -827,6 +827,9 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "hedged", "pair/alt from_p= to_p= hops= hedged=: one reaching pair, fewest hedged hops first (0 = all proven), then fewest hops; hedged=/hops= count the whole chain (a joins= tail too), its via=/prov=split/anchor=missing rows (a bridge: crossings plus via=name), above 0 NOT proven and to_p= a candidate, not a proven binding", true, {}, MapHeaderRead::No, {}, "path" },
     { "joins", "pair joins=J: from its last row the chain is pair J's, rows not repeated", true, "pair", MapHeaderRead::No, {}, "path" },
     { "bridge", "pair bridge=1: a hedged bridge, NOT a path", true, "pair", MapHeaderRead::No, {}, "path" },
+    // P1 PATH-ORDER (src/pathpairs.h kPathPairQwordLegend / kPathTestTwinLegend), present only when they print
+    { "qword", "pair/alt qword=WORD: its from= (else to=) owner equals a word of the path argument (FROM,TO as typed) (by name, not resolved); printed first within its proof class", true, {}, MapHeaderRead::No, {}, "path" },
+    { "from_test", "from_test=1/to_test=1: the bound from=/to= definition is in a test or fixture path while one of that selector outside them exists; not re-picked, next= runs that one", false, "path", MapHeaderRead::No, {}, "path" },   // also defines to_test=
     // PATH-GAP (src/pathgaps.h kPathGapsLegend), present only on a reachable=0 answer whose search met a gap. Each says what it does NOT
     // mean in the same breath (checklist 3): not proof of no path, a row is never a hop, and which calls are not counted.
     { "searched", "searched=N: reachable=0, but the search from from= (N symbols over resolved call edges) is INCOMPLETE: not proof of no path", false, "path", MapHeaderRead::No, {}, "path" },
