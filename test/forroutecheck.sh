@@ -118,7 +118,7 @@ run --for="path from startEntry to leaf_sink notReal_xq" >"$TMP/t1.xml"
 f="$( facts "$TMP/t1.xml" )"
 case "$f" in *"verb=--path=startEntry,leaf_sink "*"tried=2 "*) ok "(t1) the unresolved last-first candidate falls through, tried=2: $f";; *) no "(t1) $f";; esac
 u="$( attr "$TMP/t1.xml" unresolved )"
-if [ "$u" = "notReal_xq" ]; then ok "(t1b) unresolved= names the spelling that failed"; else no "(t1b) unresolved=[$u]"; fi
+if [ "$u" = "notReal_xq" ] && xmlok "$TMP/t1.xml"; then ok "(t1b) unresolved= names the spelling that failed (legend clause rides; well-formed)"; else no "(t1b) unresolved=[$u]"; fi
 
 for arm in "n1|path from startEntry to serialising a dict" "n2|path from startEntry to spawning ripgrep" \
            "n3|path from startEntry to notReal_xq" "n4|how does startEntry reach leaf_sink"
@@ -186,7 +186,7 @@ else no "(b2) MCP budget_tokens: held=[$( attr "$TMP/b2.xml" held )]"; fi
 
 # S1: the MCP callers block is JSON in CDATA (not XML-escaped), dialect="json"
 mcp_call "callers of leaf_sink" >"$TMP/x2.xml"
-if python3 - "$TMP/x2.xml" <<'PY'
+python3 - "$TMP/x2.xml" <<'PY'
 import re, sys, json
 s = open( sys.argv[1], encoding="utf8" ).read()
 m = re.search( r'<graph_verb ([^>]*dialect="json"[^>]*)>(<!\[CDATA\[.*\]\]>)</graph_verb></ctx>$', s, re.S )
@@ -194,7 +194,9 @@ if not m or "&quot;" in s[ s.index( "<graph_verb" ): ]: sys.exit( 1 )
 body = m.group( 2 )[ 9:-3 ].replace( "]]]]><![CDATA[>", "]]>" )
 json.loads( body )
 PY
-then ok "(x2) MCP callers: dialect=\"json\", CDATA body parses as JSON, no &quot;"
+x2rc=$?
+if [ "$x2rc" = 0 ] && xmlok "$TMP/x2.xml"
+then ok "(x2) MCP callers: dialect=\"json\", CDATA body parses as JSON, no &quot;, well-formed"
 else no "(x2) MCP callers block is not CDATA JSON: $( grep -o '<graph_verb [^>]*>' "$TMP/x2.xml" | head -c 300 )"; fi
 
 # S5: a by-name hop into a test file is disclosed; the same hop into a source file is not
