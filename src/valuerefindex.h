@@ -930,17 +930,9 @@ private:
                 && ( keep == nullptr || keep->names.contains( s.name ) ) )
             {
                 m_fnByName[ s.name ].push_back( id );
-                if( !slotPathSep( s.lang ).empty() && !s.scope.empty() )
-                {
-                    // part 2: an owner type's function (`Editor::backspace`), as ownedBy looks it up (family, "Owner::name")
-                    m_fnByOwner[ jsImportKey( static_cast<std::uint32_t>( valueRefFamily( s.lang ) ), s.scope + "::" + s.name ) ].push_back( id );
-                }
             }
         }
-        if( !m_fnByOwner.empty() || std::ranges::any_of( ing.symbols, []( const Symbol& s ) { return !slotPathSep( s.lang ).empty(); } ) )
-        {
-            m_crates = slot_join::cratesOf( ing );
-        }
+        indexOwners( keep );
         markPythonMembers();
         for( std::uint32_t i = 0; i < ing.references.size(); ++i )
         {
@@ -966,6 +958,29 @@ private:
         m_slots.resolveCalleesBy( [ this ]( const Reference& v ) { return resolveCallee( v ); } );
         m_slots.build( ing, m_values, m_targets );
         m_slots.resolveCalleesBy( nullptr );   // it captured `this`: never outlives the build
+    }
+    // part 2: a path language's functions by owner type (`Editor::backspace`, ownedBy's "family#Owner::name"), and every file's
+    // crate (slot_join::cratesOf) when such a language is indexed.
+    void indexOwners( const KeepSets* keep )
+    {
+        bool pathLang = false;
+        for( NodeId id = 0; id < m_ing.symbols.size(); ++id )
+        {
+            const Symbol& s = m_ing.symbols[id];
+            if( slotPathSep( s.lang ).empty() )
+            {
+                continue;
+            }
+            pathLang = true;
+            if( ( s.kind == SymKind::Function || s.kind == SymKind::Method ) && !s.scope.empty() && ( keep == nullptr || keep->names.contains( s.name ) ) )
+            {
+                m_fnByOwner[ jsImportKey( static_cast<std::uint32_t>( valueRefFamily( s.lang ) ), s.scope + "::" + s.name ) ].push_back( id );
+            }
+        }
+        if( pathLang )
+        {
+            m_crates = slot_join::cratesOf( m_ing );
+        }
     }
     // Reference `i` into its table (`keep` non-null: a narrow index, which skips what the splice never reads).
     void indexReference( std::uint32_t i, const KeepSets* keep )

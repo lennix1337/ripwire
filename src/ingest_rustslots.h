@@ -177,7 +177,7 @@ private:
     }
     void leave( TSNode n )
     {
-        if( kind( n, Impl ) && !m_impl.empty() )
+        if( kind( n, Impl ) && m_impl.size() > 1 )
         {
             m_impl.pop_back();
         }
@@ -226,15 +226,7 @@ private:
         m_out.push_back( std::move( r ) );
     }
 
-    std::string_view text( TSNode n ) const noexcept
-    {
-        if( ts_node_is_null( n ) )
-        {
-            return {};
-        }
-        const std::uint32_t a = ts_node_start_byte( n ), b = ts_node_end_byte( n );
-        return a <= b && b <= m_src.size() ? m_src.substr( a, b - a ) : std::string_view();
-    }
+    std::string_view text( TSNode n ) const noexcept { return ts_node_is_null( n ) ? std::string_view() : nodeTextOf( n, m_src ); }
     static TSNode field( TSNode n, std::string_view name ) noexcept
     {
         return ts_node_child_by_field_name( n, name.data(), static_cast<std::uint32_t>( name.size() ) );
@@ -254,7 +246,7 @@ private:
         }
         return is( t, "type_identifier" ) ? text( t ) : std::string_view();
     }
-    std::string_view implType() const noexcept { return m_impl.empty() ? std::string_view() : m_impl.back(); }
+    std::string_view implType() const noexcept { return m_impl.back(); }   // m_impl starts with "": outside every impl
 
     // The function's name and its parameters in position order (their names are bound; the body's patterns bind more as the
     // walk reaches them).
@@ -386,16 +378,6 @@ private:
         return out;
     }
 
-    RawRef base( TSNode at ) const
-    {
-        RawRef r;
-        r.fileId    = m_fileId;
-        r.startByte = ts_node_start_byte( at );
-        r.line      = ts_node_start_point( at ).row + 1;
-        r.lang      = m_lang;
-        return r;
-    }
-
     // `callee( … )` with a path callee: each function-path argument is an argument row; `(x.f)( … )` is a call through field f.
     void callAt( TSNode call )
     {
@@ -444,9 +426,7 @@ private:
             const Named n = named( a );
             if( !n.name.empty() )
             {
-                RawRef r        = base( a );
-                r.role          = RefRole::Value;
-                r.name          = std::string( n.name );
+                RawRef r        = rawRefAt( a, m_fileId, m_lang, RefRole::Value, std::string( n.name ) );
                 r.memberRoot    = n.owner;
                 r.qualifier     = "a0";
                 r.recvVar       = written;
@@ -480,8 +460,7 @@ private:
         {
             return;   // a tuple field `(x.0)( … )`, a call result's field: a floor
         }
-        RawRef r     = base( call );
-        r.role       = RefRole::Through;
+        RawRef r     = rawRefAt( call, m_fileId, m_lang, RefRole::Through, std::string() );
         r.qualifier  = std::string( 1, kValueRefSlotCallScope );
         r.name       = std::string( text( root ) );
         r.fieldName  = std::string( text( f ) );
@@ -566,8 +545,7 @@ private:
     void storeAt( TSNode at, TSNode value, std::string_view fieldName, const std::string& ty )
     {
         const Named n = named( value );
-        RawRef      r = base( at );
-        r.role        = RefRole::Value;
+        RawRef      r = rawRefAt( at, m_fileId, m_lang, RefRole::Value, std::string() );
         r.memberPath  = std::string( fieldName );
         r.memberCtor  = ty;
         if( n.name.empty() )
@@ -586,7 +564,7 @@ private:
     std::uint32_t                 m_fileId;
     std::string_view              m_src;
     std::vector<RawRef>&          m_out;
-    std::vector<std::string_view> m_impl;   // the enclosing impl blocks' type names (`Self`)
+    std::vector<std::string_view> m_impl { std::string_view() };   // "" then the enclosing impl blocks' type names (`Self`)
     std::vector<Fn>               m_fns;    // the enclosing functions
     std::array<TSSymbol, KindCount> m_sym {};   // kKinds' grammar symbols
     VrDepthCut                    m_depthCut;
@@ -596,8 +574,7 @@ private:
 inline void captureRustSlotRefs( Lang lang, std::uint32_t fileId, std::string_view src, TSNode root, std::vector<RawRef>& refs )
 {
     PROFILE_SCOPE_DESCRIBE( "ingest/extractFile: Rust slot records" );
-    RustSlotWalk walk( lang, fileId, src, refs );
-    walk.run( root );
+    RustSlotWalk( lang, fileId, src, refs ).run( root );
 }
 
 }   // namespace
