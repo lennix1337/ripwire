@@ -2609,6 +2609,109 @@ int runQualityPanel( const MainDispatch& d )
     return qpanel::writePanelReport( ing, d.g, churnOk ? &churn : nullptr, d.root, preset, cfg.pageLimit, cfg.pageOffset );
 }
 
+// --dead-code's row order, shared by its <d> and <to> rows: file path asc, then line asc, then name asc (stable across runs).
+inline void sortDeadCodeRows( const rw::IngestResult& ing, std::vector<rw::NodeId>& rows )
+{
+    using namespace rw;
+    std::sort( rows.begin(), rows.end(), [ & ]( NodeId a, NodeId b )
+    {
+        const Symbol& sa = ing.symbols[a];  const Symbol& sb = ing.symbols[b];
+        const std::string& pa = ing.files[ sa.fileId ];  const std::string& pb = ing.files[ sb.fileId ];
+        if( pa != pb )
+        {
+            return pa < pb;
+        }
+        if( sa.line != sb.line )
+        {
+            return sa.line < sb.line;
+        }
+        return sa.name < sb.name;
+    } );
+}
+
+// One --dead-code row, `<TAG n= t= p= l=/>`; name and path may contain & < > " — both are escaped so output is valid XML.
+inline void emitDeadCodeRow( const rw::IngestResult& ing, rw::NodeId id, std::string_view tag, bool singleRoot, std::string_view rootPrefix, std::vector<char>& esc )
+{
+    using namespace rw;
+    const Symbol& s = ing.symbols[ id ];
+    const auto en = rw::escapeXml( s.name, esc );
+    rw::emitTo( stdout, "<{} n=\"{}\" t=\"{}\"", tag, std::string_view( en.data(), en.size() ), symTag( s.kind ) );
+    const std::string_view rp = singleRoot ? rw::sarif::rootRelativeUri( ing.files[ s.fileId ], rootPrefix ) : std::string_view( ing.files[ s.fileId ] );
+    const auto ep = rw::escapeXml( rp, esc );
+    rw::emitTo( stdout, " p=\"{}\" l=\"{}\"/>", std::string_view( ep.data(), ep.size() ), s.line );
+}
+
+// D1 TESTONLY-DEAD: every in-edge of `id` comes from a test symbol (filter.h isTestSymbol: the shared test-path rule plus the
+// in-file test conventions). Only callers decide it, so an edge a test reaches by name alone can only add a test caller.
+inline bool everyCallerIsTest( const rw::IngestResult& ing, const rw::Graph& g, rw::NodeId id ) noexcept
+{
+    using namespace rw;
+    const auto* ro = g.inEdges.rowOffsets();
+    const auto* ci = g.inEdges.colIndices();
+    return std::all_of( ci + ro[ id ], ci + ro[ id + 1 ], [ & ]( NodeId caller ) { return isTestSymbol( ing, caller ); } );
+}
+
+// D1: `name` spelled whole-word in `text` (file `fileId`) anywhere but inside the signature span of one of `rows` it names.
+inline bool spelledOutsideOwnSignature( const rw::IngestResult& ing, std::string_view text, std::uint32_t fileId, std::string_view name,
+                                        const std::vector<rw::NodeId>& rows ) noexcept
+{
+    using namespace rw;
+    const auto isIdent = []( char c ) noexcept { return std::isalnum( static_cast<unsigned char>( c ) ) || c == '_'; };
+    const auto ownSignature = [ & ]( std::size_t at )
+    {
+        return std::ranges::any_of( rows, [ & ]( NodeId id )
+        {
+            const Symbol& def = ing.symbols[ id ];
+            return def.fileId == fileId && def.name == name && at >= def.sigStartByte && at < def.sigEndByte;
+        } );
+    };
+    for( std::size_t at = text.find( name ); at != std::string_view::npos; at = text.find( name, at + 1 ) )
+    {
+        const std::size_t end      = at + name.size();
+        const bool        bounded  = ( at == 0 || !isIdent( text[ at - 1 ] ) ) && ( end == text.size() || !isIdent( text[ end ] ) );
+        if( bounded && !ownSignature( at ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// D1 name vetting: drop every row whose name a NON-test, non-prose indexed file spells whole-word outside the def's own
+// signature. Text, not references: an aliased import (`from m import dump as binary_dump`) and a module-level call carry no
+// edge to the def, and a comment or string mention costs only a missed row, never a used function on the list. Each file is
+// read once, uncached (the scan may cover the whole tree). The survivors are left in --dead-code's row order.
+inline void dropTestOnlySpelledInLibrary( const rw::IngestResult& ing, std::vector<rw::NodeId>& testOnly )
+{
+    using namespace rw;
+    std::vector<std::string_view> names;
+    names.reserve( testOnly.size() );
+    for( NodeId id : testOnly ) { names.push_back( ing.symbols[ id ].name ); }
+    std::ranges::sort( names, sortutil::svLess );
+    names.erase( std::ranges::unique( names ).begin(), names.end() );
+    std::vector<std::string_view> spelled;
+    for( std::uint32_t fileId = 0; fileId < ing.files.size(); ++fileId )
+    {
+        const std::string_view rel = rootRelPath( ing, fileId );
+        if( isTestPath( rel ) || docparse::isProseExtension( docparse::lowerExtOf( rel ) ) )
+        {
+            continue;
+        }
+        const std::optional<std::string> bytes = docparse::detail::readWholeFile( diskPath( ing, fileId ) );
+        for( std::string_view name : names )
+        {
+            if( bytes && spelledOutsideOwnSignature( ing, *bytes, fileId, name, testOnly ) )
+            {
+                spelled.push_back( name );
+            }
+        }
+    }
+    std::ranges::sort( spelled, sortutil::svLess );
+    std::erase_if( testOnly, [ & ]( NodeId id ) { return std::ranges::binary_search( spelled, std::string_view( ing.symbols[ id ].name ), sortutil::svLess ); } );
+    sortDeadCodeRows( ing, testOnly );
+}
+
+
 // The residual of §6.3's extraction: --dead-code, the only branch left in runQualityViews. main() calls it
 // immediately after runQualityDelta, i.e. in the position the old two-branch chain evaluated it.
 std::optional<int> runQualityViews( const MainDispatch& d )
@@ -2798,21 +2901,10 @@ std::optional<int> runQualityViews( const MainDispatch& d )
         // name a non-test code file spells at all (a module-level call, an aliased import, a value), so a site the call
         // graph did not attribute cannot leave a used function on this list.
         std::vector<NodeId> testOnly;
-        const auto* inCi = g.inEdges.colIndices();
-        const auto testOnlyByEdges = [ & ]( const Symbol& s, std::uint32_t edgeBegin, std::uint32_t edgeEnd ) -> bool
+        const auto testOnlyCandidate = [ & ]( const Symbol& s ) -> bool
         {
-            if( isTestSymbol( ing, s.id ) || quality::pythonDecoratedDef( s, sourceFor( s.fileId ) ) || dcVri.isValueReferenced( s.id ) )
-            {
-                return false;
-            }
-            for( std::uint32_t e = edgeBegin; e < edgeEnd; ++e )
-            {
-                if( !isTestSymbol( ing, inCi[ e ] ) )
-                {
-                    return false;
-                }
-            }
-            return true;
+            return !isTestSymbol( ing, s.id ) && !quality::pythonDecoratedDef( s, sourceFor( s.fileId ) ) && !dcVri.isValueReferenced( s.id )
+                && everyCallerIsTest( ing, g, s.id );
         };
 
         // collect candidates: in-degree == 0, not exported, sorted for determinism
@@ -2850,7 +2942,7 @@ std::optional<int> runQualityViews( const MainDispatch& d )
             const std::uint32_t inDeg = inRo[ s.id + 1 ] - inRo[ s.id ];
             if( inDeg != 0 )
             {
-                if( testOnlyByEdges( s, inRo[ s.id ], inRo[ s.id + 1 ] ) )
+                if( testOnlyCandidate( s ) )
                 {
                     testOnly.push_back( s.id );   // vetted by name below, against every non-test reference
                 }
@@ -2884,82 +2976,10 @@ std::optional<int> runQualityViews( const MainDispatch& d )
             candidates.push_back( s.id );
         }
 
-        // deterministic order: file path asc, then line asc, then name asc (stable across runs)
-        std::sort( candidates.begin(), candidates.end(), [ & ]( NodeId a, NodeId b )
-        {
-            const Symbol& sa = ing.symbols[a];  const Symbol& sb = ing.symbols[b];
-            const std::string& pa = ing.files[ sa.fileId ];  const std::string& pb = ing.files[ sb.fileId ];
-            if( pa != pb )
-            {
-                return pa < pb;
-            }
-            if( sa.line != sb.line )
-            {
-                return sa.line < sb.line;
-            }
-            return sa.name < sb.name;
-        } );
+        sortDeadCodeRows( ing, candidates );   // deterministic order: file path asc, then line asc, then name asc
         if( !testOnly.empty() )
         {
-            // name vetting: a whole-word spelling of the name in any NON-test, non-prose indexed file — outside the
-            // def's own signature span — keeps the row off. Text, not references: an aliased import
-            // (`from m import dump as binary_dump`) and a module-level call carry no edge to the def, and a comment
-            // or string mention costs only a missed row, never a used function on this list. Each file is read once,
-            // uncached (the scan may cover the whole tree).
-            std::vector<std::string_view> testOnlyNames;
-            testOnlyNames.reserve( testOnly.size() );
-            for( NodeId id : testOnly ) { testOnlyNames.push_back( ing.symbols[ id ].name ); }
-            std::ranges::sort( testOnlyNames, sortutil::svLess );
-            const auto uniqueEnd = std::ranges::unique( testOnlyNames ).begin();
-            testOnlyNames.erase( uniqueEnd, testOnlyNames.end() );
-            std::vector<std::string_view> spelledOutsideTests;
-            const auto isIdent = []( char c ) noexcept { return std::isalnum( static_cast<unsigned char>( c ) ) || c == '_'; };
-            for( std::uint32_t fileId = 0; fileId < ing.files.size(); ++fileId )
-            {
-                const std::string_view rel = rootRelPath( ing, fileId );
-                if( isTestPath( rel ) || docparse::isProseExtension( docparse::lowerExtOf( rel ) ) )
-                {
-                    continue;
-                }
-                const std::optional<std::string> bytes = docparse::detail::readWholeFile( diskPath( ing, fileId ) );
-                if( !bytes )
-                {
-                    continue;
-                }
-                const std::string_view text = *bytes;
-                for( std::string_view name : testOnlyNames )
-                {
-                    for( std::size_t at = text.find( name ); at != std::string_view::npos; at = text.find( name, at + 1 ) )
-                    {
-                        const std::size_t end = at + name.size();
-                        if( ( at > 0 && isIdent( text[ at - 1 ] ) ) || ( end < text.size() && isIdent( text[ end ] ) ) )
-                        {
-                            continue;
-                        }
-                        const bool ownSignature = std::ranges::any_of( testOnly, [ & ]( NodeId id )
-                        {
-                            const Symbol& d = ing.symbols[ id ];
-                            return d.fileId == fileId && d.name == name && at >= d.sigStartByte && at < d.sigEndByte;
-                        } );
-                        if( !ownSignature )
-                        {
-                            spelledOutsideTests.push_back( name );
-                            break;
-                        }
-                    }
-                }
-            }
-            std::ranges::sort( spelledOutsideTests, sortutil::svLess );
-            std::erase_if( testOnly, [ & ]( NodeId id )
-                           { return std::ranges::binary_search( spelledOutsideTests, std::string_view( ing.symbols[ id ].name ), sortutil::svLess ); } );
-            std::ranges::sort( testOnly, [ & ]( NodeId a, NodeId b )
-            {
-                const Symbol& sa = ing.symbols[a];  const Symbol& sb = ing.symbols[b];
-                const std::string& pa = ing.files[ sa.fileId ];  const std::string& pb = ing.files[ sb.fileId ];
-                if( pa != pb ) { return pa < pb; }
-                if( sa.line != sb.line ) { return sa.line < sb.line; }
-                return sa.name < sb.name;
-            } );
+            dropTestOnlySpelledInLibrary( ing, testOnly );
         }
 
         rw::emitTo( stdout, "<!-- ripwire dead-code: source functions with internal linkage and no caller found in the indexed tree — a name-based "
@@ -3028,23 +3048,11 @@ std::optional<int> runQualityViews( const MainDispatch& d )
         std::vector<char> dcEsc;
         for( std::size_t candidateIndex = dcPw.begin; candidateIndex < dcPw.end; ++candidateIndex )
         {
-            const NodeId candidateId = candidates[ candidateIndex ];
-            const Symbol& s = ing.symbols[ candidateId ];
-            // name and path may contain & < > " — escape both so output is valid XML.
-            const auto en = rw::escapeXml( s.name, dcEsc );
-            rw::emitTo( stdout, "<d n=\"{}\" t=\"{}\"", std::string_view( en.data(), en.size() ), symTag( s.kind ) );
-            const std::string_view rp = qvSingleRoot ? rw::sarif::rootRelativeUri( ing.files[ s.fileId ], qvRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
-            const auto ep = rw::escapeXml( rp, dcEsc );
-            rw::emitTo( stdout, " p=\"{}\" l=\"{}\"/>", std::string_view( ep.data(), ep.size() ), s.line );
+            emitDeadCodeRow( ing, candidates[ candidateIndex ], "d", qvSingleRoot, qvRootPrefix, dcEsc );
         }
         for( std::size_t testOnlyIndex = 0; cfg.pageOffset == 0 && testOnlyIndex < testOnly.size(); ++testOnlyIndex )   // first page only (offset 0): never repeated
         {
-            const Symbol& s = ing.symbols[ testOnly[ testOnlyIndex ] ];
-            const auto en = rw::escapeXml( s.name, dcEsc );
-            rw::emitTo( stdout, "<to n=\"{}\" t=\"{}\"", std::string_view( en.data(), en.size() ), symTag( s.kind ) );
-            const std::string_view rp = qvSingleRoot ? rw::sarif::rootRelativeUri( ing.files[ s.fileId ], qvRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
-            const auto ep = rw::escapeXml( rp, dcEsc );
-            rw::emitTo( stdout, " p=\"{}\" l=\"{}\"/>", std::string_view( ep.data(), ep.size() ), s.line );
+            emitDeadCodeRow( ing, testOnly[ testOnlyIndex ], "to", qvSingleRoot, qvRootPrefix, dcEsc );
         }
         rw::emitRaw( stdout, "</dead-code>" );
         return 0;
