@@ -342,7 +342,9 @@ t6 = run( tmp + "/w16", "--impact=drain" ); r6 = root( t6, "impact" )
 check( "(W1) 16 producers compose: reaches_hedged=32 (16 producers + their 16 proven callers)", attr( r6, "reaches_hedged" ) == "32", r6[:300] )
 t7 = run( tmp + "/w17", "--impact=drain" ); r7 = root( t7, "impact" )
 check( "(W1) 17 producers are counted but compose nothing: reaches_hedged=17", attr( r7, "reaches_hedged" ) == "17", r7[:300] )
-check( "(W1) the d=1 rows are capped at 16 shown with total=17, next= present", attr( ring( t7 ), "total" ) == "17" and attr( ring( t7 ), "shown" ) == "16" and attr( ring( t7 ), "next" ) == "--callers=Hub.drain" or ( attr( ring( t7 ), "next" ) or "" ).endswith( "drain" ), ring( t7 )[:200] )
+check( "(W1) the d=1 rows are capped at 16 shown with total=17, next= present",
+       attr( ring( t7 ), "total" ) == "17" and attr( ring( t7 ), "shown" ) == "16"
+       and ( attr( ring( t7 ), "next" ) == "--callers=Hub.drain" or ( attr( ring( t7 ), "next" ) or "" ).endswith( "drain" ) ), ring( t7 )[:200] )
 
 # ── T: recursion ────────────────────────────────────────────────────────────────────────────────────────────────────
 t8 = run( tmp + "/req", "--impact=requeue" ); r8 = root( t8, "impact" )
