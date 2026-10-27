@@ -16148,6 +16148,15 @@ inline std::vector<std::uint16_t> connectUndirectedDistances( const Graph& g, st
 // anything, and `chosen` is `preferred`.
 struct TerminalChoice { NodeId chosen = kNoNode; std::uint32_t reached = 0, hops = 0, tied = 1; };
 
+// THE reach order the endpoint picks share (TRACE-EP): --connect's terminal choice below and --path's reaching pairs
+// (pathpairs.h): more terminals reached, then fewer hedged hops (0 = every hop proven), then fewer hops. Equal ranks keep the
+// order the caller met them in (the tower order). --connect walks an undirected view with no hedge term: its hedged is 0.
+struct ReachRank { std::uint32_t reached = 0, hedged = 0, hops = 0; };
+inline bool reachRankBefore( const ReachRank& a, const ReachRank& b ) noexcept
+{
+    return a.reached != b.reached ? a.reached > b.reached : a.hedged != b.hedged ? a.hedged < b.hedged : a.hops < b.hops;
+}
+
 inline TerminalChoice scoreTerminalCandidates( std::span<const NodeId> candidates, NodeId preferred, std::size_t self,
                                                const std::vector<std::vector<std::uint16_t>>& distFrom )
 {
@@ -16163,7 +16172,7 @@ inline TerminalChoice scoreTerminalCandidates( std::span<const NodeId> candidate
             hops    += reaches ? distFrom[ j ][ candidate ] : 0u;
         }
         const bool isTie = reached > 0 && reached == best.reached && hops == best.hops;
-        if( reached > best.reached || ( reached > 0 && reached == best.reached && hops < best.hops ) )
+        if( reached > 0 && reachRankBefore( ReachRank{ reached, 0, hops }, ReachRank{ best.reached, 0, best.hops } ) )
         {
             best            = TerminalChoice{ candidate, reached, hops, 1 };
             bestIsPreferred = candidate == preferred;
