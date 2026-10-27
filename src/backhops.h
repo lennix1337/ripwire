@@ -87,6 +87,22 @@ public:
         return builtinSpelledCall( r ) && !receiverTypedInTree( site, r );
     }
 
+    // The class definition owning definition `d` (ownerOf below, built on first use); kNoNode when none. QUEUE-HOP reads it.
+    NodeId classOf( NodeId d ) const
+    {
+        buildOnce();
+        return d < m_ing.symbols.size() ? ownerOf( d ) : kNoNode;
+    }
+    // Every in-tree class-like definition named `name` (a base class written by name binds to each of them).
+    void classesNamed( std::string_view name, std::vector<NodeId>& out ) const
+    {
+        buildOnce();
+        for( auto it = std::ranges::lower_bound( m_classIds, name, sortutil::svLess, &ClassName::name ); it != m_classIds.end() && it->name == name; ++it )
+        {
+            out.push_back( it->id );
+        }
+    }
+
 private:
     struct ClassName
     {
@@ -250,17 +266,22 @@ private:
 //   container  (composed hops) a call through a container element (`handlers[i]()`) or a parameter's default
 //              (`cb()` where `cb = fn`) whose value-ref join names the sink: the --callers <vr called_by=> row (valuerefindex.h calledBy,
 //              throughsFor); width = the calling functions that row names. slotHops skipped it: it answers first there.
-enum class BackHopVia : std::uint8_t { Slot, SlotName, Declined, Container };
+//   queue      (QUEUE-HOP) a hand-off, not a call: the producer puts onto a queue field of its own object (`self.q.put( v )`) that
+//              the sink reads (`self.q.get()`) in the same class or a base/subclass of it (QueueHops below); width = the producing
+//              functions. It has no <vr> row of its own, so the --impact ring LISTS it at d=1 (`atOne`).
+enum class BackHopVia : std::uint8_t { Slot, SlotName, Declined, Container, Queue };
 
 struct HopKindInfo
 {
     std::string_view name;
     bool             fieldCall;   // a call through a struct field (slot, slot-name)
     bool             ring;        // the --impact ring follows it
+    bool             atOne;       // the ring lists its d=1 hops as rows (no --callers <vr> row speaks for them)
 };
-inline constexpr std::array kHopKinds = { HopKindInfo{ "slot", true, true }, HopKindInfo{ "slot-name", true, true }, HopKindInfo{ "declined", false, false },
-                                          HopKindInfo{ "container", false, true } };   // indexed by BackHopVia
-inline constexpr std::size_t kBackHopViaCount = 4;
+inline constexpr std::array kHopKinds = { HopKindInfo{ "slot", true, true, false }, HopKindInfo{ "slot-name", true, true, false },
+                                          HopKindInfo{ "declined", false, false, false }, HopKindInfo{ "container", false, true, false },
+                                          HopKindInfo{ "queue", false, true, true } };   // indexed by BackHopVia
+inline constexpr std::size_t kBackHopViaCount = 5;
 static_assert( enumCountIsExact<BackHopVia, kBackHopViaCount>(), "kBackHopViaCount must equal the BackHopVia count — raise it with the append" );
 static_assert( kHopKinds.size() == kBackHopViaCount, "one kHopKinds row per BackHopVia value (the extent is deduced from the rows)" );
 inline constexpr const HopKindInfo& hopKind( BackHopVia v ) noexcept { return kHopKinds[ std::size_t( v ) ]; }
@@ -343,12 +364,245 @@ inline void containerBackHops( const IngestResult& ing, const ValueRefIndex& val
     } );
 }
 
+// QUEUE-HOP: a hand-off through a queue field of one object (Python). A PUT site is a call `self.X.put( v )` / `self.X.put_nowait( v )`
+// with exactly one positional argument, a GET site `self.X.get()` / `self.X.get_nowait()` with none (a keyed `d.get( k )` or a two-
+// argument `cache.put( k, v )` is no queue operation; the keywords `timeout=` and `block=` are no argument, any other keyword
+// makes the call no queue operation), both on the receiver keyword `self` (receiverOf's FieldOfThis) and both with a counted
+// argument list. A put site and a get site PAIR when they name the same attribute X and their classes are one family: the same
+// class, or one is a base of the other that the index PROVES (graph.h's Proven implementors edges: the same-file declaration or the
+// import that names it; a base written by name alone, or bound to another same-named class, is no family; walked to the root; a
+// sibling class's get never reads this object's queue). The READERS of a get site are the function holding it and, one level up, its
+// proven callers in that same family (`message = await self._get_message()`: the loop that dispatches the message reads it).
+// What it does NOT mean: no call edge; a reader is not proven to receive any given item. A queue the class hands out (a worker's
+// parameter, a local alias `q = self.q`) has readers this rule does not see: the readers listed are a floor, every hop a hedge.
+class QueueHops
+{
+public:
+    QueueHops( const IngestResult& ing, const Graph& g, const DeclinedCrossRule& rule ) : m_ing( ing ), m_g( g ), m_rule( rule ) {}
+
+    // The sink's QUEUE hops: one per producing function of every queue the sink reads (the sink itself excluded: a reader that
+    // re-puts onto its own queue is no way in); width = those producers.
+    void backHops( NodeId sink, std::vector<BackHop>& out ) const
+    {
+        build();
+        std::vector<BackHop> rows;
+        for( const Pair& p : m_pairs )
+        {
+            if( p.reader == sink && m_sites[ p.put ].fn != sink )
+            {
+                rows.push_back( BackHop{ m_sites[ p.put ].fn, BackHopVia::Queue, 0, m_sites[ p.put ].ref } );
+            }
+        }
+        keepOneHopPerCaller( rows );
+        for( BackHop& h : rows )
+        {
+            h.width = std::uint32_t( rows.size() );
+        }
+        out.insert( out.end(), rows.begin(), rows.end() );
+    }
+
+    // The readers of put reference `ref` (distinct, ascending — m_pairs is sorted by site, then reader; the put's own function
+    // excluded): one binary search for the site (m_sites is in reference order), one for its pairs.
+    std::vector<NodeId> readersOf( std::uint32_t ref ) const
+    {
+        build();
+        std::vector<NodeId> fns;
+        const auto site = std::ranges::lower_bound( m_sites, ref, {}, &Site::ref );
+        if( site == m_sites.end() || site->ref != ref || !site->put )
+        {
+            return fns;
+        }
+        const std::uint32_t idx = std::uint32_t( site - m_sites.begin() );
+        for( auto it = std::ranges::lower_bound( m_pairs, idx, {}, &Pair::put ); it != m_pairs.end() && it->put == idx; ++it )
+        {
+            if( it->reader != site->fn )
+            {
+                fns.push_back( it->reader );
+            }
+        }
+        return fns;
+    }
+
+    // The put references made in u, ascending (one sorted (function, reference) table, so a walk never rescans the sites per node).
+    std::vector<std::uint32_t> putsIn( NodeId u ) const
+    {
+        build();
+        std::vector<std::uint32_t> refs;
+        for( auto it = std::ranges::lower_bound( m_putsByFn, std::pair<NodeId, std::uint32_t>( u, 0u ) ); it != m_putsByFn.end() && it->first == u; ++it )
+        {
+            refs.push_back( it->second );
+        }
+        return refs;
+    }
+
+private:
+    struct Site
+    {
+        std::string_view field;
+        NodeId           fn  = kNoNode;
+        NodeId           cls = kNoNode;
+        std::uint32_t    ref = 0;
+        bool             put = false;
+    };
+    struct Pair
+    {
+        std::uint32_t put    = 0;   // index into m_sites
+        NodeId        reader = kNoNode;
+    };
+
+    // The languages whose `self.X.put/get` this rule reads: model.h isQueueLang (the per-kind table ingest shares).
+    // A queue operation: `self.X.put( v )` / `put_nowait( v )` (one positional argument) or `get()` / `get_nowait()` (none). The Python
+    // queue and asyncio signatures also take the keywords `timeout=` and `block=` (`get( timeout=2 )`, `put( v, block=False )`): they
+    // are the same operations, so they do not count as arguments. Any OTHER keyword (`d.get( k, default=0 )`) is no queue operation,
+    // and an argument list the count could not read (`*args`, `**kw`) is none either.
+    static bool queueOp( const Reference& r, bool& put ) noexcept
+    {
+        if( !isQueueLang( r.lang ) || r.role != RefRole::Call || r.isInherit || r.recv != RecvKind::FieldOfThis || r.fieldName.empty() || !r.argCountKnown )
+        {
+            return false;
+        }
+        const PyKwArgs kw = pyKwArgsOf( r.composeRel );
+        if( kw.other || kw.count > r.argCount )
+        {
+            return false;
+        }
+        const std::uint32_t positional = r.argCount - kw.count;
+        const std::string_view m       = r.calleeName;
+        put                            = m == "put" || m == "put_nowait";
+        return ( put && positional == 1 ) || ( ( m == "get" || m == "get_nowait" ) && positional == 0 );
+    }
+
+    // Whether class b is a or one of a's in-tree ancestors (the proven base edges, collectProvenBases; visited once each).
+    bool derivesFrom( NodeId a, NodeId b ) const
+    {
+        std::vector<NodeId> todo{ a };
+        std::vector<NodeId> seen;
+        while( !todo.empty() )
+        {
+            const NodeId c = todo.back();
+            todo.pop_back();
+            if( c == b )
+            {
+                return true;
+            }
+            if( std::ranges::find( seen, c ) != seen.end() )
+            {
+                continue;   // an inheritance cycle by name (two same-named classes) ends here
+            }
+            seen.push_back( c );
+            const auto lo = std::ranges::lower_bound( m_bases, std::pair<NodeId, NodeId>( c, 0 ) );
+            for( auto it = lo; it != m_bases.end() && it->first == c; ++it )
+            {
+                todo.push_back( it->second );
+            }
+        }
+        return false;
+    }
+    bool oneFamily( NodeId a, NodeId b ) const { return a != kNoNode && b != kNoNode && ( derivesFrom( a, b ) || derivesFrom( b, a ) ); }
+
+    // The (class, base) pairs the index PROVES: the graph's implementors edges bound Proven (graph.h provenBasesOf: the same-file
+    // declaration the clause binds to, or an import that names the base). A base written by NAME alone binds to every same-named
+    // class; an edge the evidence leaves ByName or points at another same-named class (Other) is no family link, so an unrelated
+    // `Base` in another file never joins two classes' queues.
+    void collectProvenBases() const
+    {
+        for( NodeId base = 0; base < m_g.implementors.size() && base < m_g.implementorBound.size(); ++base )
+        {
+            const std::vector<NodeId>&      kids  = m_g.implementors[ base ];
+            const std::vector<std::uint8_t>& bound = m_g.implementorBound[ base ];
+            for( std::size_t k = 0; k < kids.size() && k < bound.size(); ++k )
+            {
+                if( bound[ k ] == std::uint8_t( BaseBound::Proven ) && kids[ k ] < m_ing.symbols.size() && isQueueLang( m_ing.symbols[ kids[ k ] ].lang ) )
+                {
+                    m_bases.emplace_back( kids[ k ], base );
+                }
+            }
+        }
+    }
+
+    void build() const
+    {
+        if( m_built )
+        {
+            return;
+        }
+        m_built = true;
+        for( std::uint32_t i = 0; i < m_ing.references.size(); ++i )
+        {
+            const Reference& r   = m_ing.references[ i ];
+            bool             put = false;
+            if( r.fromSymbol < m_ing.symbols.size() && queueOp( r, put ) )
+            {
+                m_sites.push_back( Site{ r.fieldName, r.fromSymbol, m_rule.classOf( r.fromSymbol ), i, put } );
+                if( put )
+                {
+                    m_putsByFn.emplace_back( r.fromSymbol, i );
+                }
+            }
+        }
+        if( !m_sites.empty() )
+        {
+            collectProvenBases();
+            std::ranges::sort( m_bases );
+            std::ranges::sort( m_putsByFn );
+            pairSites();   // a tree with no queue operation pays one scan
+        }
+    }
+
+    // Each get site's readers (its function + one level of same-family proven callers) paired with every same-attribute,
+    // same-family put site; sorted and distinct.
+    void pairSites() const
+    {
+        const std::size_t N  = m_g.inEdges.rows();
+        const auto*       ro = m_g.inEdges.rowOffsets();
+        const auto*       ci = m_g.inEdges.colIndices();
+        for( const Site& get : m_sites )
+        {
+            if( get.put || get.cls == kNoNode )
+            {
+                continue;
+            }
+            std::vector<NodeId> readers{ get.fn };
+            for( std::uint32_t k = get.fn < N ? ro[ get.fn ] : 0; get.fn < N && k < ro[ get.fn + 1 ]; ++k )
+            {
+                const NodeId c = ci[ k ];
+                if( c < m_ing.symbols.size() && c != get.fn && oneFamily( m_rule.classOf( c ), get.cls ) )
+                {
+                    readers.push_back( c );   // one level up: a same-family caller of the reader reads the item it returns
+                }
+            }
+            for( std::uint32_t p = 0; p < m_sites.size(); ++p )
+            {
+                if( m_sites[ p ].put && m_sites[ p ].field == get.field && oneFamily( m_sites[ p ].cls, get.cls ) )
+                {
+                    for( const NodeId rd : readers )
+                    {
+                        m_pairs.push_back( Pair{ p, rd } );
+                    }
+                }
+            }
+        }
+        std::ranges::sort( m_pairs, [ ]( const Pair& a, const Pair& b ) { return a.put != b.put ? a.put < b.put : a.reader < b.reader; } );
+        m_pairs.erase( std::ranges::unique( m_pairs, [ ]( const Pair& a, const Pair& b ) { return a.put == b.put && a.reader == b.reader; } ).begin(), m_pairs.end() );
+    }
+
+    const IngestResult&                           m_ing;
+    const Graph&                                  m_g;
+    const DeclinedCrossRule&                      m_rule;
+    mutable bool                                  m_built = false;
+    mutable std::vector<Site>                     m_sites;   // every put / get site, in reference order
+    mutable std::vector<std::pair<NodeId, NodeId>> m_bases;  // (class, base the index proves), sorted
+    mutable std::vector<Pair>                     m_pairs;   // (put site, reader), sorted, distinct
+    mutable std::vector<std::pair<NodeId, std::uint32_t>> m_putsByFn;   // (function, put reference), sorted
+};
+
 class BackwardHops
 {
 public:
-    BackwardHops( const IngestResult& ing, const Graph& g, const ValueRefIndex& values ) : m_ing( ing ), m_g( g ), m_values( values ), m_rule( ing, g ) {}
+    BackwardHops( const IngestResult& ing, const Graph& g, const ValueRefIndex& values ) : m_ing( ing ), m_g( g ), m_values( values ), m_rule( ing, g ), m_queue( ing, g, m_rule ) {}
 
     const DeclinedCrossRule& declinedRule() const noexcept { return m_rule; }
+    const QueueHops&         queue() const noexcept { return m_queue; }
     const Graph&             graph() const noexcept { return m_g; }
     const ValueRefIndex&     values() const noexcept { return m_values; }
 
@@ -368,6 +622,7 @@ public:
         slotHops( sink, out );
         declinedHops( sink, out );
         containerBackHops( m_ing, m_values, sink, out );
+        m_queue.backHops( sink, out );
         return m_memo.try_emplace( sink, std::move( out ) ).first->second;
     }
 
@@ -411,17 +666,23 @@ private:
     const Graph&                                 m_g;
     const ValueRefIndex&                         m_values;
     DeclinedCrossRule                            m_rule;
+    QueueHops                                    m_queue;   // after m_rule: it holds a reference to it
     mutable HashMap<NodeId, std::vector<BackHop>> m_memo;
 };
 
-// The forward width of a backward hop's call: the functions that field (slot) or container may hold; 0 for a declined hop.
-inline std::uint32_t backHopStoredWidth( const IngestResult& ing, const ValueRefIndex& values, const BackHop& h )
+// The forward width of a backward hop's call: the functions that field (slot) or container may hold, the readers of a queue
+// put; 0 for a declined hop.
+inline std::uint32_t backHopStoredWidth( const IngestResult& ing, const BackwardHops& hops, const BackHop& h )
 {
     if( hopKind( h.via ).fieldCall )
     {
-        return std::uint32_t( slotSiteOf( ing, values, h.ref ).targets.size() );
+        return std::uint32_t( slotSiteOf( ing, hops.values(), h.ref ).targets.size() );
     }
-    return h.via == BackHopVia::Container ? std::uint32_t( containerHolds( values, h.ref ).size() ) : 0u;
+    if( h.via == BackHopVia::Queue )
+    {
+        return std::uint32_t( hops.queue().readersOf( h.ref ).size() );
+    }
+    return h.via == BackHopVia::Container ? std::uint32_t( containerHolds( hops.values(), h.ref ).size() ) : 0u;
 }
 
 // Direction::Forward (composed hops, rv-hop1 correction 2): the functions `u`'s calls through a struct field or a container
@@ -448,25 +709,30 @@ public:
         std::vector<ForwardHop> out;
         for( const SlotSiteRow& site : slotSiteRows( m_ing, m_back.values(), std::span<const NodeId>( &u, 1 ) ) )
         {
-            confirm( u, site.targets, site.ref, true, out );
+            confirm( u, site.targets, site.ref, BackHopVia::Slot, out );
         }
         for( const std::uint32_t t : throughsIn( u ) )
         {
-            confirm( u, containerHolds( m_back.values(), t ), t, false, out );
+            confirm( u, containerHolds( m_back.values(), t ), t, BackHopVia::Container, out );
+        }
+        for( const std::uint32_t put : m_back.queue().putsIn( u ) )
+        {
+            confirm( u, m_back.queue().readersOf( put ), put, BackHopVia::Queue, out );   // QUEUE-HOP: after every older kind
         }
         return m_memo.try_emplace( u, std::move( out ) ).first->second;
     }
 
 private:
-    // Each of `fns` whose backward hops name u by a field kind (fieldCall) or the container kind becomes a forward row.
-    void confirm( NodeId u, const std::vector<NodeId>& fns, std::uint32_t call, bool fieldCall, std::vector<ForwardHop>& out ) const
+    // Each of `fns` whose backward hops name u by `kind` (any field kind for a field call) becomes a forward row.
+    void confirm( NodeId u, const std::vector<NodeId>& fns, std::uint32_t call, BackHopVia kind, std::vector<ForwardHop>& out ) const
     {
+        const bool fieldCall = hopKind( kind ).fieldCall;
         for( const NodeId f : fns )
         {
             const std::span<const BackHop> hops = m_back.backwardHops( f );
             const auto it = std::ranges::find_if( hops, [ & ]( const BackHop& h )
             {
-                return h.from == u && ( fieldCall ? hopKind( h.via ).fieldCall : h.via == BackHopVia::Container );
+                return h.from == u && ( fieldCall ? hopKind( h.via ).fieldCall : h.via == kind );
             } );
             if( it != hops.end() )
             {
@@ -607,7 +873,8 @@ public:
         }
     }
 
-    // d=1: each answered definition's ring hops (all of them counted, whatever their width)
+    // d=1: each answered definition's ring hops (all of them counted, whatever their width); a kind with no <vr> row of its own
+    // (atOne: queue) is kept as a d=1 row, listed first by depthTwo
     void depthOne( std::span<const NodeId> seeds )
     {
         for( const NodeId s : seeds )
@@ -616,6 +883,10 @@ public:
             {
                 if( hopKind( h.via ).ring && h.from < m_S )
                 {
+                    if( hopKind( h.via ).atOne && m_known[ h.from ] == 0 && m_level[ h.from ] == 0 )
+                    {
+                        m_atOne.push_back( ImpactRingRow{ h.from, s, h.via, h.ref, 1, 0, h.width } );
+                    }
                     join( h.from, 1, m_d1, h.via );
                     carry( h.from, h, true, true );
                 }
@@ -629,6 +900,7 @@ public:
     // d=2: each d=1 function's ring hops; a proven member, an answered definition or a d=1 function already speaks for itself
     void depthTwo( ImpactRing& out )
     {
+        out.rows.insert( out.rows.end(), m_atOne.begin(), m_atOne.end() );
         for( const NodeId f : m_d1 )
         {
             for( const BackHop& h : m_hops.backwardHops( f ) )
@@ -760,6 +1032,7 @@ private:
     std::vector<char>   m_known, m_counted, m_level, m_narrow, m_fieldNarrow;
     std::vector<BackHopVia> m_via;                    // the hop that joined each member (a hub row's via=)
     std::vector<NodeId> m_d1, m_d2, m_d3, m_composable;
+    std::vector<ImpactRingRow> m_atOne;   // the d=1 rows of an atOne kind (queue)
 };
 
 // The ring order (rule (b)): a node's lens key, then the row key that puts it after the certainty tier and the width.
@@ -824,7 +1097,7 @@ inline ImpactRing impactSlotRing( const IngestResult& ing, const BackwardHops& h
     out.hedged = walk.hedged();
     for( ImpactRingRow& row : out.rows )
     {
-        row.stored = backHopStoredWidth( ing, hops.values(), BackHop{ row.fn, row.via, 0, row.ref } );
+        row.stored = backHopStoredWidth( ing, hops, BackHop{ row.fn, row.via, 0, row.ref } );
     }
     const ImpactRingOrder order( ing, hops.graph(), lens, seeds );
     std::ranges::stable_sort( out.rows, [ & ]( const ImpactRingRow& a, const ImpactRingRow& b ) { return order.rowLess( a, b ); } );
@@ -901,10 +1174,13 @@ inline std::string impactRingNext( const IngestResult& ing, const ImpactRing& ri
     return ring.rowsShown < ring.rows.size() ? nextFlag( "--callers=", ing.symbols[ ring.rows[ ring.rowsShown ].calls ].name ) : std::string();
 }
 
+// The deepest row listed: 3, 2, or 1 (only queue d=1 rows).
 inline std::uint32_t impactRingDepth( const ImpactRing& ring )
 {
-    return std::ranges::any_of( ring.rows, [ ]( const ImpactRingRow& r ) { return r.depth == 3; } ) ? 3u : 2u;
+    return ring.rows.empty() ? 1u : std::ranges::max( ring.rows, {}, &ImpactRingRow::depth ).depth;
 }
+// A ring row's d= attribute: printed for d=1 (a queue hop) and d=3; a d=2 row stays bare (byte-identity of the older rows).
+inline bool impactRingRowPrintsDepth( const ImpactRingRow& row ) noexcept { return row.depth != 2; }
 
 // A ring row's forward-width attribute name: slot_fns for a field call, cands for a container call.
 inline std::string_view impactRingStoredKey( const ImpactRingRow& row ) noexcept
@@ -939,7 +1215,7 @@ inline std::string impactRingXml( const IngestResult& ing, const ImpactRing& rin
             const Reference&     c   = ing.references[ row.ref ];
             out += "<rh called_by=\"" + ex( ing.symbols[ row.fn ].name ) + "\" called_at=\"" + ex( vrPath( ing, c.fileId, rr ) ) + ":" + std::to_string( c.line )
                  + "\" via=\"" + std::string( hopKind( row.via ).name ) + "\" calls=\"" + ex( ing.symbols[ row.calls ].name ) + "\""
-                 + ( row.depth == 3 ? std::string( " d=\"3\"" ) : std::string() ) + " " + std::string( impactRingStoredKey( row ) ) + "=\"" + std::to_string( row.stored ) + "\"/>";
+                 + ( impactRingRowPrintsDepth( row ) ? " d=\"" + std::to_string( row.depth ) + "\"" : std::string() ) + " " + std::string( impactRingStoredKey( row ) ) + "=\"" + std::to_string( row.stored ) + "\"/>";
         }
         out += "</ring>";
     }
@@ -972,7 +1248,7 @@ inline std::string impactRingJson( const IngestResult& ing, const ImpactRing& ri
             const Reference&     c   = ing.references[ row.ref ];
             out += std::string( i == 0 ? "{" : ",{" ) + "\"called_by\":\"" + jsonStr( ing.symbols[ row.fn ].name ) + "\",\"called_at\":\""
                  + jsonStr( vrPath( ing, c.fileId, rr ) + ":" + std::to_string( c.line ) ) + "\",\"via\":\"" + std::string( hopKind( row.via ).name )
-                 + "\",\"calls\":\"" + jsonStr( ing.symbols[ row.calls ].name ) + "\"" + ( row.depth == 3 ? std::string( ",\"d\":3" ) : std::string() )
+                 + "\",\"calls\":\"" + jsonStr( ing.symbols[ row.calls ].name ) + "\"" + ( impactRingRowPrintsDepth( row ) ? ",\"d\":" + std::to_string( row.depth ) : std::string() )
                  + ",\"" + std::string( impactRingStoredKey( row ) ) + "\":" + std::to_string( row.stored ) + "}";
         }
         out += "]}";
@@ -1007,6 +1283,17 @@ inline constexpr std::string_view kImpactHubLegend =
     "<hub n= via= d= behind= tested= sample= next=>: a ring member with more than 16 proven callers behind it, folded: those behind= functions are "
     "in reaches_hedged= but not listed (tested= of them a test reaches, sample= the first 3 by tested, no proven caller, same dir, rank; next= lists them as proven rows); reaches_hedged_hubs=K: "
     "K of reaches_hedged= sit behind a hub; ring_cut=N: the page limit cut N ring rows (hedged rows go first, proven rows keep the page), next= shows them. ";
+// QUEUE-HOP, present-only: rides beside the rows legend when a row is a queue hop (the --path bridge reads it too).
+inline constexpr std::string_view kQueueHopLegend =
+    "rh via=queue d=1: a HAND-OFF, not a call: called_by= puts onto a queue field of its own object (self.X.put/put_nowait, one item; timeout=/block= allowed) and "
+    "calls= takes from it (self.X.get/get_nowait) in the same class or a base or subclass of it (a base the index proves), or is a proven caller in that family of "
+    "such a function (one level); cands=K the readers of that put, a floor (a queue handed out of the class has readers not seen). Python only. "
+    "In a path bridge, s via=queue is the same crossing: the previous row puts, this row takes. ";
+// Whether any ring row is a queue hop: the queue clause rides.
+inline bool impactRingHasQueue( const ImpactRing& ring ) noexcept
+{
+    return std::ranges::contains( ring.rows, BackHopVia::Queue, &ImpactRingRow::via );
+}
 // `ring.hedged`: reaches_hedged= rides; `rowsForm`: the answer prints rows (XML/JSON; the columnar form carries the counts alone),
 // so the <ring> clause rides with a shown <rh> row; the hub clause rides with reaches_hedged_hubs= / ring_cut= in every form.
 inline std::string impactRingLegend( const ImpactRing& ring, bool rowsForm )
@@ -1017,6 +1304,7 @@ inline std::string impactRingLegend( const ImpactRing& ring, bool rowsForm )
         out.append( kImpactRingLegend );
         out.append( rowsForm && ring.rowsShown > 0 ? kImpactRingRowsLegend : std::string_view() );
         out.append( ring.hubbed > 0 || ring.cut > 0 ? kImpactHubLegend : std::string_view() );
+        out.append( rowsForm && ring.rowsShown > 0 && impactRingHasQueue( ring ) ? kQueueHopLegend : std::string_view() );
     }
     return out;
 }

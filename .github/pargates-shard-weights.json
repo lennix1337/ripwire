@@ -441,6 +441,7 @@
 "pyimportprecisecheck.sh": 1.2,
 "pymodulealiascheck.sh": 61.0,
 "pyshapecheck.sh": 0.5,
+"queuehopcheck.sh": 3.0,
 "qackconcurrencycheck.sh": 13.2,
 "qackorigincheck.sh": 5.7,
 "qbaselineproducercheck.sh": 5.0,
