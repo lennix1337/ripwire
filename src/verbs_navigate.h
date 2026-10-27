@@ -150,10 +150,11 @@ inline std::string notFoundGitRoot( const rw::IngestResult& ing, const rw::Confi
     return ing.realPaths.empty() && cfg.roots.size() == 1 ? std::string( cfg.roots[0] ) : std::string();
 }
 
-inline int refuseNotFoundWithAnswer( const rw::IngestResult& ing, const rw::Config& cfg, const rw::NotFoundAnswer& answer,
+inline int refuseNotFoundWithAnswer( const rw::IngestResult& ing, const rw::Config& cfg, rw::NotFoundAnswer answer,
                                      std::string_view prefix, std::string_view spec, std::string_view retryForm )
 {
     rw::emitTo( stderr, "{}{}{}{}\n", prefix, spec, rw::notFoundRenameClause( answer.near ), rw::selectorFaultClause( ing, spec, retryForm ) );
+    answer.refused = rw::refusedMatchCount( ing, spec );   // js-def-naming fix 1: several definitions fit and none was chosen: refused=N beside found=0
     rw::writeNotFoundAnswer( stdout, answer, cfg.json );
     return 1;
 }
