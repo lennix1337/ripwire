@@ -16,6 +16,7 @@
 #     c_param.py     def call_param(g): g()                             a parameter shadows the import
 #     c_local.py     g = other ; g()                                    a local assignment shadows it
 #     c_rebind.py    g = len (module scope) ; g()                       a later module-scope rebinding
+#     c_dynamic.py   globals()["g"] = len                               a dynamic namespace write may rebind any name
 #     c_star.py      … from starsrc import * ; g()                      a star import may bind g after the rename
 #     c_twomod.py    try m / except: m2, both `f as g`                  two modules: never chosen
 #     c_fnimport.py  the import sits in another def                     not bound where the call runs
@@ -48,7 +49,7 @@ callees(){ ( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --callees="$1" --lege
 # ── 0. presence: every fixture file parses (a fixture that fails to parse would pass the near misses inert) ──
 ( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --skipped --legend=compact ) >"$TMP/skipped" 2>/dev/null
 perl -pe 's/<!--.*?-->//g' "$TMP/skipped" >"$TMP/skipped.body"
-if ! grep -q 'degraded_parse="0"' "$TMP/skipped.body" || ! grep -q 'indexed="24"' "$TMP/skipped.body" || grep -q '<f \|<h ' "$TMP/skipped.body"; then no "a fixture file was skipped or degraded"; sed 's/^/        | /' "$TMP/skipped" | head -5
+if ! grep -q 'degraded_parse="0"' "$TMP/skipped.body" || ! grep -q 'indexed="25"' "$TMP/skipped.body" || grep -q '<f \|<h ' "$TMP/skipped.body"; then no "a fixture file was skipped or degraded"; sed 's/^/        | /' "$TMP/skipped" | head -5
 else ok "every fixture file indexed with no parse degrade"; fi
 
 # ── 1. positive arms ──
@@ -69,7 +70,7 @@ if grep -q 'n="call_plain"' "$TMP/callers" && grep -q 'n="call_cond"' "$TMP/call
 else no "--callers=m.py:f misses an aliased caller"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/callers"; fi
 
 # ── 2. near misses: never m.py's f ──
-for c in call_param call_local call_rebind call_star call_twomod call_fnimport call_inner call_disagree call_reexport call_nested call_external call_twice; do
+for c in call_param call_local call_rebind call_dynamic call_star call_twomod call_fnimport call_inner call_disagree call_reexport call_nested call_external call_twice; do
     callees "$c"
     if grep -q 'p="m.py:1"\|p="m2.py:1"\|p="m.py:10"\|p="m3.py\|p="jsonish.py' "$TMP/$c"; then
         no "$c: bound through the renamed import (must stay undecided)"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/$c"
