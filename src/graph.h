@@ -1878,14 +1878,6 @@ inline bool javaLeadingShadowed( const FieldNarrowTables& t, NodeId from, std::s
     return false;
 }
 
-// does any of these byte spans hold the byte `at` (a site-spanned local binding's reach)? ONE answer for the JS shadow table and the Python
-// renamed-import pin: a span is [startByte, endByte).
-template<typename Spans>
-inline bool varSpansCover( const Spans& spans, std::uint32_t at ) noexcept
-{
-    return std::ranges::any_of( spans, [ at ]( const VarSpan& s ) { return at >= s.startByte && at < s.endByte; } );
-}
-
 // Prove a Java method-reference receiver is a type, not a value, and RETURN the type it names —
 // the receiver's LAST segment, which is the type the member must be resolved against. Empty view
 // ⇒ not proven; a proof never yields an empty name, so the two are distinguishable.
@@ -5742,7 +5734,8 @@ struct FalseEdgeRules
     bool shadowedAt( const Reference& r, std::string_view name ) const
     {
         const auto it = shadows.find( fileNameKey( key, r.fileId, name ) );
-        return it != shadows.end() && varSpansCover( it->second, r.startByte );
+        return it != shadows.end()
+            && std::any_of( it->second.begin(), it->second.end(), [ & ]( const VarSpan& s ) { return r.startByte >= s.startByte && r.startByte < s.endByte; } );
     }
     // the file binds `name` at this site: an import or alias of it, or a declaration whose scope holds the site
     bool jsFileBinds( const Reference& r, std::string_view name ) const
@@ -7607,13 +7600,20 @@ inline void pythonImportedBases( const BaseEvidenceTables& t, const Reference& r
 // PY-IMPORT-ALIAS-CALL: what pythonRenamedImportPin reads. `renamed`: "<fileId>#y" → the member a module-scope `from m import x as y`
 // (y != x) renames, for every Python file where EVERY import of y is that one module-scope rename; "" (poisoned) when any import of y in the
 // file is another form, another member, or sits inside a def or class. Built from the shared binds channel's Import records (emitCapturedImportBind:
-// "from:x"). `shadows`: "<fromSymbol>#y" → the byte span of every site-spanned local binding of y in that def (a comprehension target, a lambda
+// "from:x"). `shadows`: the byte span of every site-spanned local binding of an alias y in a def (a comprehension target, a lambda
 // parameter: the receiver-evidence records localNameSet skips).
+struct PythonAliasShadow
+{
+    NodeId      sym;    // the def holding the binding
+    std::string var;    // the bound name (an alias of a renamed import in that file)
+    VarSpan     span;   // [startByte, endByte): where the name is the comprehension target or lambda parameter
+};
+
 struct PythonRenamedImports
 {
-    HashMap<std::string, std::string>              renamed;
-    HashMap<std::string, rw::SmallVec<VarSpan, 1>> shadows;
-    [[nodiscard]] bool empty() const noexcept { return renamed.empty(); }
+    HashMap<std::string, std::string> renamed;
+    std::vector<PythonAliasShadow>    shadows;
+    [[nodiscard]] bool                empty() const noexcept { return renamed.empty(); }
 };
 
 inline PythonRenamedImports buildPythonRenamedImports( const IngestResult& ing )
@@ -7644,18 +7644,10 @@ inline PythonRenamedImports buildPythonRenamedImports( const IngestResult& ing )
         if( b.kind == LocalBindKind::RecvType && b.fromSymbol != kNoNode && !b.var.empty() && b.fileId < ing.files.size()
             && out.renamed.contains( fileNameKey( key, b.fileId, b.var ) ) )
         {
-            out.shadows[ fileNameKey( key, b.fromSymbol, b.var ) ].push_back( VarSpan{ b.spanStart, b.spanEnd } );
+            out.shadows.push_back( PythonAliasShadow{ b.fromSymbol, b.var, VarSpan{ b.spanStart, b.spanEnd } } );
         }
     }
     return out;
-}
-
-// does a site-spanned local binding of `name` in def `sym` cover the byte `at`? (A whole-def binding of every other form is a VarDecl: hasLocal.)
-inline bool pythonSpannedLocalCovers( const PythonRenamedImports& t, NodeId sym, std::string_view name, std::uint32_t at )
-{
-    std::string key;
-    const auto  it = t.shadows.find( fileNameKey( key, sym, name ) );
-    return it != t.shadows.end() && varSpansCover( it->second, at );
 }
 
 // PY-IMPORT-ALIAS-CALL: the ONE definition a bare Python call `y()` reaches through `from m import x as y`, else kNoNode. Decided only
@@ -7664,7 +7656,7 @@ inline bool pythonSpannedLocalCovers( const PythonRenamedImports& t, NodeId sym,
 // namespace write: pythonModuleRebind), and no star import in the file (it may bind y after the rename); and only when m resolves to ONE
 // indexed file (memberImportFile) whose module scope binds x ONLY by that one function or class (pythonEndpointBindsOnlyByClass). A package that
 // re-exports x defines none there: no decision, the call falls to the unchanged ladder (a floor, not a guess). A comprehension target or lambda parameter
-// named y that covers the call byte is a binding too (pythonSpannedLocalCovers: the site-spanned records localNameSet skips).
+// named y that covers the call byte is a binding too (PythonRenamedImports::shadows: the site-spanned records localNameSet skips).
 inline NodeId pythonRenamedImportPin( const IngestResult& ing, const PythonRenamedImports& imports, const ExternalVetoTables& v,
                                       const ExternalVeto& veto, const HashMap<std::string, rw::SmallVec<NodeId, 2>>& byName, const Reference& r )
 {
@@ -7673,7 +7665,8 @@ inline NodeId pythonRenamedImportPin( const IngestResult& ing, const PythonRenam
     if( rit == imports.renamed.end() || r.fromSymbol == kNoNode || r.fromSymbol >= ing.symbols.size()
         || v.pythonModuleRebind.contains( key ) || v.pythonModuleRebind.contains( fileNameKey( key, r.fileId, kPythonDynamicBind ) )
         || ( r.fileId < v.pythonScopes.starTargets.size() && !v.pythonScopes.starTargets[ r.fileId ].empty() ) || veto.hasLocal( r, r.calleeName )
-        || pythonSpannedLocalCovers( imports, r.fromSymbol, r.calleeName, r.startByte ) )
+        || std::ranges::any_of( imports.shadows, [ &r ]( const PythonAliasShadow& s )
+                                 { return s.sym == r.fromSymbol && s.var == r.calleeName && r.startByte >= s.span.startByte && r.startByte < s.span.endByte; } ) )
     {
         return kNoNode;
     }
