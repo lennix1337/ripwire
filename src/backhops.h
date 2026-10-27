@@ -194,10 +194,7 @@ private:
         }
         else if( const std::string_view cls = lookup( m_recvTypes, caller, ch.root ); !cls.empty() )
         {
-            for( auto it = std::ranges::lower_bound( m_classIds, cls, sortutil::svLess, &ClassName::name ); it != m_classIds.end() && it->name == cls; ++it )
-            {
-                owners.push_back( it->id );
-            }
+            classesNamed( cls, owners );   // a class named as written binds to each same-named class-like definition
         }
         return !owners.empty() && std::ranges::all_of( owners, [ & ]( NodeId owner )
         {
