@@ -1178,6 +1178,10 @@ struct PathBridge
     bool found() const noexcept { return !hops.empty(); }
 };
 
+// The bridge crossing a forward hop of each kind takes, indexed by BackHopVia (a declined hop has no forward twin).
+inline constexpr std::array kBridgeViaOfHop = { BridgeVia::Slot, BridgeVia::SlotName, BridgeVia::Declined, BridgeVia::Container, BridgeVia::Queue, BridgeVia::NameKey };
+static_assert( kBridgeViaOfHop.size() == kBackHopViaCount, "one bridge crossing per hop kind" );
+
 // SLOT and CONTAINER crossings out of `u`: the provider's forward hops (backhops.h forwardHops, each confirmed by the target's own
 // backward hop naming u within the width bound — one copy of the join), fields first. `cross( to, via, width, stored )`
 // decides whether the target is new. A slot crossing is bounded on its callers (width) and prints its forward width
@@ -1191,15 +1195,9 @@ inline void bridgeHopCrossings( const ForwardHops& fwdHops, NodeId u, bool field
         {
             continue;
         }
-        if( fieldCalls )
-        {
-            cross( h.to, h.via == BackHopVia::Slot ? BridgeVia::Slot : BridgeVia::SlotName, h.width, h.stored );
-        }
-        else
-        {
-            const BridgeVia via = h.via == BackHopVia::Queue ? BridgeVia::Queue : h.via == BackHopVia::NameKey ? BridgeVia::NameKey : BridgeVia::Container;
-            cross( h.to, via, h.stored, 0 );   // QUEUE-HOP: a queue's readers, STRING-KEYED: a template's definitions, each as a container's
-        }
+        // a field crossing is bounded on its callers and prints the field's holders; any other (container, queue readers,
+        // a name-key template's definitions) prints its forward width as cands=
+        cross( h.to, kBridgeViaOfHop[ std::size_t( h.via ) ], fieldCalls ? h.width : h.stored, fieldCalls ? h.stored : 0u );
     }
 }
 

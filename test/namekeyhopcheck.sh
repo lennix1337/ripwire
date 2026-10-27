@@ -232,3 +232,11 @@ p = subprocess.run( [ binp, "--mcp", sh, "--no-cache" ], cwd = sh, input = req, 
 check( 'via=\\"name-key\\"' in p.stdout, "M1 MCP path_between crosses via=name-key" )
 sys.exit( fail )
 PY
+rc=$?   # the harness's own status, read immediately (checklist 14): 0 every arm passed, 1 an arm failed, anything else a crash
+fail=0
+if [ "$rc" -ne 0 ]; then
+    printf '  FAIL  the arm harness exited %s (an arm failed above, or the harness crashed)\n' "$rc"
+    fail=1
+fi
+[ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
+exit "$fail"
