@@ -34,6 +34,10 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-27, lane js-def-naming (PLACEHOLDERS; train 39 renumbers): watched text kParserVer 235 -> 238 (above lane receiver-fixes'
+#   237: a JS bare `module.exports = <anonymous fn>` is a function named by its file's stem; a module-scope `NAME = { … }` literal
+#   records LocalBindKind::JsObjectLiteral) and kCacheVersion 44 -> 45 (that appended bind kind), quality.h's two kIngest*Mirror
+#   constants with them. No watched quality.h function changed, so kQSnapCacheScheme stays. Re-pinned with UPDATE_GOLDEN=1.
 # 2026-10-27, train 38 (lanes composed-hops, queue-hop, trace-ep merged onto integration/train-37b c585f48b): RE-DERIVED ONCE
 #   with UPDATE_GOLDEN=1 on the composed tree (the two branch pins 2a76ac24… / f428b9f4… conflicted -> f9ffa1bf…). Watched text:
 #   kParserVer 233 -> 235 (rich 236; queue-hop's keyword tag on a Python queue call, its placeholder 228) and quality.h's
