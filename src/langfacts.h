@@ -28,6 +28,8 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <span>
+#include <string_view>
 
 namespace rw
 {
@@ -39,6 +41,34 @@ struct Must
     T value;
     constexpr Must( T v ) noexcept : value( v ) {}   // implicit on purpose: `.lang = Lang::Cpp` spells the row's key
     constexpr operator T() const noexcept { return value; }
+};
+
+/// Lane qn-input: how a WRITTEN seed prefix names this language's module (graph.h resolveAllByWrittenSpelling). FilePath: the
+/// prefix's head names directories or the file stem of the definition's path, verbatim (`-` read as `_`), and the module — the
+/// one-entity identity — is the file. PackageDir: the same reading, but the module is the directory (Go: a package is its
+/// directory, so build-tag twins are one entity). ConstantPath: FilePath, and a CamelCase segment also reads as its snake_case
+/// file or directory name (Ruby's loader convention: `Shop::Cart` in shop/cart.rb). SourceChain: no path is read; the
+/// definition's enclosing namespaces and classes plus its written qualifier, off the source, are the module (C, C++). DirsOnly:
+/// FilePath without the stem — a file is not a namespace (Swift, Kotlin, Java, C#: `Foo.bar` never names a top-level `bar` in Foo.swift).
+enum class WrittenModuleRule : std::uint8_t
+{
+    FilePath,
+    PackageDir,
+    ConstantPath,
+    SourceChain,
+    DirsOnly,
+};
+
+/// Lane fc2-lego-extparent: which of the file's own import facts can show that an extends / implements clause names a type
+/// from OUTSIDE the tree (graph.h baseBoundOutsideTree), so no in-tree namesake is listed as its base. None: the language's
+/// imports cannot rule one out here (a C# `using`, a Swift `import`, a C++ include: the clause keeps its by-name edge).
+enum class BaseImportEvidence : std::uint8_t
+{
+    None,           // no import fact read
+    PythonImport,   // `from ext import Base` / `import ext` + `ext.Base`: the Phase-5 import verdict ('x' = every binding outside)
+    JsImport,       // `import { Base } from 'lib'` (the import tables' External outcome) / `lib.Base` (the qualifier verdict)
+    RustUse,        // `use ext::Base;` whose first segment is not crate/self/super/an in-tree module (FE-A rustOutsideUse)
+    JvmImport,      // `import org.ext.Base` / `extends org.ext.Base` of a package the tree does not declare
 };
 
 /// What shared code asks about a language. Every optional column is false for a language that says nothing.
@@ -77,6 +107,59 @@ struct LangFacts
     /// (verbs_quality.h; pinned by test/qddegradecheck.sh (E3)).
     bool defectShapeNeedsMacroSet = false;
 
+    /// Rust: a trait's bodyless method signature is no definition the index keeps (only a bodied default is), so a trait's contract
+    /// cannot be read off its members. The dispatch tier (ifacedispatch.h) takes the implementors' methods of the called name without
+    /// it, and leaves a standard-member name (`clone`, `iter`: graph.h StdMemberGate) to the name tiers as before.
+    bool contractSignaturesUnindexed = false;
+
+    /// Rust: a type's methods for a trait sit in that trait's own `impl T for X` block, apart from its inherent `impl X` methods,
+    /// and a call through `dyn T` / `impl T` / a `T` bound reaches only the former and T's defaults (ingest_relations.h records each
+    /// trait impl block as an ImplBlock binding; ifacedispatch.h keeps the candidates inside one).
+    bool traitImplBlocks = false;
+
+    /// Go, TypeScript, JavaScript: a type conforms to an interface (TS: to any object type) by its members alone, with no clause
+    /// naming it — an object literal, a structurally matching class — so an implements list is never the whole set, and one
+    /// candidate is never the only implementor (ifacedispatch.h: a list of two or more is still declined, as a floor).
+    bool structuralTyping = false;
+
+    /// Java: a lambda or a method reference implements any interface with exactly one abstract method, with no class the index
+    /// keeps, so such an interface's implementors list is open (ifacedispatch.h). Kotlin opts in per interface (`fun interface`,
+    /// recorded at ingest as an anonymous implementor) and, below, through Java.
+    bool samLambdas = false;
+
+    /// Kotlin: a Java file passes a lambda to ANY Kotlin interface with one abstract method (in bytecode it is a plain Java
+    /// interface, `fun interface` or not), so with a samLambdas-language file in the tree such an interface's implementors list is
+    /// open too (ifacedispatch.h). A Kotlin-only tree is unchanged.
+    bool samFromJavaLambdas = false;
+
+    /// Kotlin: `run`, `let`, `apply`, `also` and `with` are stdlib scope functions, and a call to one with a trailing lambda is
+    /// that function, never a Java or other-language method of the same name (graph.h FE-A, kotlinScopeDecide; the call-site fact
+    /// is captured in ingest_sidecap.h).
+    bool trailingLambdaScopeFns = false;
+
+    /// Python: unittest, Django and pytest call setUp, tearDown, setup_method and the other test-framework hooks themselves
+    /// (quality.h pythonFrameworkInvokedSymbol).
+    bool frameworkEntryHooks = false;
+
+    /// Python: a closure inside a method can call `self.hook()` / `cls.hook()` for its host, so a receiver-bound call dispatches
+    /// through the host's overrides (quality.h pythonReceiverParameters, pythonDispatchRequests). A separate fact from the hooks.
+    bool closureReceiverDispatch = false;
+
+    /// Kotlin: an `interface` is a class_declaration like a class (queries/kotlin/tags.scm: "both land here as @definition.class"),
+    /// so the symbol's kind cannot tell the two apart; shared code that needs an interface (ifacedispatch.h's lambda test) reads a
+    /// class of such a language as a possible one.
+    bool interfaceReadsAsClass = false;
+
+    /// Java: the member names that never count toward an interface's single abstract method (JLS 9.8: a public method of
+    /// java.lang.Object an interface redeclares, as java.util.Comparator does equals). Names only; an overload is still ignored,
+    /// which can only open more lists. Empty for a language with no such rule.
+    std::span<const std::string_view> samIgnoredMembers = {};
+
+    /// Java, Kotlin: an expression can implement an interface or extend a class anonymously (`new T() { … }`, `object : T { … }`;
+    /// Kotlin's `fun interface` lets a lambda do it), recorded at ingest as an ImplBlock binding with no implementor name, which
+    /// opens that type's implementors list (ingest_binds.h anonymousImplementorOf).
+    bool anonymousImplementors = false;
+
     /// Markdown: a link targets a section, so shared graph code treats this language's sections as link targets (graph.h).
     bool linkSections = false;
 
@@ -85,33 +168,87 @@ struct LangFacts
     /// decides only the closure relation, no symbol or edge). A lambda or a block is anonymous, and a C++ local class's
     /// methods sit inside the class's scope, not directly in the function, so neither is a closure either way.
     bool noNestedNamedFunctions = false;
+
+    /// Rust: a construction is a call to the type's conventional constructor METHOD (`T::new( … )`), not to the type itself, so
+    /// --affected's class-new backstop (testmap.h classNewTestRows) reads a call to this method of a class as building it. Empty =
+    /// the language constructs by calling the class (`new T(` JS/TS/Java/C#, `T(` Python/Kotlin/C++), which needs no column.
+    std::string_view constructorMethod = {};
+
+    /// TypeScript / JavaScript: a construction (`new X()`, `new N.X()`) builds whatever its import binding resolves to, so --affected's
+    /// class-new row takes its l= only from a construction the import resolver pins to the reached class (testmap.h ClassNewJsBinds,
+    /// graph.h pinJsImport), never from the written name. The other languages keep the name test (classNewCallNames).
+    bool importBoundConstruction = false;
+
+    /// QUALNAME-1 (src/memberowner.h): the separator a member row prints between its owner and its name, as the language itself
+    /// spells a member: `Owner::name` in C, C++, Rust and PHP (scope resolution; PHP methods store no scope today, so none prints), `Owner#name` in Ruby (the instance-method form
+    /// RDoc uses; a `def self.x` singleton prints `#` too, since the index does not tell the two apart), `Owner.name` elsewhere.
+    /// Every spelling is one the selectors resolve (graph.h resolveAllByScopeQualified / resolveAllByDottedScope).
+    std::string_view memberSeparator = ".";
+
+    /// Kotlin, C#: a method name may be overloaded and the index keeps no call-comparable arity for it (ingest_metrics.h
+    /// cc_paramShape's language gate; Java has one), so the dispatch tier cannot tell an override from an overload by its
+    /// parameter count (receiverevidence.h overloadedAbove; lane L6, folded from a `Lang::` compare in train 33).
+    bool overloadsWithoutArity = false;
+
+    /// The import facts that can prove a base clause names an outside type (BaseImportEvidence; graph.h baseBoundOutsideTree).
+    BaseImportEvidence baseImportEvidence = BaseImportEvidence::None;
+
+    /// C, C++, Objective-C: a file sees every file its #includes reach, transitively (a header's own #include is in force in
+    /// the includer), so the by-name hedge's import rule (pathgaps.h NamesakeRule, K5 rule 2b) follows the include closure;
+    /// every other language's import names one module, so that rule reads the direct import edge only.
+    bool transitiveIncludes = false;
+
+    /// JavaScript, TypeScript: a bare call by a name whose binding is WRITTEN in its scope (`Eng = Foo; new Eng()`) is undecided —
+    /// it names neither the declaration nor a same-spelled definition — so it binds nothing (FC3: the LocalBindKind::JsRebind
+    /// records of ingest_jsimports.h captureJsRebindFacts, read by graph.h buildGraph).
+    bool writtenBindingUndecided = false;
+
+    /// How a written seed prefix names this language's module (WrittenModuleRule above).
+    WrittenModuleRule writtenModule = WrittenModuleRule::FilePath;
+
+    /// TypeScript: a `namespace` / `module` body holds members the index stores no owner for (the Namespace binds, model.h), so the
+    /// written-spelling tier (graph.h resolveAllByWrittenSpelling) reads the body's name off those binds. The other languages' owners are symbols.
+    bool namespaceBodies = false;
+
+    /// TypeScript, JavaScript: an object literal's members are indexed with no owner (an unnamed container), so the written-spelling
+    /// tier treats such a member as a candidate whose object name is unknown (graph.h resolveAllByWrittenSpelling).
+    bool objectLiteralMembers = false;
 };
+
+/// java.lang.Object's public methods an interface may redeclare abstract (LangFacts::samIgnoredMembers).
+inline constexpr std::array<std::string_view, 3> kJavaObjectMethods = { "equals", "hashCode", "toString" };
 
 /// The rows, one per Lang in enum order. A language says only the facts it has.
 inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
-    { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true },
-    { .lang = Lang::Python },
-    { .lang = Lang::TypeScript, .overloadSignatures = true },
-    { .lang = Lang::Go },
-    { .lang = Lang::Rust },
-    { .lang = Lang::Swift },
-    { .lang = Lang::ObjC, .noNestedNamedFunctions = true },
+    { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true, .memberSeparator = "::",
+      .transitiveIncludes = true, .writtenModule = WrittenModuleRule::SourceChain },
+    { .lang = Lang::Python, .frameworkEntryHooks = true, .closureReceiverDispatch = true, .baseImportEvidence = BaseImportEvidence::PythonImport },
+    { .lang = Lang::TypeScript, .overloadSignatures = true, .structuralTyping = true, .importBoundConstruction = true, .baseImportEvidence = BaseImportEvidence::JsImport,
+      .writtenBindingUndecided = true, .namespaceBodies = true, .objectLiteralMembers = true },
+    { .lang = Lang::Go, .structuralTyping = true, .writtenModule = WrittenModuleRule::PackageDir },
+    { .lang = Lang::Rust, .contractSignaturesUnindexed = true, .traitImplBlocks = true, .constructorMethod = "new", .memberSeparator = "::", .baseImportEvidence = BaseImportEvidence::RustUse },
+    { .lang = Lang::Swift, .writtenModule = WrittenModuleRule::DirsOnly },
+    { .lang = Lang::ObjC, .noNestedNamedFunctions = true, .transitiveIncludes = true },
     { .lang = Lang::Markdown, .linkSections = true },
-    { .lang = Lang::JavaScript },
+    { .lang = Lang::JavaScript, .structuralTyping = true, .importBoundConstruction = true, .baseImportEvidence = BaseImportEvidence::JsImport,
+      .writtenBindingUndecided = true, .objectLiteralMembers = true },
     { .lang = Lang::Bash },
-    { .lang = Lang::Java },
-    { .lang = Lang::Ruby, .classObjectLookup = true, .mixinAncestry = true, .keepsUnshapedSubscript = true, .constantPathReceiver = true },
+    { .lang = Lang::Java, .samLambdas = true, .samIgnoredMembers = kJavaObjectMethods, .anonymousImplementors = true, .baseImportEvidence = BaseImportEvidence::JvmImport,
+      .writtenModule = WrittenModuleRule::DirsOnly },
+    { .lang = Lang::Ruby, .classObjectLookup = true, .mixinAncestry = true, .keepsUnshapedSubscript = true, .constantPathReceiver = true,
+      .memberSeparator = "#", .writtenModule = WrittenModuleRule::ConstantPath },
     { .lang = Lang::Unknown },
     { .lang = Lang::Json },
-    { .lang = Lang::CSharp },
-    { .lang = Lang::C, .noNestedNamedFunctions = true },
+    { .lang = Lang::CSharp, .overloadsWithoutArity = true, .writtenModule = WrittenModuleRule::DirsOnly },
+    { .lang = Lang::C, .noNestedNamedFunctions = true, .memberSeparator = "::", .transitiveIncludes = true, .writtenModule = WrittenModuleRule::SourceChain },
     { .lang = Lang::Toml },
     { .lang = Lang::Yaml },
-    { .lang = Lang::Php },
+    { .lang = Lang::Php, .memberSeparator = "::" },
     { .lang = Lang::Lua },
     { .lang = Lang::Elixir, .hasInertQuoteRegions = true },
     { .lang = Lang::Dart },
-    { .lang = Lang::Kotlin },
+    { .lang = Lang::Kotlin, .samFromJavaLambdas = true, .trailingLambdaScopeFns = true, .interfaceReadsAsClass = true, .anonymousImplementors = true, .overloadsWithoutArity = true,
+      .baseImportEvidence = BaseImportEvidence::JvmImport, .writtenModule = WrittenModuleRule::DirsOnly },
     { .lang = Lang::GDScript },
     { .lang = Lang::Clojure },
 } };

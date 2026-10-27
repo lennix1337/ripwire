@@ -30,6 +30,7 @@
 #include "arch.h"               // fnv1a64
 #include "pathguard.h"          // CWE-59/367: rw::pathguard::openNoFollowTruncate — writeBaseline truncates, so its open must refuse a link atomically
 #include "gitmine.h"            // shSingleQuote + gitFileCommitCountsInDayWindow — short-horizon-churn window mining
+#include "diffhunks.h"          // DiffHunk + gitDiffHunksVsHead + diffHunksMemoized — THE zero-context hunk primitive (extracted from this header 2026-09-27; situ.h's change-set narrowing is its second consumer)
 #include "docparse.h"           // docparse::detail::readWholeFile — THE canonical whole-file byte read (commentcoherence.h names it that); reused rather than re-rolled, see forEachSymbolBody
 #include "filter.h"             // B10.1a: isTestPath — the general test-dir convention behind isTestScriptPath
 #include "memguard.h"           // #387: loadRefTree reads the hard line between a commit's ingest and its graph
@@ -817,6 +818,45 @@ inline bool languageInvokedSymbol( const Symbol& s ) noexcept
     return false;
 }
 
+// Python test-framework hook names, ONE table per framework (CONTRIBUTING: one place per feature family). Two consumers read
+// them: pythonFrameworkInvokedSymbol below (the --quality-delta dead set) and pythonRunnerRoot (--dead-code / --safe-delete).
+//   kXunitHooks           pytest's xunit-style fixtures, collected from a test module with no call in the tree
+//   kUnittestHooks        unittest/Django TestCase methods the runner calls around a test (class scope)
+//   kUnittestModuleHooks  unittest's module-level entry points
+inline constexpr std::array<std::string_view, 8> kXunitHooks = { "setup_module", "teardown_module", "setup_function", "teardown_function",
+                                                                  "setup_class",  "teardown_class",  "setup_method",   "teardown_method" };
+inline constexpr std::array<std::string_view, 8> kUnittestHooks = { "setUp",         "tearDown",     "setUpClass", "tearDownClass",
+                                                                    "setUpTestData", "runTest",      "asyncSetUp", "asyncTearDown" };
+inline constexpr std::array<std::string_view, 3> kUnittestModuleHooks = { "setUpModule", "tearDownModule", "load_tests" };
+
+// Python test-framework entry points (#228). unittest and Django's TestCase call the kUnittestHooks names around tests, the
+// kUnittestModuleHooks names around a module, and run every test* method as a test. Pytest runs test_* too, and calls the
+// kXunitHooks names (setup_method, teardown_module, ...) of a test module. No call in the indexed tree names them, so zero
+// in-edges says nothing. Name-level, like the dunder rule in languageInvokedSymbol: errs toward live. The test* and xunit
+// clauses also need a test module (isTestPath, or Django's tests.py), so a helper named testSomething or setup_method in
+// application code still reads as dead. Not covered, still reported: pytest's conftest hooks (pytest_configure ...).
+// @pytest.fixture functions need no clause here: a decorated def is handed to its decorator as a value (ingest_valuerefs.h
+// emitDecorators), so --quality-delta never reports one, and --dead-code lists none (pythonDecoratedDef, decorated-excluded=).
+inline bool pythonFrameworkInvokedSymbol( const Symbol& s, std::string_view p ) noexcept
+{
+    if( !langFacts( s.lang ).frameworkEntryHooks || ( s.kind != SymKind::Method && s.kind != SymKind::Function ) )
+    {
+        return false;
+    }
+    const std::string_view n = s.name;
+    if( std::ranges::contains( kUnittestHooks, n ) || std::ranges::contains( kUnittestModuleHooks, n ) )
+    {
+        return true;
+    }
+    if( n.substr( 0, 4 ) != "test" && !std::ranges::contains( kXunitHooks, n ) )
+    {
+        return false;
+    }
+    const std::size_t      sl = p.rfind( '/' );
+    const std::string_view fn = sl == std::string_view::npos ? p : p.substr( sl + 1 );
+    return isTestPath( p ) || fn == "tests.py";
+}
+
 // A "dead deletion-candidate": has a body, no caller in the indexed tree, not invoked from file scope, not
 // invoked by the LANGUAGE itself (languageInvokedSymbol, above), not a test fixture, not produced by a
 // registered self-registering macro. A SIMPLE,
@@ -864,6 +904,10 @@ inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
         return false; // Q-DIAL-2: the LANGUAGE calls it — see languageInvokedSymbol (this replaced a blanket header exclusion)
     }
     const std::string_view p = rootRelPath( ing, s.fileId );   // #228: a directory above the root never decides this
+    if( pythonFrameworkInvokedSymbol( s, p ) )
+    {
+        return false; // #228: unittest/Django/pytest call this by protocol (see pythonFrameworkInvokedSymbol)
+    }
     if( isFixturePath( p ) )
     {
         return false; // fixtures are dead by design (noise rules)
@@ -1203,8 +1247,29 @@ inline void forEachSymbolBody( const IngestResult& ing, Fn&& visit )
     }
 }
 
-// Direct Python class members only; module-level and nested functions have no class owner.
-inline std::vector<NodeId> pythonMethodOwners( const IngestResult& ing )
+// Direct Python class members get an owner: the enclosing class. A def nested inside a method gets a host: the
+// nearest enclosing method, whose self/cls it reads as a free variable. Module-level functions have neither.
+struct PythonScopes
+{
+    std::vector<NodeId> owner;
+    std::vector<NodeId> host;
+};
+
+// Records one definition's enclosing scope: a class makes it a direct member; a method, or a closure in one, makes
+// the nearest method its host.
+inline void pythonRecordParent( PythonScopes& scopes, const IngestResult& ing, NodeId id, NodeId parent ) noexcept
+{
+    if( ing.symbols[parent].kind != SymKind::Class )
+    {
+        scopes.host[id] = scopes.owner[parent] != kNoNode ? parent : scopes.host[parent];
+    }
+    else if( ing.symbols[id].kind != SymKind::Class )
+    {
+        scopes.owner[id] = parent;
+    }
+}
+
+inline PythonScopes pythonMethodOwners( const IngestResult& ing )
 {
     const bool hasClasses = std::any_of( ing.symbols.begin(), ing.symbols.end(), []( const Symbol& s )
     {
@@ -1214,7 +1279,9 @@ inline std::vector<NodeId> pythonMethodOwners( const IngestResult& ing )
     {
         return {};
     }
-    std::vector<NodeId> owner( ing.symbols.size(), kNoNode );
+    PythonScopes scopes;
+    scopes.owner.assign( ing.symbols.size(), kNoNode );
+    scopes.host.assign( ing.symbols.size(), kNoNode );
     SymbolsByFile byFile = symbolsByFileInIdOrder( ing, []( const Symbol& s )
     {
         return s.lang == Lang::Python && ( s.kind == SymKind::Class || s.kind == SymKind::Function || s.kind == SymKind::Method );
@@ -1239,50 +1306,85 @@ inline std::vector<NodeId> pythonMethodOwners( const IngestResult& ing )
             {
                 parents.pop_back();
             }
-            if( s.kind != SymKind::Class && !parents.empty() && ing.symbols[parents.back()].kind == SymKind::Class )
+            if( !parents.empty() )
             {
-                owner[id] = parents.back();
+                pythonRecordParent( scopes, ing, id, parents.back() );
             }
             parents.push_back( id );
         }
     }
-    return owner;
+    return scopes;
 }
 
-// Python VarDecl bindings are parameter names in source order (emitBindings); the first one
-// identifies the conventional receiver. Reuse those AST facts, including commented/typed parameters.
-// A non-receiver first parameter is marked 3 so a later parameter named cls cannot replace it.
-inline std::vector<std::uint8_t> pythonReceiverParameters( const IngestResult& ing )
+// The conventional receiver of each Python def and the receiver names it binds as parameters. Parameters are
+// VarDecl bindings in source order (emitBindings). kind: 1 self, 2 cls, 3 a first parameter that is neither, 0 none;
+// the first parameter decides it, so a later parameter named cls cannot replace it. bound: bit 1 self, bit 2 cls,
+// wherever the name sits in the list.
+struct PythonReceivers
 {
-    std::vector<std::uint8_t> receiver( ing.symbols.size(), 0 );
+    std::vector<std::uint8_t> kind;
+    std::vector<std::uint8_t> bound;
+};
+
+inline PythonReceivers pythonReceiverParameters( const IngestResult& ing )
+{
+    PythonReceivers receivers;
+    receivers.kind.assign( ing.symbols.size(), 0 );
+    receivers.bound.assign( ing.symbols.size(), 0 );
     for( const Binding& b : ing.bindings )
     {
-        if( b.fromSymbol >= receiver.size() || ing.symbols[b.fromSymbol].lang != Lang::Python
-            || b.kind != LocalBindKind::VarDecl || b.spanStart != 0 || b.spanEnd != 0 || receiver[b.fromSymbol] != 0 )
+        if( b.fromSymbol >= receivers.kind.size() || !langFacts( ing.symbols[b.fromSymbol].lang ).closureReceiverDispatch
+            || b.kind != LocalBindKind::VarDecl || b.spanStart != 0 || b.spanEnd != 0 )
         {
             continue;
         }
-        receiver[b.fromSymbol] = b.var == "self" ? 1 : b.var == "cls" ? 2 : 3;
+        const std::uint8_t name = b.var == "self" ? 1 : b.var == "cls" ? 2 : 0;
+        receivers.bound[ b.fromSymbol ] |= name;
+        if( receivers.kind[ b.fromSymbol ] == 0 )
+        {
+            receivers.kind[ b.fromSymbol ] = name != 0 ? name : 3;
+        }
     }
-    return receiver;
+    return receivers;
 }
 
-// Deduplicate receiver-call evidence before walking inheritance; repeated call sites have the same
-// possible targets. Views borrow the ingested reference names for this one snapshot computation.
+// The method whose receiver a self./cls. call reads, or kNoNode. A method reads its own receiver. A closure nested
+// in a method reads the enclosing method's, unless the closure binds that receiver name itself. The method's receiver
+// must be the conventional one: self for ThisObj, cls for the NamedVar cls.
+inline NodeId pythonReceiverScope( const PythonScopes& scopes, const PythonReceivers& receivers, const Reference& r ) noexcept
+{
+    const std::uint8_t want  = r.recv == RecvKind::ThisObj ? 1 : 2;
+    NodeId             scope = kNoNode;
+    if( scopes.owner[ r.fromSymbol ] != kNoNode )
+    {
+        scope = r.fromSymbol;
+    }
+    else if( scopes.host[ r.fromSymbol ] != kNoNode && ( receivers.bound[ r.fromSymbol ] & want ) == 0 )
+    {
+        scope = scopes.host[ r.fromSymbol ];
+    }
+    return scope != kNoNode && receivers.kind[ scope ] == want ? scope : kNoNode;
+}
+
+// Deduplicate receiver-call evidence before walking inheritance; repeated call sites have the same possible targets.
+// Views borrow the ingested reference names for this one snapshot computation.
 inline std::vector<std::pair<NodeId, std::string_view>> pythonDispatchRequests( const IngestResult& ing,
-    std::span<const NodeId> owner, std::span<const std::uint8_t> receiver )
+    const PythonScopes& scopes, const PythonReceivers& receivers )
 {
     std::vector<std::pair<NodeId, std::string_view>> requests;
     for( const Reference& r : ing.references )
     {
-        if( r.lang != Lang::Python || r.role != RefRole::Call || r.fromSymbol >= owner.size()
-            || owner[r.fromSymbol] == kNoNode || !r.qualifier.empty()
-            || !( ( r.recv == RecvKind::ThisObj && receiver[r.fromSymbol] == 1 )
-                  || ( r.recv == RecvKind::NamedVar && r.recvVar == "cls" && receiver[r.fromSymbol] == 2 ) ) )
+        const bool selfOrCls = r.recv == RecvKind::ThisObj || ( r.recv == RecvKind::NamedVar && r.recvVar == "cls" );
+        if( !langFacts( r.lang ).closureReceiverDispatch || r.role != RefRole::Call || r.fromSymbol >= scopes.owner.size()
+            || !r.qualifier.empty() || !selfOrCls )
         {
             continue;
         }
-        requests.emplace_back( owner[r.fromSymbol], r.calleeName );
+        const NodeId scope = pythonReceiverScope( scopes, receivers, r );
+        if( scope != kNoNode )
+        {
+            requests.emplace_back( scopes.owner[ scope ], r.calleeName );
+        }
     }
     std::sort( requests.begin(), requests.end(), []( const auto& a, const auto& b )
     {
@@ -1310,11 +1412,12 @@ inline std::vector<NodeId> pythonDispatchClasses( const Graph& g, NodeId base )
 // This is conservative liveness, not a model of Python's MRO, descriptors, or monkey-patching.
 inline std::vector<NodeId> pythonDispatchedMethodIds( const IngestResult& ing, const Graph& g )
 {
-    const std::vector<NodeId> owner = pythonMethodOwners( ing );
-    if( owner.empty() )
+    const PythonScopes scopes = pythonMethodOwners( ing );
+    if( scopes.owner.empty() )
     {
         return {};
     }
+    const std::vector<NodeId>& owner = scopes.owner;
     HashMap<NodeId, std::vector<NodeId>> methods;
     methods.reserve( 32 );
     for( NodeId i = 0; i < owner.size(); ++i )
@@ -1324,9 +1427,9 @@ inline std::vector<NodeId> pythonDispatchedMethodIds( const IngestResult& ing, c
             methods[ owner[i] ].push_back( i );
         }
     }
-    const std::vector<std::uint8_t> receiver = pythonReceiverParameters( ing );
+    const PythonReceivers receivers = pythonReceiverParameters( ing );
     std::vector<NodeId> result;
-    for( const auto& [ base, name ] : pythonDispatchRequests( ing, owner, receiver ) )
+    for( const auto& [ base, name ] : pythonDispatchRequests( ing, scopes, receivers ) )
     {
         for( NodeId id : pythonDispatchClasses( g, base ) )
         {
@@ -2336,12 +2439,22 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
-constexpr std::uint32_t kIngestCacheVersionMirror   = 36;   // MUST equal ingest.cpp's kCacheVersion (gated); 36 = train 30 (above call-result-typing's and fcall-forward's 33, name-template-dispatch's 35, main's 34), 34 = train 29 (above lane arity-min's and call-result-typing's 33), 33 = train 29 lane arity-min: def record paramsMin (the train renumbers), 33 = lane call-result-typing: RawBind resultIndex + unwrapDepth, 33 = lane fcall-forward: ref `forwarded` byte, 35 = lane name-template-dispatch: RefRole Pattern 11, 32 = train 28: RefRole Subscript 9 + Inert 10, 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
-constexpr std::uint32_t kIngestParserVerMirror    = 220;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestCacheVersionMirror   = 44;   // MUST equal ingest.cpp's kCacheVersion (gated); 44 = train 37b (rust-degraded FileHealth::useBoundsBlanked; its placeholder 42), 43 = train 36 (#155 trailingLambda ref byte; above main 40, #438's placeholder 41, rust-degraded's 42), 40 = train 34 (fc3-js-rebind JsRebind; above main 39), 39 = train 33 (above main 36 and l6-iface 38), 38 = train 32 lane l6-iface fix round 1: LocalBindKind ImplBlock (train renumbers), 37 = train 32 lane l6-iface: LocalBindKind DispatchType (train renumbers), 36 = train 30 (above call-result-typing's and fcall-forward's 33, name-template-dispatch's 35, main's 34), 34 = train 29 (above lane arity-min's and call-result-typing's 33), 33 = train 29 lane arity-min: def record paramsMin (the train renumbers), 33 = lane call-result-typing: RawBind resultIndex + unwrapDepth, 33 = lane fcall-forward: ref `forwarded` byte, 35 = lane name-template-dispatch: RefRole Pattern 11, 32 = train 28: RefRole Subscript 9 + Inert 10, 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
+constexpr std::uint32_t kIngestParserVerMirror    = 233;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 233 = 2026-10-26 (train 37b: rust-degraded use<..> re-parse, placeholder 229/230;
+                                                          //   above train 36 231/232; see the kParserVer note)
+                                                          // 231 = 2026-10-25 (train 36: above main 226/227, #438 228, rust-degraded 229/230;
+                                                          //   see the kParserVer note)
+                                                          // 226 = 2026-10-24 (train 34: above main / #432 / ind4b 224/225, ind5 222/223,
+                                                          //   fc3 218/219; see the kParserVer note)
+                                                          // 224 = 2026-10-23 (train 33: above main 220/221, ind5 222/223, #420 214/215, fc1 216/217,
+                                                          //   ind4b 218/219, l6-iface 212/213; see the kParserVer note)
                                                           // 220 = 2026-10-22 (train 32b: above main 212/213, ix1-slot 204/205, #420 214/215,
                                                           //   #426 / fc1 216/217, ind4b 218/219, l6-iface 212/213; see the kParserVer note)
                                                           // 212 = 2026-10-21 (train 32a: above main 206/207, rust-receivers 202/203, ix1-slot
                                                           //   204/205, l6-iface 210/211; #420 reserves 214/215; see the kParserVer note)
+                                                          // 212 = 2026-10-21 (lane l6-iface fix round 1: ImplBlock records; rich 213; see the kParserVer note)
+                                                          // 210 = 2026-10-19 (train 32 lane l6-iface: DispatchType; strictly above main 206/207; see the kParserVer note)
                                                           // 206 = 2026-10-18 (#409, PR #414, renumbered again at merge: above main 196/197,
                                                           //   train 31 198/199, rust-receivers 202/203, ix1-slot 204/205; see the kParserVer note)
                                                           // 202 = lane rust-receivers (reservation 202/203; the train renumbers): Rust written-type
@@ -3513,6 +3626,9 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 //   pythonDispatchClasses     (quality.h) — downward-only inheritance reachability
 //   pythonDispatchedMethodIds  (quality.h) — Python inherited receiver-call evidence for the dead set
 //   isDeadCandidate            (quality.h) — the dead-set predicate itself
+//   pythonFrameworkInvokedSymbol (quality.h) — the framework-hook exemption isDeadCandidate calls into (#228)
+//   pythonRecordParent         (quality.h) — fills the closure host and owner that pythonReceiverScope reads (#228)
+//   pythonReceiverScope        (quality.h) — which method a self./cls. call in a closure belongs to (#228)
 //   isFixturePath              (quality.h) — a fixture-path exemption isDeadCandidate calls into
 //   isTestScriptPath           (quality.h) — the test-script exemption isDeadCandidate calls into (the exact
 //                                             helper B10.1a added without a bump — the finding this guards)
@@ -3650,7 +3766,14 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // the standard-member gate gained a Rust row (graph.h kStdMemberNames), so a Rust definition a DECLINED call could have meant is
 // no dead candidate (Graph::gateDeclinedTarget), as v15 did for the builtin-method gate. No extraction change: kParserVer and its
 // mirror stay. The producer identity already keeps this build's blobs apart; bumped 21 -> 22 so the history above stays complete.
-constexpr std::uint32_t kQSnapCacheScheme = 22;
+// v23 (2026-10-24, #228: Django/unittest hooks and closure dispatch) — no blob shape change; the dead SET's inputs moved.
+// isDeadCandidate exempts Python framework entry points (pythonFrameworkInvokedSymbol: setUp, tearDown, setUpClass,
+// tearDownClass, setUpTestData, setUpModule, tearDownModule, load_tests, and test* methods in test modules), and
+// pythonDispatchedMethodIds keeps a self./cls. call inside a closure nested in a method live: the overrides of the called name on that method's class and its subclasses.
+// The producer identity already keeps this build's blobs apart; bumped 22 -> 23 so the history above stays complete.
+// v24 (2026-10-25, train 36) — #228's v23 was the PR's placeholder; renumbered above every live value (main / train 35 / every
+// other ref 22, #437 23). No further shape change.
+constexpr std::uint32_t kQSnapCacheScheme = 24;
 constexpr char          kQSnapMagic[4]    = { 'Q', 'S', 'N', 'P' };
 
 // The qsnap EXCLUDES-config key folds the qsnap SCHEME (independent of the ingest cache's kHeadSnapCacheScheme)
@@ -6452,86 +6575,10 @@ inline void gitBlameRangeWindowCommits( const std::string& root, const std::stri
     os::pclose( pipe );
 }
 
-// One zero-context unified-diff hunk, in the two coordinate systems the SELF test needs: the OLD-side range
-// (what `git blame` is asked about) and the NEW-side range (what the symbol's working-tree line span is
-// compared against). SoA is pointless for four u32s read together — this is one cache line either way.
-struct DiffHunk
-{
-    std::uint32_t oldStart = 0;
-    std::uint32_t oldCount = 0;
-    std::uint32_t newStart = 0;
-    std::uint32_t newCount = 0;
-};
-static_assert( sizeof( DiffHunk ) == 16, "DiffHunk is a 4×u32 POD" );
-
-// P3 (r27) — the RUN-SCOPED hunk memo. `git diff --unified=0 HEAD -- <path>` is a pure function of (HEAD,
-// working tree), both FIXED for the life of one --quality-delta call (the code's own section comment says so),
-// yet the churn blame pass spawned it once PER SYMBOL: a subprocess-shim log showed EIGHT byte-identical
-// spawns for a single dirty file. Caller owns the storage (house rule — views/handles at seams, no hidden
-// process-global state that a second root or a second MCP request would silently share).
-using DiffHunkMemo = HashMap<std::string, std::vector<DiffHunk>>;
-
-// Parse `relPath`'s zero-context hunk headers vs HEAD. Degrade-only: no git / no HEAD / path absent at HEAD →
-// an EMPTY vector, which the caller reads as "no evidence" → AMBIENT (never inflates severity).
-//
-// Same ambient-config seam as the blame above, pinned for the same reason and in the same commit: a
-// configured `diff.algorithm` moves hunk BOUNDARIES (which lines land in an oldCount>0 hunk at all), and a
-// `diff.external` driver replaces this output wholesale with something these two sscanf forms cannot parse —
-// silently emptying the vector, which the caller reads as AMBIENT. Neither is a hang or an error, which is
-// what makes them worth pinning: they change a reported number with nothing on the record saying so.
-//
-// The external driver is disarmed with git's own `--no-ext-diff` flag, NOT with `-c diff.external=`: an
-// EMPTY diff.external is not "no external diff", it is an external diff whose command is the empty string,
-// and git dies trying to exec it ("error: cannot run : No such file or directory / fatal: external diff
-// died"). That mistake reads as a fix in review and shows up as every churn row silently going AMBIENT —
-// measured here as 8 gating churn rows collapsing to 0 before the flag replaced it.
-inline std::vector<DiffHunk> gitDiffHunksVsHead( const std::string& root, const std::string& relPath )
-{
-    std::vector<DiffHunk> hunks;
-    const std::string cmd = gitCmd( " -c core.quotepath=false -c diff.algorithm=myers -C " ) + shSingleQuote( root )
-                          + " diff --no-ext-diff --no-textconv --ignore-submodules=dirty --unified=0 --no-color HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
-    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
-    if( !pipe ) { DISCLOSE( "quality: churn hunk diff could not be spawned" ); return hunks; }
-
-    char buf[ 4096 ];
-    while( std::fgets( buf, sizeof( buf ), pipe ) )
-    {
-        if( buf[0] != '@' || buf[1] != '@' )
-        {
-            continue; // only hunk-header lines matter here
-        }
-        int oldStart = 0, oldCount = 1, newStart = 0, newCount = 1;
-        if( std::sscanf( buf, "@@ -%d,%d +%d,%d @@", &oldStart, &oldCount, &newStart, &newCount ) == 4 ) {}
-        else if( std::sscanf( buf, "@@ -%d,%d +%d @@", &oldStart, &oldCount, &newStart ) == 3 ) { newCount = 1; }
-        else if( std::sscanf( buf, "@@ -%d +%d,%d @@", &oldStart, &newStart, &newCount ) == 3 ) { oldCount = 1; }
-        else if( std::sscanf( buf, "@@ -%d +%d @@", &oldStart, &newStart ) == 2 ) { oldCount = 1; newCount = 1; }
-        else
-        {
-            continue; // malformed/unexpected header — skip (degrade per-hunk)
-        }
-        if( oldStart < 0 || oldCount < 0 || newStart < 0 || newCount < 0 )
-        {
-            continue; // git never emits these; refuse rather than wrap
-        }
-
-        hunks.push_back( DiffHunk{ std::uint32_t( oldStart ), std::uint32_t( oldCount ),
-                                   std::uint32_t( newStart ), std::uint32_t( newCount ) } );
-    }
-    os::pclose( pipe );
-    return hunks;
-}
-
-// Memoized accessor: one `git diff` spawn per PATH per run, not per symbol. A path with no hunks memoizes the
-// empty vector too, so a repeatedly-queried clean path costs one spawn, not N.
-inline const std::vector<DiffHunk>& diffHunksMemoized( DiffHunkMemo& memo, const std::string& root, const std::string& relPath )
-{
-    const auto it = memo.find( relPath );
-    if( it != memo.end() )
-    {
-        return it->second;
-    }
-    return memo.emplace( relPath, gitDiffHunksVsHead( root, relPath ) ).first->second;
-}
+// DiffHunk / DiffHunkMemo / gitDiffHunksVsHead / diffHunksMemoized / parseHunkHeaderLine — MOVED to
+// diffhunks.h (2026-09-27) when --situ grew the symbol-granular change set and needed the same primitive:
+// one hunk parser, both consumers (this churn lens and situ.h's change-set narrowing), zero clones. The
+// types and both per-path accessors are unchanged; churnEditWindowCommitCount below consumes them as before.
 
 // HOW MANY DISTINCT in-window COMMITS last wrote the pre-existing lines that the CURRENT uncommitted edit to
 // `relPath` (vs HEAD) modifies inside the symbol's [symStart, symStart+symLoc-1] span. See the section comment
@@ -8803,6 +8850,27 @@ inline std::string staleAcksXml( const std::vector<StaleAck>& staleAcks, EscapeF
     return out;
 }
 
+// idea #11 (lane lean-trio), shared by lane lean2b: stale= split by ack KIND as `kind:N,...`, in first-appearance order of the
+// ledger's own row order — the stale_by_kind= value of the folded CLI --quality-delta AND of the MCP quality_delta twin, so the
+// two surfaces cannot count differently. The KIND drops the ack's :new-symbol/:preexisting facet; the rows (--show-stale /
+// show_stale=true) carry it. Unescaped: each caller escapes for its own dialect.
+inline std::string staleByKindValue( const std::vector<StaleAck>& staleAcks )
+{
+    std::vector<std::pair<std::string, std::size_t>> byKind;
+    for( const StaleAck& a : staleAcks )
+    {
+        const std::string kind = a.kind.substr( 0, a.kind.find( ':' ) );
+        const auto it = std::find_if( byKind.begin(), byKind.end(), [ & ]( const auto& kv ) { return kv.first == kind; } );
+        if( it == byKind.end() ) { byKind.emplace_back( kind, 1 ); } else { ++it->second; }
+    }
+    std::string kinds;
+    for( const auto& [ kind, n ] : byKind )
+    {
+        kinds += ( kinds.empty() ? "" : "," ) + kind + ":" + std::to_string( n );
+    }
+    return kinds;
+}
+
 inline std::string staleAcksJsonArray( const std::vector<StaleAck>& staleAcks )   // returns `"sa":[...]`, ready to splice in
 {
     std::string out = "\"sa\":[";
@@ -10123,15 +10191,11 @@ inline bool pythonRunnerRoot( std::string_view path, const Symbol& s, std::strin
     const std::string_view baseName   = slash == std::string_view::npos ? path : path.substr( slash + 1 );
     const bool             pytestFile = ( baseName.starts_with( "test_" ) || baseName.ends_with( "_test.py" ) ) && baseName.ends_with( ".py" );
     const std::string_view name       = s.name;
-    constexpr std::array<std::string_view, 8> kXunitHooks = { "setup_module", "teardown_module", "setup_function", "teardown_function",
-                                                              "setup_class",  "teardown_class",  "setup_method",   "teardown_method" };
-    constexpr std::array<std::string_view, 6> kUnittestHooks = { "setUp", "tearDown", "setUpClass", "tearDownClass", "asyncSetUp", "asyncTearDown" };
-    const auto listed = []( const auto& table, std::string_view n ) noexcept { return std::find( table.begin(), table.end(), n ) != table.end(); };
-    if( pytestFile && ( name.starts_with( "test" ) || listed( kXunitHooks, name ) ) )
+    if( pytestFile && ( name.starts_with( "test" ) || std::ranges::contains( kXunitHooks, name ) ) )
     {
         return true;
     }
-    if( s.scope.empty() || !( name.starts_with( "test" ) || listed( kUnittestHooks, name ) ) )
+    if( s.scope.empty() || !( name.starts_with( "test" ) || std::ranges::contains( kUnittestHooks, name ) ) )
     {
         return false;
     }
