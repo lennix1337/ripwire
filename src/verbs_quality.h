@@ -3037,7 +3037,7 @@ std::optional<int> runQualityViews( const MainDispatch& d )
             const auto ep = rw::escapeXml( rp, dcEsc );
             rw::emitTo( stdout, " p=\"{}\" l=\"{}\"/>", std::string_view( ep.data(), ep.size() ), s.line );
         }
-        for( std::size_t testOnlyIndex = 0; dcPw.begin == 0 && testOnlyIndex < testOnly.size(); ++testOnlyIndex )   // first page only: never repeated
+        for( std::size_t testOnlyIndex = 0; cfg.pageOffset == 0 && testOnlyIndex < testOnly.size(); ++testOnlyIndex )   // first page only (offset 0): never repeated
         {
             const Symbol& s = ing.symbols[ testOnly[ testOnlyIndex ] ];
             const auto en = rw::escapeXml( s.name, dcEsc );
