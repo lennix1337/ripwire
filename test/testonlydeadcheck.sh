@@ -95,7 +95,7 @@ NONE="$( run --dead-code=pkg/public.py )"
 if printf '%s' "$NONE" | grep -q 'test-only'; then no "A9 test-only text on an answer with no <to> row"; else ok "A9 no test-only=/clause when none (present-only)"; fi
 if printf '%s' "$OUT" | grep -q 'test-only=N'; then ok "A9 the clause rides the answer that carries test-only="; else no "A9 clause missing"; fi
 P2="$( run --dead-code --limit=1 --offset=1 )"
-if printf '%s' "$P2" | grep -q '<to '; then no "A10 <to> rows repeated past the first page"; else ok "A10 <to> rows ride the first page only"; fi
+if printf '%s' "$P2" | grep -q '<to n="'; then no "A10 <to> rows repeated past the first page"; else ok "A10 <to> rows ride the first page only"; fi
 if command -v xmllint >/dev/null 2>&1; then
     if printf '%s' "$OUT" | xmllint --noout - 2>/dev/null; then ok "A11 well-formed"; else no "A11 not well-formed"; fi
     if run --dead-code --legend=full | xmllint --noout - 2>/dev/null; then ok "A11 full legend well-formed"; else no "A11 full legend not well-formed"; fi
