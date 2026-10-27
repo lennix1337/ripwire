@@ -363,7 +363,10 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
                   "spliceSlotJoinRows: the <sigs> rows and the shown ids disagree" );
         return 0;
     }
-    const ValueRefIndex vri( ing );
+    // fix1 (RSS): the NARROW index (ValueRefIndex::Narrow) — the shown functions' values and every slot store, not the whole
+    // tree's value references. RIPWIRE_SLOT_INDEX_FULL (any value) builds the full one: the A/B handle that proves the rows equal.
+    const ValueRefIndex::Narrow narrow{ fnNames };
+    const ValueRefIndex         vri( ing, std::getenv( "RIPWIRE_SLOT_INDEX_FULL" ) == nullptr ? &narrow : nullptr );
     std::vector<std::pair<std::size_t, std::string>> inserts;
     std::vector<char> esc;
     for( const std::size_t i : cand )

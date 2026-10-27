@@ -564,12 +564,23 @@ private:
 class ValueRefIndex
 {
 public:
-    explicit ValueRefIndex( const IngestResult& ing ) : m_ing( ing )
+    // fix1 (RSS): a NARROW index — what --for's slot splice (forslots.h spliceSlotJoinRows) reads, and nothing else: the Value
+    // references naming one of `names` (sorted by svLess: the shown functions), every slot STORE (a struct-field value, an argument
+    // of a registrar that stores its parameter in a field: the cands=, K and @C counts need the whole slot), every slot fact and
+    // slot call, and the Throughs those kept values join (their container, the parameter calls of their callee). Every query the
+    // splice makes answers the same as on the full index, by construction; the by-name table holds only the names they resolve.
+    struct Narrow
     {
+        std::span<const std::string_view> names;
+    };
+    explicit ValueRefIndex( const IngestResult& ing, const Narrow* narrow = nullptr ) : m_ing( ing )
+    {
+        const std::optional<KeepSets> keep = narrow == nullptr ? std::nullopt : std::optional<KeepSets>( keepSets( ing, *narrow ) );
         for( NodeId id = 0; id < ing.symbols.size(); ++id )
         {
             const Symbol& s = ing.symbols[id];
-            if( ( s.kind == SymKind::Function || s.kind == SymKind::Method ) && valueRefFamily( s.lang ) != VrLangFamily::None )
+            if( ( s.kind == SymKind::Function || s.kind == SymKind::Method ) && valueRefFamily( s.lang ) != VrLangFamily::None
+                && ( !keep.has_value() || keep->names.contains( s.name ) ) )
             {
                 m_fnByName[ s.name ].push_back( id );
             }
@@ -588,6 +599,10 @@ public:
             }
             else if( r.role == RefRole::Value )
             {
+                if( keep.has_value() && !keep->values.contains( i ) )
+                {
+                    continue;
+                }
                 m_values.push_back( i );
                 if( !r.recvVar.empty() )
                 {
@@ -596,6 +611,10 @@ public:
             }
             else if( r.role == RefRole::Through )
             {
+                if( keep.has_value() && !keep->keepsThrough( ing, r ) )
+                {
+                    continue;
+                }
                 if( scopeOf( r ) == 'p' )
                 {
                     m_throughParamBySym[ r.fromSymbol ].push_back( i );
@@ -872,6 +891,63 @@ public:
     }
 
 private:
+    // fix1 (RSS): what a Narrow index keeps (see Narrow).
+    struct KeepSets
+    {
+        HashMap<std::uint32_t, char> values;       // kept Value reference indices
+        HashMap<std::string, char>   names;        // the names resolveName looks up: kept values' callees and their bare callees
+        HashMap<std::string, char>   containers;   // "fileId#container" of the kept values
+        HashMap<NodeId, char>        paramOwners;  // a kept parameter default's function
+        bool keepsThrough( const IngestResult& ing, const Reference& t ) const
+        {
+            if( scopeOf( t ) == 'p' )
+            {
+                return paramOwners.contains( t.fromSymbol ) || ( t.fromSymbol < ing.symbols.size() && names.contains( ing.symbols[ t.fromSymbol ].name ) );
+            }
+            return containers.contains( jsImportKey( t.fileId, t.calleeName ) );
+        }
+    };
+    static KeepSets keepSets( const IngestResult& ing, const Narrow& n )
+    {
+        KeepSets                   k;
+        HashMap<std::string, char> registrars;   // functions storing a parameter in a field slot (kValueRefSlotParamScope facts)
+        for( const Reference& r : ing.references )
+        {
+            if( r.role == RefRole::Value && scopeOf( r ) == kValueRefSlotParamScope )
+            {
+                registrars.try_emplace( r.recvVar, char( 1 ) );
+            }
+        }
+        for( std::uint32_t i = 0; i < ing.references.size(); ++i )
+        {
+            const Reference& r  = ing.references[i];
+            const char       sc = scopeOf( r );
+            if( r.role != RefRole::Value || isSlotJoinRecord( r ) || sc == kValueRefDepthCutScope )
+            {
+                continue;
+            }
+            const bool named = std::ranges::binary_search( n.names, std::string_view( r.calleeName ), rw::sortutil::svLess );
+            if( !named && r.memberPath.empty() && !( sc == 'a' && registrars.contains( r.recvVar ) ) )
+            {
+                continue;
+            }
+            k.values.try_emplace( i, char( 1 ) );
+            k.names.try_emplace( r.calleeName, char( 1 ) );
+            if( sc == 'a' )
+            {
+                k.names.try_emplace( r.recvVar, char( 1 ) );
+            }
+            else if( sc == 'p' )
+            {
+                k.paramOwners.try_emplace( r.fromSymbol, char( 1 ) );
+            }
+            if( !r.recvVar.empty() )
+            {
+                k.containers.try_emplace( jsImportKey( r.fileId, r.recvVar ), char( 1 ) );
+            }
+        }
+        return k;
+    }
 
     // A value key "#N" (an argument position) or "#name" (a keyword / a parameter default) against a parameter Through.
     static bool paramMatches( std::string_view valueKey, const Reference& through ) noexcept
