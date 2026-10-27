@@ -3779,7 +3779,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     const std::string         ptKindLegend = std::string( viaNameLegend( ptMarks.via ) ) + viaLinkLegend( ptMarks.link ) + anchorMissLegend( ptMarks.miss );
     const PathEndpointBinding ptBound      = pathEndpointBinding( g, endpointDefinitionCount( ing, srcDefs ), endpointDefinitionCount( ing, dstDefs ), ptShown );   // attrib-multidef, as on the CLI
     const bool                ptHasSplit = ptMarks.split;
-    const PathTestTwin        ptTwin     = srcGlob || dstGlob ? PathTestTwin{} : pathTestTwins( ing, { srcDefs, from, ptBound.from }, { dstDefs, to, ptBound.to }, ptShown );   // zed-03, as on the CLI
+    const PathTestTwin        ptTwin     = srcGlob || dstGlob ? PathTestTwin{} : pathTestTwins( ing, g, { srcDefs, from, ptBound.from }, { dstDefs, to, ptBound.to }, ptShown );   // zed-03, as on the CLI
     const std::vector<std::string_view> ptOwners = pathHopOwners( ing, pth );   // PATH-OWNERS, as on the CLI
     const bool                ptHasOwner = ptMarks.owner;
     rw::emitTo( mem, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "

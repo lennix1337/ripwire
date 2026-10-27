@@ -14,7 +14,7 @@
 // hops) compared lexicographically — so every from= definition's best chain to that group is read off one walk, never one search
 // per pair. Bound: at most kPathPairMaxDstGroups walks (more to= groups ⇒ today's answer, unchanged) + at most
 // kPathPairBridgeSearches bridge searches (pathgaps.h pathBridge) for to= groups no chain reaches.
-// ORDER: an all-proven chain always first; then (P1 PATH-ORDER) a pair whose from= or to= OWNER is a word of the question
+// ORDER: an all-proven chain always first; then (P1 PATH-ORDER) a pair whose from= OWNER (else, when no pair has one, its to= OWNER) is a word of the question
 // (owner-hop's match key: forowner.h ownerQuestionWords / ownerFoldName — the --path argv's own words; printed qword=); then
 // the shared reach rank (graph.h reachRankBefore — --connect's terminal pick uses the same one): fewest hedged hops, then
 // fewest hops, then the tower order (the definitions' resolved order). Bridges come after every chain: a bridge is not a path.
@@ -45,6 +45,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <numeric>
 #include <queue>
@@ -335,10 +336,13 @@ inline PathPairs pathReachingPairs( const IngestResult& ing, const Graph& g, std
         std::string            f = o.empty() ? std::string() : ownerFoldName( o );
         return !f.empty() && std::binary_search( words.begin(), words.end(), f ) ? f : std::string();
     };
-    const auto markWord = [ & ]( PathPair& p )   // the from= owner's word, else the to= owner's
+    // The from= owner's word is the key; the to= owner's counts ONLY when no pair (chain or bridge) has a from= owner word. Per
+    // pair "from= else to=" let a to= owner shared by every pair (`Loop,matcher.go:scan`, scan is Matcher's) mark them all,
+    // so the all-marked clear below dropped the from= signal (rv-path-order F1). `useFromWord` is decided after the bridges.
+    bool       useFromWord = false;
+    const auto markWord    = [ & ]( PathPair& p )
     {
-        p.qword = p.chain.empty() ? std::string() : wordOf( p.chain.front() );
-        p.qword = p.qword.empty() && !p.chain.empty() ? wordOf( p.chain.back() ) : p.qword;
+        p.qword = p.chain.empty() ? std::string() : wordOf( useFromWord ? p.chain.front() : p.chain.back() );
     };
     const auto rankOf = []( const PathPair& p ) { return ReachRank{ 1, p.hedged, std::uint32_t( p.hops() ) }; };
     // proven first; then a question-word owner; then the reach rank (the header's ORDER)
@@ -348,8 +352,6 @@ inline PathPairs pathReachingPairs( const IngestResult& ing, const Graph& g, std
              : a.qword.empty() != b.qword.empty()     ? !a.qword.empty()
                                                        : reachRankBefore( rankOf( a ), rankOf( b ) );
     };
-    std::for_each( chains.begin(), chains.end(), markWord );
-    std::stable_sort( chains.begin(), chains.end(), before );
 
     std::vector<PathPair> bridges;
     for( std::size_t i = 0; i < unreachedDst.size() && i < kPathPairBridgeSearches; ++i )
@@ -377,9 +379,13 @@ inline PathPairs pathReachingPairs( const IngestResult& ing, const Graph& g, std
             nameEdges += p.bridge.via[k] == BridgeVia::Edge && pathHopHedged( g, p.bridge.hops[ k - 1 ], p.bridge.hops[k] ) ? 1u : 0u;
         }
         p.hedged = std::uint32_t( p.bridge.crossings ) + nameEdges;
-        markWord( p );
         bridges.push_back( std::move( p ) );
     }
+    const auto fromWords = [ & ]( const PathPair& p ) { return !p.chain.empty() && !wordOf( p.chain.front() ).empty(); };
+    useFromWord          = std::any_of( chains.begin(), chains.end(), fromWords ) || std::any_of( bridges.begin(), bridges.end(), fromWords );
+    std::for_each( chains.begin(), chains.end(), markWord );
+    std::for_each( bridges.begin(), bridges.end(), markWord );
+    std::stable_sort( chains.begin(), chains.end(), before );
     std::stable_sort( bridges.begin(), bridges.end(), before );
 
     out.pairs = std::move( chains );
@@ -454,22 +460,26 @@ inline constexpr std::string_view kPathPairUnlistedLegend =
     "other reaching pairs are NOT listed; next= runs the same from= to another to= definition, or qualify to= as file:name. ";
 // P1 PATH-ORDER: present only when a listed pair carries qword= (the ordering departed from the reach rank above)
 inline constexpr std::string_view kPathPairQwordLegend =
-    "qword=WORD: that pair's from= (else to=) owner equals a word of the path argument (FROM,TO as typed) (ASCII case-folded, by name, not "
-    "resolved); such pairs print first among the chains of the same proof class (all proven, or hedged), so an all-proven "
+    "qword=WORD: that pair's from= owner equals a word of the path argument (FROM,TO as typed), else its to= owner when no pair's from= owner "
+    "does (ASCII case-folded, by name, not resolved); such pairs print first among the chains of the same proof class (all proven, or hedged), so an all-proven "
     "chain still leads. ";
 // zed-03: present only when the root carries from_test= or to_test=
 inline constexpr std::string_view kPathTestTwinLegend =
     "from_test=1 / to_test=1: the bound from= / to= definition is in a test or fixture path while a definition of that "
-    "selector outside them exists; it is NOT re-picked: next= runs the path from that one instead (it takes the next= slot alt= "
-    "would use; the alt rows still print). ";
+    "selector outside them exists; it is NOT re-picked. next= (only when such a definition reaches the other endpoint) runs the "
+    "path from the nearest one that does; then the alt= / pairs_unlisted= continuation prints as alt_next= / unlisted_next= "
+    "(the alt rows still print). ";
 
-// The test twin of an answer's bound endpoints (zed-03): the first definition (tower order) outside the tests and fixtures of
-// the same selector, when the bound one is inside them; kNoNode when the bound one is outside or no such definition exists.
+// The test twin of an answer's bound endpoints (zed-03): `fromTest`/`toTest` = the bound one is inside the tests and fixtures
+// while a definition of that selector outside them exists (disclosed); `from`/`to` = the source definition that REACHES the
+// other endpoint (the nearest, one multi-source BFS), kNoNode when none does (rv-path-order F2: no unrelated namesake named).
 struct PathTestTwin
 {
+    bool             fromTest = false, toTest = false;
     NodeId           from = kNoNode, to = kNoNode;
-    std::string_view srcN, dstN;   // the argv's endpoints as typed: next= keeps the side that did not fire
-    bool any() const noexcept { return from != kNoNode || to != kNoNode; }
+    std::string_view srcN, dstN;   // the argv's endpoints as typed: next= keeps the side that did not name a twin
+    bool any() const noexcept { return fromTest || toTest; }
+    bool hasNext() const noexcept { return from != kNoNode || to != kNoNode; }
 };
 // one --path endpoint as the twin reads it: its definitions, its spelling as typed, whether the root prints its binding
 struct PathEndpointSide
@@ -484,26 +494,49 @@ inline bool pathDefInTests( const IngestResult& ing, NodeId n ) noexcept
 {
     return isTestSymbol( ing, n ) || pathTierOf( rootRelPath( ing, ing.symbols[n].fileId ) ) == PathTier::TestOrBench;
 }
-inline NodeId pathSourceTwinOf( const IngestResult& ing, std::span<const NodeId> defs, NodeId bound ) noexcept
+// one side: `fired` = the bound def is in tests and a non-test DEFINITION (never a declaration) of the selector exists; `twin` =
+// the one of those that reaches the other endpoint's definitions (shortestPathAny: proven or hedged hops; a bridge-only def is
+// not a chain, so it is not named), kNoNode when none does
+struct PathTwinSide
 {
+    bool   fired = false;
+    NodeId twin  = kNoNode;
+};
+inline PathTwinSide pathSourceTwinOf( const IngestResult& ing, const Graph& g, std::span<const NodeId> defs, std::span<const NodeId> others, NodeId bound, bool fromSide )
+{
+    PathTwinSide r;
     if( bound == kNoNode || !pathDefInTests( ing, bound ) )
     {
-        return kNoNode;
+        return r;
     }
-    const auto it = std::find_if( defs.begin(), defs.end(), [ & ]( NodeId d )
-                                  { return d != bound && isDefinitionNotDeclaration( ing.symbols[d] ) && !pathDefInTests( ing, d ); } );
-    return it == defs.end() ? kNoNode : *it;
+    std::vector<NodeId> cands;
+    std::copy_if( defs.begin(), defs.end(), std::back_inserter( cands ),
+                  [ & ]( NodeId d ) { return d != bound && isDefinitionNotDeclaration( ing.symbols[d] ) && !pathDefInTests( ing, d ); } );
+    r.fired = !cands.empty();
+    if( r.fired )
+    {
+        const std::vector<NodeId> far  = { others.begin(), others.end() };
+        const std::vector<NodeId> path = fromSide ? shortestPathAny( g, cands, far ) : shortestPathAny( g, far, cands );
+        r.twin                         = path.empty() ? kNoNode : fromSide ? path.front() : path.back();
+    }
+    return r;
 }
 // `shown`: the chain the root's from_p=/to_p= describe (pathShownChain)
-inline PathTestTwin pathTestTwins( const IngestResult& ing, const PathEndpointSide& src, const PathEndpointSide& dst, std::span<const NodeId> shown ) noexcept
+inline PathTestTwin pathTestTwins( const IngestResult& ing, const Graph& g, const PathEndpointSide& src, const PathEndpointSide& dst, std::span<const NodeId> shown )
 {
-    PathTestTwin t{ kNoNode, kNoNode, src.typed, dst.typed };
+    PathTestTwin t;
+    t.srcN = src.typed;
+    t.dstN = dst.typed;
     if( shown.empty() )
     {
         return t;
     }
-    t.from = src.bound ? pathSourceTwinOf( ing, src.defs, shown.front() ) : kNoNode;
-    t.to   = dst.bound ? pathSourceTwinOf( ing, dst.defs, shown.back() ) : kNoNode;
+    const PathTwinSide f = src.bound ? pathSourceTwinOf( ing, g, src.defs, dst.defs, shown.front(), true ) : PathTwinSide{};
+    const PathTwinSide o = dst.bound ? pathSourceTwinOf( ing, g, dst.defs, src.defs, shown.back(), false ) : PathTwinSide{};
+    t.fromTest = f.fired;
+    t.toTest   = o.fired;
+    t.from     = f.twin;
+    t.to       = o.twin;
     return t;
 }
 
@@ -578,13 +611,18 @@ inline std::string pathTestTwinRootAttrs( const IngestResult& ing, std::string p
     {
         return pairsAttrs;
     }
+    const std::string flags = std::string( tw.fromTest ? " from_test=\"1\"" : "" ) + ( tw.toTest ? " to_test=\"1\"" : "" );
+    if( !tw.hasNext() )
+    {
+        return pairsAttrs + flags;   // no source definition reaches: nothing to name, the alt=/pairs_unlisted= next= stays
+    }
+    // the twin owns next=; the alt= / pairs_unlisted= continuation is renamed, not dropped (next= is the last attribute written)
     if( const std::size_t n = pairsAttrs.find( " next=\"" ); n != std::string::npos )
     {
-        pairsAttrs.erase( n );   // next= is always the last attribute pathPairsRootAttrs writes
+        pairsAttrs.replace( n, 6, pairsAttrs.find( " pairs_unlisted=\"" ) != std::string::npos ? " unlisted_next=" : " alt_next=" );
     }
     const auto side = [ & ]( NodeId twin, std::string_view typed ) { return twin != kNoNode ? pathPairSelector( ing, twin, singleRoot, rootPrefix ) : std::string( typed ); };
-    return pairsAttrs + ( tw.from != kNoNode ? " from_test=\"1\"" : "" ) + ( tw.to != kNoNode ? " to_test=\"1\"" : "" )
-         + nextAttrXml( nextFlag( "--path=", side( tw.from, tw.srcN ) + "," + side( tw.to, tw.dstN ) ) );
+    return pairsAttrs + flags + nextAttrXml( nextFlag( "--path=", side( tw.from, tw.srcN ) + "," + side( tw.to, tw.dstN ) ) );
 }
 
 // The <pair> chains and <alt> rows, written where the single path's hop rows go (the CLI's stdout, MCP's memstream).

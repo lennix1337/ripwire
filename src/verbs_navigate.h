@@ -2608,7 +2608,7 @@ std::optional<int> runPath( const MainDispatch& d )
         const rw::PathEndpointBinding pthBound = rw::pathEndpointBinding( g, rw::endpointDefinitionCount( ing, srcDefs ), rw::endpointDefinitionCount( ing, dstDefs ), pthShown );
         const bool                    pthHasSplit = pthMarks.split;
         // zed-03 (src/pathpairs.h): a bound endpoint that is a test/fixture copy while a source definition exists is disclosed
-        const rw::PathTestTwin        pthTwin = srcGlob || dstGlob ? rw::PathTestTwin{} : rw::pathTestTwins( ing, { srcDefs, srcN, pthBound.from }, { dstDefs, dstN, pthBound.to }, pthShown );
+        const rw::PathTestTwin        pthTwin = srcGlob || dstGlob ? rw::PathTestTwin{} : rw::pathTestTwins( ing, g, { srcDefs, srcN, pthBound.from }, { dstDefs, dstN, pthBound.to }, pthShown );
         const std::vector<std::string_view> pthOwners = rw::pathHopOwners( ing, path );   // PATH-OWNERS: n="Owner.name" per hop
         const bool pthHasOwner = pthMarks.owner;
         rw::emitTo( stdout, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
