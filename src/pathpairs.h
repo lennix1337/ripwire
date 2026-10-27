@@ -461,8 +461,16 @@ inline constexpr std::string_view kPathTestTwinLegend =
 // the same selector, when the bound one is inside them; kNoNode when the bound one is outside or no such definition exists.
 struct PathTestTwin
 {
-    NodeId from = kNoNode, to = kNoNode;
+    NodeId           from = kNoNode, to = kNoNode;
+    std::string_view srcN, dstN;   // the argv's endpoints as typed: next= keeps the side that did not fire
     bool any() const noexcept { return from != kNoNode || to != kNoNode; }
+};
+// one --path endpoint as the twin reads it: its definitions, its spelling as typed, whether the root prints its binding
+struct PathEndpointSide
+{
+    std::span<const NodeId> defs;
+    std::string_view        typed;
+    bool                    bound = false;
 };
 // a definition in the test partition (filter.h isTestSymbol) or a fixture/bench/testdata directory (pathTierOf) — the two
 // classifiers the listing verbs already order by; nothing is re-derived here
@@ -480,23 +488,27 @@ inline NodeId pathSourceTwinOf( const IngestResult& ing, std::span<const NodeId>
                                   { return d != bound && isDefinitionNotDeclaration( ing.symbols[d] ) && !pathDefInTests( ing, d ); } );
     return it == defs.end() ? kNoNode : *it;
 }
-// `shown`: the chain the root's from_p=/to_p= describe (pathShownChain); `boundFrom` / `boundTo`: the root prints that endpoint
-inline PathTestTwin pathTestTwins( const IngestResult& ing, std::span<const NodeId> srcDefs, std::span<const NodeId> dstDefs,
-                                   std::span<const NodeId> shown, bool boundFrom, bool boundTo ) noexcept
+// `shown`: the chain the root's from_p=/to_p= describe (pathShownChain)
+inline PathTestTwin pathTestTwins( const IngestResult& ing, const PathEndpointSide& src, const PathEndpointSide& dst, std::span<const NodeId> shown ) noexcept
 {
-    PathTestTwin t;
+    PathTestTwin t{ kNoNode, kNoNode, src.typed, dst.typed };
     if( shown.empty() )
     {
         return t;
     }
-    t.from = boundFrom ? pathSourceTwinOf( ing, srcDefs, shown.front() ) : kNoNode;
-    t.to   = boundTo ? pathSourceTwinOf( ing, dstDefs, shown.back() ) : kNoNode;
+    t.from = src.bound ? pathSourceTwinOf( ing, src.defs, shown.front() ) : kNoNode;
+    t.to   = dst.bound ? pathSourceTwinOf( ing, dst.defs, shown.back() ) : kNoNode;
     return t;
 }
 
-inline std::string pathPairsLegend( const PathPairs& pp, const PathTestTwin& tw )
+inline std::string_view pathPairsLegend( const PathPairs& pp ) noexcept
 {
-    std::string out( pp.active() ? kPathPairsLegend : pp.unlisted() ? kPathPairUnlistedLegend : std::string_view() );
+    return pp.active() ? kPathPairsLegend : pp.unlisted() ? kPathPairUnlistedLegend : std::string_view();
+}
+// the present-only clauses beside it: qword= on a listed pair, from_test=/to_test= on the root
+inline std::string pathOrderLegend( const PathPairs& pp, const PathTestTwin& tw )
+{
+    std::string out;
     if( pp.active() && std::any_of( pp.pairs.begin(), pp.pairs.begin() + std::ptrdiff_t( std::min( pp.pairs.size(), kPathPairChains + kPathPairAltRows ) ),
                                     []( const PathPair& p ) { return !p.qword.empty(); } ) )
     {
@@ -523,25 +535,9 @@ struct PathPairsXml
     std::string rootAttrs;   // pairs_reaching= [alt= next=]
 };
 
-// `srcN` / `dstN`: the argv's endpoints (the test twin's next= keeps the other side as typed)
-inline PathPairsXml pathPairsRootAttrs( const IngestResult& ing, const PathPairs& pp, const PathTestTwin& tw, std::string_view srcN,
-                                        std::string_view dstN, bool singleRoot, std::string_view rootPrefix )
+inline PathPairsXml pathPairsRootAttrs( const IngestResult& ing, const PathPairs& pp, bool singleRoot, std::string_view rootPrefix )
 {
     PathPairsXml out;
-    if( tw.any() )
-    {
-        // zed-03: the bound endpoint is a test/fixture copy — disclosed, the continuation runs the source definition; it owns the
-        // root's one next= (alt= keeps its count and rows)
-        out.rootAttrs = pathPairsRootAttrs( ing, pp, PathTestTwin{}, srcN, dstN, singleRoot, rootPrefix ).rootAttrs;
-        if( const std::size_t n = out.rootAttrs.find( " next=\"" ); n != std::string::npos )
-        {
-            out.rootAttrs.erase( n );   // next= is always the last attribute pathPairsRootAttrs writes
-        }
-        out.rootAttrs += std::string( tw.from != kNoNode ? " from_test=\"1\"" : "" ) + ( tw.to != kNoNode ? " to_test=\"1\"" : "" )
-                       + nextAttrXml( nextFlag( "--path=", ( tw.from != kNoNode ? pathPairSelector( ing, tw.from, singleRoot, rootPrefix ) : std::string( srcN ) ) + ","
-                                                           + ( tw.to != kNoNode ? pathPairSelector( ing, tw.to, singleRoot, rootPrefix ) : std::string( dstN ) ) ) );
-        return out;
-    }
     if( pp.unlisted() )
     {
         out.rootAttrs = " pairs_unlisted=\"" + std::to_string( pp.unlistedDstGroups ) + "\"";
@@ -566,6 +562,23 @@ inline PathPairsXml pathPairsRootAttrs( const IngestResult& ing, const PathPairs
                                                            + pathPairSelector( ing, a.chain.back(), singleRoot, rootPrefix ) ) );
     }
     return out;
+}
+
+// The root's pair attributes (pathPairsRootAttrs) with the test twin's (zed-03): a bound test/fixture copy is disclosed and the
+// continuation runs the source definition — it owns the root's one next= (alt= keeps its count and rows). No twin ⇒ `pairsAttrs`.
+inline std::string pathTestTwinRootAttrs( const IngestResult& ing, std::string pairsAttrs, const PathTestTwin& tw, bool singleRoot, std::string_view rootPrefix )
+{
+    if( !tw.any() )
+    {
+        return pairsAttrs;
+    }
+    if( const std::size_t n = pairsAttrs.find( " next=\"" ); n != std::string::npos )
+    {
+        pairsAttrs.erase( n );   // next= is always the last attribute pathPairsRootAttrs writes
+    }
+    const auto side = [ & ]( NodeId twin, std::string_view typed ) { return twin != kNoNode ? pathPairSelector( ing, twin, singleRoot, rootPrefix ) : std::string( typed ); };
+    return pairsAttrs + ( tw.from != kNoNode ? " from_test=\"1\"" : "" ) + ( tw.to != kNoNode ? " to_test=\"1\"" : "" )
+         + nextAttrXml( nextFlag( "--path=", side( tw.from, tw.srcN ) + "," + side( tw.to, tw.dstN ) ) );
 }
 
 // The <pair> chains and <alt> rows, written where the single path's hop rows go (the CLI's stdout, MCP's memstream).
