@@ -321,7 +321,7 @@ inline PathPairs pathReachingPairs( const IngestResult& ing, const Graph& g, std
     const auto rankOf = []( const PathPair& p ) { return ReachRank{ 1, p.hedged, std::uint32_t( p.hops() ) }; };
     std::stable_sort( chains.begin(), chains.end(), [ & ]( const PathPair& a, const PathPair& b ) { return reachRankBefore( rankOf( a ), rankOf( b ) ); } );
 
-    out.bridgesUnsearched = unreachedDst.size() > kPathPairBridgeSearches ? unreachedDst.size() - kPathPairBridgeSearches : 0;
+    out.bridgesUnsearched = unreachedDst.size() - std::min( unreachedDst.size(), kPathPairBridgeSearches );
     std::vector<PathPair> bridges;
     for( std::size_t i = 0; i < unreachedDst.size() && i < kPathPairBridgeSearches; ++i )
     {
