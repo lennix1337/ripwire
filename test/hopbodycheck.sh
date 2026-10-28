@@ -168,7 +168,7 @@ check("handleRequest" in names and names.index("forwardInput") == names.index("h
 check("forwardInput" in fo and is_source(fo["forwardInput"], FOL) and "runPipeline" in fo and is_source(fo["runPipeline"], FOL) and "segments.length === 0" in fo["runPipeline"][1], "(F1) follow CDATA are the definitions' source text, whole")
 check("follow_of=W" in legend(f1) and "follow_of=W" in legend(rd("f1f")), "(F1) the follow_of clause rides in both legends")
 # F2-F4
-check(not re.search(r'follow_of="handleTimedRequest"', rd("f2")) and re.search(r'<b [^>]*n="handleTimedRequest"', rd("f2")), "(F2) the 4-statement-line wrapper is served and never followed")
+check(not re.search(r'follow_of="handleTimedRequest"', rd("f2")) and re.search(r'<b [^>]*n="handleTimedRequest"', rd("f2")) and not re.search(r'<b [^>]*n="stampInput"', rd("f2")), "(F2) the 4-statement-line wrapper is served and never followed (its callee stampInput never prints)")
 check("follow_of=" not in rd("f3a") and "follow_of=W" not in legend(rd("f3a")), "(F3) fetch's delegate lies inside the served Server body: no copy, no clause")
 check(re.search(r'<b [^>]*n="listen"', rd("f3b")) and 'follow_of="listen"' not in rd("f3b"), "(F3) the two-call listen is never followed")
 check('via="name"' in rd("f4c") and re.search(r'<b [^>]*n="handleLooseRequest"', rd("f4")) and "follow_of=" not in rd("f4"), "(F4) a by-name delegate is never followed")

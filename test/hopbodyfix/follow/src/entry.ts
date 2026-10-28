@@ -1,4 +1,4 @@
-import { forwardInput } from './route'
+import { forwardInput, stampInput } from './route'
 
 // the public entry: a one-line wrapper
 export function handleRequest(request: Request): Promise<Response> {
@@ -10,5 +10,5 @@ export function handleTimedRequest(request: Request): Promise<Response> {
   const started = Date.now()
   const label = request.url
   const tag = label + started
-  return forwardInput(new Request(tag))
+  return stampInput(new Request(tag))
 }
