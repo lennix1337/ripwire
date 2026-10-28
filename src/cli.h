@@ -4235,6 +4235,7 @@ inline constexpr ShapingVerb kShapingVerbs[] = {
     { "--exemplar",     nullptr, &Config::exemplar     },
     { "--around",       nullptr, &Config::around       },
     { "--path",         nullptr, &Config::pathSpec     },
+    { "--defs",         nullptr, &Config::defsSpec     },   // lane/defs-lookup: a fixed 16-row page (--offset pages), no budget
     { "--lego",         nullptr, &Config::legoType     },
     { "--report",       &Config::report,       nullptr },
     { "--slice",        nullptr, &Config::sliceSpec    },

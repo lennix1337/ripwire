@@ -40,7 +40,7 @@ Two limits apply to nearly everything here and are not repeated in every section
 
 **understand a codebase cold** — [`--top-k`](#--top-kn) · [`--no-inventory`](#--no-inventory) · [`--max-tokens`](#--max-tokensn) · [`--token-budget`](#--token-budgetnkmg) · [`--help-task`](#--help-tasktask) · [`--for`](#--fortask) · [`--sections`](#--sectionslegocompose) · [`--signatures-only`](#--signatures-only) · [`--auto-bodies`](#--auto-bodies) · [`--no-route`](#--no-route) · [`--adaptive`](#--adaptive) · [`--no-mention-boost`](#--no-mention-boost) · [`--no-doc-mention`](#--no-doc-mention) · [`--lego`](#--legotype) · [`--exemplar`](#--exemplartaskkind) · [`--recall`](#--recalltask) · [`--tree`](#--tree) · [`--html`](#--htmlfile) · [`--color-by`](#--color-bymode) · [`--order`](#--ordermode) · [`--no-stable`](#--no-stable)
 
-**navigate / answer a question** — [`--around`](#--aroundsym) · [`--callers`](#--callerssym) · [`--callees`](#--calleessym) · [`--uses`](#--usessym) · [`--graph-query`](#--graph-queryexpr) · [`--external-surface`](#--external-surface) · [`--path`](#--pathsrcdst) · [`--connect`](#--connectabc) · [`--impact`](#--impactsym) · [`--verify`](#--verifyclaim) · [`--mentions`](#--mentionssym) · [`--affected`](#--affectedf1f2sym) · [`--exercises`](#--exercisestestfile) · [`--situ`](#--situf1f2) · [`--handoff`](#--handoff) · [`--test-gate`](#--test-gatef1f2) · [`--grep`](#--grepstr----regexpat) · [`--grep-context`](#--grep-contextn----grep-beforen----grep-aftern) · [`--and`](#--andstr) · [`--not`](#--notstr) · [`--grep-scope`](#--grep-scopelinefile) · [`--grep-in`](#--grep-incodeany) · [`--handles`](#--handles) · [`--match`](#--matchquery) · [`--pattern`](#--patternpat) · [`--query`](#--queryterms)
+**navigate / answer a question** — [`--around`](#--aroundsym) · [`--callers`](#--callerssym) · [`--callees`](#--calleessym) · [`--uses`](#--usessym) · [`--graph-query`](#--graph-queryexpr) · [`--external-surface`](#--external-surface) · [`--path`](#--pathsrcdst) · [`--defs`](#--defsnamename) · [`--connect`](#--connectabc) · [`--impact`](#--impactsym) · [`--verify`](#--verifyclaim) · [`--mentions`](#--mentionssym) · [`--affected`](#--affectedf1f2sym) · [`--exercises`](#--exercisestestfile) · [`--situ`](#--situf1f2) · [`--handoff`](#--handoff) · [`--test-gate`](#--test-gatef1f2) · [`--grep`](#--grepstr----regexpat) · [`--grep-context`](#--grep-contextn----grep-beforen----grep-aftern) · [`--and`](#--andstr) · [`--not`](#--notstr) · [`--grep-scope`](#--grep-scopelinefile) · [`--grep-in`](#--grep-incodeany) · [`--handles`](#--handles) · [`--match`](#--matchquery) · [`--pattern`](#--patternpat) · [`--query`](#--queryterms)
 
 **zoom the detail ladder** — [`--detail`](#--detailn) · [`--pack-signatures`](#--pack-signatures) · [`--outline`](#--outlineab) · [`--expand`](#--expandab) · [`--compress`](#--compress) · [`--pack-top-n`](#--pack-top-nn) · [`--no-redact`](#--no-redact)
 
@@ -970,6 +970,10 @@ $ ./build/ripwire . --path=main,rankGraphTeleport
 ```
 
 **Shaped by:** `--connect`, `--limit`
+
+### `--defs=NAME[,NAME...]`
+
+**Answers:** list the definitions each name binds (up to 16 names), with the spelling that picks each alone per definition: file:line, kind, class=source|test, callers, and sel= — paste it into any SYM verb
 
 ### `--connect=A,B,C`
 

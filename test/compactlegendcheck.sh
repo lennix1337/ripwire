@@ -739,7 +739,10 @@ ripwire.pack-top-n/v1            830   813
 ripwire.expand/v1                280   265
 ripwire.expand-file/v1            510   508
 ripwire.for/v1                   1100  1099
+ripwire.defs/v1                   340   316
 '
+# PINNED 2026-10-27 (lane/defs-lookup): ripwire.defs/v1 316 B measured on this gate's --defs=zzqq9 probe (the shared not-found
+# answer's readings: found=, of=, near=), pin 340.
 pinFor()
 {
     printf '%s\n' "$PIN_TABLE" | awk -v schema="$1" '$1 == schema { printf "%s", $2; exit }'
