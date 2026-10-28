@@ -2787,9 +2787,9 @@ std::optional<int> runPath( const MainDispatch& d )
         const std::vector<std::string_view> pthOwners = rw::pathHopOwners( ing, path );   // PATH-OWNERS: n="Owner.name" per hop
         const bool pthHasOwner = pthMarks.owner;
         // D2 part 5 (defslookup.h): the other definitions of an endpoint whose pick is not provably unique, inline
-        const rw::PathAlts pthAlts = rw::pathAltsOf( ing, g, srcN, dstN, srcGlob, dstGlob, pthBound.from ? srcUsed : rw::kNoNode, pthBound.to ? dstUsed : rw::kNoNode );
+        const rw::PathAlts pthAlts = rw::pathAltsOf( ing, g, srcN, dstN, srcGlob, dstGlob, pthBound.from ? srcUsed : rw::kNoNode, pthBound.to ? dstUsed : rw::kNoNode, pthPairs );
         rw::emitTo( stdout, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
-                     "graph holds none. {}{}{}{}-->{}", ( std::string( rw::defAltsLegend( pthAlts.any() ) ) + rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ) + rw::viaNameLegend( pthHasVia )
+                     "graph holds none. {}{}{}{}-->{}", ( rw::defAltsLegend( pthAlts ) + rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ) + rw::viaNameLegend( pthHasVia )
                                                          + rw::viaLinkLegend( pthHasLink ) + rw::anchorMissLegend( pthHasMiss )
                                                          + rw::splitArmLegend( pthHasSplit ) + rw::pathUnboundLegend( !pthBound.from || !pthBound.to )
                                                          + rw::memberOwnerLegend( pthHasOwner ) + rw::memberOwnerContainedLegend( pthMarks.ownerContained ) + std::string( rw::pathPairsLegend( pthPairs ) ) + rw::pathOrderLegend( pthPairs, pthTwin ) ).c_str(),

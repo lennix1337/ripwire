@@ -99,5 +99,24 @@ if grep -q 'reachable="1"' "$TMP/p2.xml" && ! grep -q '<alts' "$TMP/p2.xml"; the
 run --path=many,helperA --legend=full >"$TMP/p3.xml" 2>/dev/null
 if grep -q '<alts side="from" of="many" alts_shown="16" defs="18" next="--defs=many">' "$TMP/p3.xml" && xmllint --noout "$TMP/p3.xml" 2>/dev/null; then ok "P3: 17 others past the cap: alts_shown=16 defs=18 next=--defs=many, well-formed"; else no "P3: $( grep -o '<alts [^>]*>' "$TMP/p3.xml" )"; fi
 
+echo "-- (P4) an untied C prototype is no second candidate: --path prints no <alts> (endpointDefinitionCount's rule)"
+run --path=orphan,helperA >"$TMP/p4.xml" 2>/dev/null
+if grep -q 'from_defs="2"' "$TMP/p4.xml" && ! grep -q '<alts' "$TMP/p4.xml"; then ok "P4: orphan = a definition + an untied header prototype -> from_defs=2 yet no <alts> (0 bytes)"; else no "P4: $( grep -o '<alts.*</alts>' "$TMP/p4.xml" | head -c 300 ) $( grep -o 'from_defs="[0-9]*"' "$TMP/p4.xml" )"; fi
+run --defs=orphan >"$TMP/p4d.xml" 2>/dev/null
+if grep -q '<name q="orphan" defs="2">' "$TMP/p4d.xml" && grep -q 'decl_only="1"' "$TMP/p4d.xml"; then ok "P4 control: --defs=orphan still lists both groups (the verb answering 'which definitions' is complete), the header decl_only"; else no "P4 control: $( grep -o '<name.*' "$TMP/p4d.xml" | head -c 300 )"; fi
+
+echo "-- (P5) <alts> never re-lists a definition the answer prints as a pair endpoint; a tied contract still lists, decl_only rides"
+run --path=ping,helperA --legend=full >"$TMP/p5.xml" 2>/dev/null
+altsp="$( perl -0ne 'print "$1\n" while /<alts side="from"[^>]*>(.*?)<\/alts>/gs' "$TMP/p5.xml" )"
+pairp="$( body "$TMP/p5.xml" | grep -o '<pair from_p="[^"]*"' | sed 's/.*from_p="//; s/"$//' | sort -u )"
+dup=0; for pp in $pairp; do printf '%s' "$altsp" | grep -q "p=\"$pp\"" && dup=$(( dup + 1 )); done
+if grep -q 'pairs_reaching="2"' "$TMP/p5.xml" && [ "$( printf '%s\n' "$pairp" | wc -l | tr -d ' ' )" = 2 ] && [ "$dup" -eq 0 ]; then ok "P5: 2 pairs print (ping1, ping2); neither is re-listed under <alts>"; else no "P5: pairs=[$pairp] dup=$dup alts=$altsp"; fi
+if [ "$( printf '%s' "$altsp" | grep -o '<d ' | wc -l | tr -d ' ' )" = 2 ] && printf '%s' "$altsp" | grep -q 'p="src/ping3.ts:3"' && printf '%s' "$altsp" | grep -q 'sel="src/ping3.ts:Pinger.ping" class="source" decl_only="1"'; then ok "P5: the 2 definitions the answer does not print are listed; the interface contract carries decl_only=1"; else no "P5 rows: $altsp"; fi
+if grep -q 'decl_only=1: no body (a header declaration' "$TMP/p5.xml" && xmllint --noout "$TMP/p5.xml" 2>/dev/null; then ok "P5: --legend=full reads decl_only=1 when a row carries it; well-formed"; else no "P5 legend / well-formedness"; fi
+run --path=run,helperA --legend=full >"$TMP/p5b.xml" 2>/dev/null
+if grep -q '<alts' "$TMP/p5b.xml" && ! grep -q 'decl_only' "$TMP/p5b.xml"; then ok "P5 control: an <alts> with no decl_only row has no decl_only clause (present-only legend)"; else no "P5 control: decl_only text on an answer with no such row"; fi
+run --path=ping,helperA >"$TMP/p5c.xml" 2>/dev/null
+if grep -q 'alts d decl_only=1: no body' "$TMP/p5c.xml"; then ok "P5: the default (compact) legend reads decl_only=1 on --path"; else no "P5: compact legend lacks the path decl_only reading: $( grep -o '<!--.*-->' "$TMP/p5c.xml" | head -c 200 )"; fi
+
 [ "$fail" -eq 0 ] && echo "defslookupcheck: OK" || echo "defslookupcheck: FAILURES above"
 exit "$fail"

@@ -183,7 +183,7 @@ inline DefLookup lookupDefs( const IngestResult& ing, const Graph& g, std::strin
 }
 
 // One definition row: <d n= t= p= sel= [sel_proven="0"] lang= class= in= [bodyless="1"]/>. `compact` (the --path alternatives)
-// keeps only what the next step needs: sel=, p=, class=.
+// keeps only what the next step needs: sel=, p=, class=, decl_only=.
 inline void defRowXml( std::string& out, const IngestResult& ing, const DefLookup& L, const DefRow& r, const MemberOwners& owners, bool compact )
 {
     std::vector<char> esc;
@@ -207,10 +207,10 @@ inline void defRowXml( std::string& out, const IngestResult& ing, const DefLooku
     if( !compact )
     {
         out += " in=\"" + std::to_string( r.callers ) + "\"";
-        if( L.groups.bodyless[ r.group ] )
-        {
-            out += " decl_only=\"1\"";
-        }
+    }
+    if( L.groups.bodyless[ r.group ] )
+    {
+        out += " decl_only=\"1\"";   // compact too: a header declaration of the bound definition is no second definition
     }
     out += "/>";
 }
@@ -233,25 +233,57 @@ inline void defRowJson( std::string& out, const IngestResult& ing, const DefLook
     out += "}";
 }
 
-// Is the pick a verb made among these definitions provably unique? Only when one group is left — the resolver's binding of a
-// name with several groups is a choice, not a proof (attrib-multidef).
-inline bool defPickProvablyUnique( const DefLookup& L ) noexcept { return L.defs() <= 1; }
+// Is the pick a verb made among these definitions provably unique? Only when one candidate group is left: the groups less the
+// untied C-family prototypes (defattrib.h candidateGroupCount — the rule --path's own endpointDefinitionCount uses, so the
+// answer never calls an endpoint bound and unique while <alts> lists a prototype as another definition). Several candidates: the
+// resolver's binding is a choice, not a proof (attrib-multidef).
+inline bool defPickProvablyUnique( const DefLookup& L ) noexcept { return candidateGroupCount( L.groups ) <= 1; }
 
-// --path's inline alternatives for one endpoint (part 5): every OTHER group up to the cap, compact rows, then
-// alts_shown=K defs=N next=--defs=NAME when more exist. Empty when the pick is provably unique (0 bytes added).
-// `bound`: the definition the answer bound (kNoNode when it bound none: every group is then an alternative).
-inline std::string defAltsXml( const IngestResult& ing, const DefLookup& L, NodeId bound, std::string_view side )
+// The definitions a --path answer already prints, as the --path answer's own rows name them: the root's from_p=/to_p= are the
+// first pair's, and every printed <pair>/<alt> row carries its own (pathpairs.h emitPathPairs). Listing one again under <alts>
+// tells the agent nothing new.
+inline std::vector<NodeId> pathPrintedEnds( const PathPairs& pp )
+{
+    std::vector<NodeId> ends;
+    if( pp.active() )
+    {
+        const std::size_t printed = std::min( pp.pairs.size(), kPathPairChains + kPathPairAltRows );
+        for( std::size_t i = 0; i < printed; ++i )
+        {
+            if( !pp.pairs[i].chain.empty() )
+            {
+                ends.push_back( pp.pairs[i].chain.front() );
+                ends.push_back( pp.pairs[i].chain.back() );
+            }
+        }
+    }
+    return ends;
+}
+
+struct PathAlts
+{
+    std::string xml;
+    bool        declOnly = false;   // some printed row is decl_only=1 (its legend reading rides)
+    bool        any() const noexcept { return !xml.empty(); }
+};
+
+// --path's inline alternatives for one endpoint (part 5): every definition the answer does NOT already show, up to the cap,
+// compact rows, then alts_shown=K defs=N next=--defs=NAME when more exist. Empty when the pick is provably unique or
+// nothing is left to tell (0 bytes added). Not alternatives: the bound definition, a definition the answer prints as a pair
+// endpoint (`printed`), an untied C-family prototype (not a second candidate, as endpointDefinitionCount counts it).
+// `bound`: the definition the answer bound (kNoNode when it bound none: every candidate group is then an alternative).
+inline void defAltsXml( PathAlts& acc, const IngestResult& ing, const DefLookup& L, NodeId bound, std::string_view side, std::span<const NodeId> printed )
 {
     if( defPickProvablyUnique( L ) )
     {
-        return {};
+        return;
     }
-    std::uint32_t boundGroup = UINT32_MAX;
+    std::vector<char> skip( L.groups.size(), 0 );
     for( std::size_t i = 0; i < L.matches.size(); ++i )
     {
-        if( L.matches[i] == bound )
+        if( L.matches[i] == bound || std::find( printed.begin(), printed.end(), L.matches[i] ) != printed.end() )
         {
-            boundGroup = L.groups.ofMatch[i];
+            skip[ L.groups.ofMatch[i] ] = 1;
         }
     }
     const MemberOwners owners( ing );
@@ -259,7 +291,7 @@ inline std::string defAltsXml( const IngestResult& ing, const DefLookup& L, Node
     std::size_t        shown = 0, total = 0;
     for( const DefRow& r : L.rows )
     {
-        if( r.group == boundGroup )
+        if( skip[ r.group ] || L.groups.untied[ r.group ] )
         {
             continue;
         }
@@ -267,8 +299,13 @@ inline std::string defAltsXml( const IngestResult& ing, const DefLookup& L, Node
         if( shown < kDefRowsCap )
         {
             defRowXml( rows, ing, L, r, owners, /*compact=*/true );
+            acc.declOnly = acc.declOnly || L.groups.bodyless[ r.group ];
             ++shown;
         }
+    }
+    if( total == 0 )
+    {
+        return;
     }
     std::vector<char> esc;
     std::string out = "<alts side=\"" + std::string( side ) + "\" of=\"" + std::string( escapeXml( L.spec, esc ) ) + "\"";
@@ -277,38 +314,38 @@ inline std::string defAltsXml( const IngestResult& ing, const DefLookup& L, Node
         out += " alts_shown=\"" + std::to_string( shown ) + "\" defs=\"" + std::to_string( L.defs() ) + "\""
              + nextAttrXml( nextFlag( "--defs=", L.spec ) );
     }
-    return out + ">" + rows + "</alts>";
+    acc.xml += out + ">" + rows + "</alts>";
 }
 
 // Both --path transports (verbs_navigate.h runPath, mcpverbs.h pathText): the two endpoints' <alts>, from= first. A glob endpoint
 // stands for every fitting definition by design (from_glob=), so it lists none.
-struct PathAlts
-{
-    std::string xml;
-    bool        any() const noexcept { return !xml.empty(); }
-};
 inline PathAlts pathAltsOf( const IngestResult& ing, const Graph& g, std::string_view srcN, std::string_view dstN, bool srcGlob, bool dstGlob,
-                            NodeId srcBound, NodeId dstBound )
+                            NodeId srcBound, NodeId dstBound, const PathPairs& pairs )
 {
-    PathAlts out;
+    PathAlts                  out;
+    const std::vector<NodeId> printed = pathPrintedEnds( pairs );
     if( !srcGlob )
     {
-        out.xml += defAltsXml( ing, lookupDefs( ing, g, srcN ), srcBound, "from" );
+        defAltsXml( out, ing, lookupDefs( ing, g, srcN ), srcBound, "from", printed );
     }
     if( !dstGlob )
     {
-        out.xml += defAltsXml( ing, lookupDefs( ing, g, dstN ), dstBound, "to" );
+        defAltsXml( out, ing, lookupDefs( ing, g, dstN ), dstBound, "to", printed );
     }
     return out;
 }
 
 // The legend clause for <alts> — present only when an answer carries one.
-inline const char* defAltsLegend( bool on ) noexcept
+inline std::string defAltsLegend( const PathAlts& alts )
 {
-    return on ? "<alts side= of=> lists the OTHER definitions the endpoint's name binds (the pick is not provably unique): sel= pastes "
-                "as that endpoint to bind one alone, p= where it is, class=source|test; alts_shown=K defs=N: K of the other rows shown, "
-                "next= pages the rest. "
-              : "";
+    if( !alts.any() )
+    {
+        return {};
+    }
+    return std::string( "<alts side= of=> lists the definitions the endpoint's name binds that this answer does not already print (the pick is "
+                        "not provably unique): sel= pastes as that endpoint to bind one alone, p= where it is, class=source|test; "
+                        "alts_shown=K defs=N: K of the other rows shown, next= pages the rest. " )
+         + ( alts.declOnly ? "decl_only=1: no body (a header declaration or interface contract), not a second definition. " : "" );
 }
 
 }   // namespace rw

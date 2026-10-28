@@ -3828,9 +3828,9 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     const PathTestTwin        ptTwin     = srcGlob || dstGlob ? PathTestTwin{} : pathTestTwins( ing, g, { srcDefs, from, ptBound.from }, { dstDefs, to, ptBound.to }, ptShown );   // zed-03, as on the CLI
     const std::vector<std::string_view> ptOwners = pathHopOwners( ing, pth );   // PATH-OWNERS, as on the CLI
     const bool                ptHasOwner = ptMarks.owner;
-    const PathAlts            ptAlts     = pathAltsOf( ing, g, from, to, srcGlob, dstGlob, ptBound.from ? srcUsed : kNoNode, ptBound.to ? dstUsed : kNoNode );   // D2 part 5, as on the CLI
+    const PathAlts            ptAlts     = pathAltsOf( ing, g, from, to, srcGlob, dstGlob, ptBound.from ? srcUsed : kNoNode, ptBound.to ? dstUsed : kNoNode, ptPairs );   // D2 part 5, as on the CLI
     rw::emitTo( mem, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
-                       "graph holds none. {}{}{}{}-->{}", ( std::string( defAltsLegend( ptAlts.any() ) ) + unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + ptKindLegend
+                       "graph holds none. {}{}{}{}-->{}", ( defAltsLegend( ptAlts ) + unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + ptKindLegend
                                                            + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to )
                                                            + memberOwnerLegend( ptHasOwner ) + memberOwnerContainedLegend( ptMarks.ownerContained ) + std::string( pathPairsLegend( ptPairs ) ) + pathOrderLegend( ptPairs, ptTwin ) ).c_str(),
                   ( std::string( toValueRefsLegend( ptToValueRefs.count > 0 ) ) + valueRefsDepthLegend( ptToValueRefs.depthCut.files > 0 ) ).c_str(),
