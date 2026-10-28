@@ -369,7 +369,6 @@ constexpr std::uint32_t kParserVer    = 251;          // bump on any grammar/.sc
                                                       //   hasattr test / JS-TS subscript store) and fn-slot (247; Go function-valued slot records)). Strictly above
                                                       //   train 39's 239 (rich 240) and every lane placeholder (238, 241/242, 247/248, fn-slot-2's 249/250). Rich file
                                                       //   tag 252. kCacheVersion 46 (js-def-naming's LocalBindKind JsObjectLiteral record change).
-constexpr std::uint32_t kParserVer    = 239;          // bump on any grammar/.scm/extraction change
                                                       // 239 = 2026-10-27 (train 39: lane receiver-fixes, placeholder 237 / rich 238): TS `#private` field declarations and
                                                       //   `this.#f = …` record MemberType; Python `self.f: T` / `T | None` / `Optional[ T ]` annotations and `mod.X( … )`
                                                       //   constructors type fields and locals (a RecvType / MemberType with its qualifier), and `x = mod.X( … )` no longer
