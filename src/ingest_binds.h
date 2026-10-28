@@ -3378,6 +3378,35 @@ inline void capturePythonTypeParamDecls( TSNode n, std::uint32_t fileId, std::st
     }
 }
 
+// is the def/class statement `n` at MODULE scope but inside a compound statement (`if`/`try`/`with`/`for`/`while`/`match`, any
+// clause), so it may not run? False for a statement directly in the module (a decorator wrapping it changes nothing) and for one
+// inside a def or class (not module scope). Read by the kPythonCondDefPrefix record below.
+inline bool pythonDefIsConditionalAtModule( TSNode n )
+{
+    TSNode p = ts_node_parent( n );
+    if( !ts_node_is_null( p ) && kindIs( ts_node_type( p ), "decorated_definition" ) )
+    {
+        p = ts_node_parent( p );
+    }
+    if( ts_node_is_null( p ) || kindIs( ts_node_type( p ), "module" ) )
+    {
+        return false;
+    }
+    for( ; !ts_node_is_null( p ); p = ts_node_parent( p ) )
+    {
+        const char* pt = ts_node_type( p );
+        if( kindIs( pt, "function_definition" ) || kindIs( pt, "class_definition" ) || kindIs( pt, "lambda" ) )
+        {
+            return false;
+        }
+        if( kindIs( pt, "module" ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 inline void capturePythonRebindShadowDecls( TSNode n, const char* t, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawBind>& binds )
 {
     std::vector<TSNode> targets;   // reused scratch, cleared before each shape below
@@ -3464,6 +3493,11 @@ inline void capturePythonRebindShadowDecls( TSNode n, const char* t, std::uint32
         {
             const std::uint32_t at = ts_node_start_byte( n );   // the def/class node's OWN start — see the doc above
             pushRawBind( fileId, lang, nodeTextOf( nm, src ), std::string{}, BindSite{ at > 0 ? at - 1 : 0, 0u, 0u }, LocalBindKind::VarDecl, binds );
+            if( pythonDefIsConditionalAtModule( n ) )
+            {
+                pushRawBind( fileId, lang, std::string{ kPythonCondDefPrefix }.append( nodeTextOf( nm, src ) ), std::string{},
+                             BindSite{ at > 0 ? at - 1 : 0, 0u, 0u }, LocalBindKind::VarDecl, binds );
+            }
         }
         return;
     }

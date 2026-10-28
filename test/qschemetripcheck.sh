@@ -34,6 +34,10 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-27, lane py-split-marker (PY-ALIAS-SPLIT-MARKER, base integration/train-40 1318069a; PLACEHOLDER, the train renumbers):
+#   RE-PINNED ONCE with UPDATE_GOLDEN=1. Watched text: kParserVer 251 -> 255 (rich 256; above fn-slot-2's 249 and train 40's 251/252:
+#   a Python module-scope def/class inside an if/try/with/loop files a second VarDecl `?name`), quality.h's kIngestParserVerMirror with it.
+#   kCacheVersion stays 46 (no record changes shape) and kQSnapCacheScheme stays 24: no watched quality.h function moved.
 # 2026-10-27, train 40 (lanes ci-flakes-2, r1-followup, js-def-naming, testonly-dead, string-keyed, alias-channel, fn-slot, for-route
 #   merged onto main aba4d28e): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the composed tree (main's pin b4eb6e92… and the js-def-naming, string-keyed and
 #   fn-slot (18dfbcac…) branch pins conflicted -> f4d5b120…). Watched text: kParserVer 239 -> 251 (rich 252; above the placeholders 238, 241, 247 and

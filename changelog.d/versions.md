@@ -11,7 +11,8 @@ train 38 took 235 (236); the receiver typing of TS `#private` fields and of Pyth
 carried a 237 (238) placeholder on its branch and train 39 took 239 (240); the JS/TS naming records (a bare `module.exports`
 function, a named object literal's binding) carried 238, the name-keyed lookup qualifier 241 (242) and the Go function-valued
 slots 247 (248) on their branches, and the Rust slot join carries 249 (250) on its, so 251 sits above every live branch and
-pull-request number. A cache
+pull-request number. The Python conditional module-scope definition record (a `def` or `class` inside an `if`/`try`/`with`/loop
+at module scope) carries a 255 (256) placeholder on its branch. A cache
 written by 0.6.8 is re-parsed once. `kCacheVersion` 36 → 46: a Rust binding typed only through a trait
 (`&dyn T`, `impl T`, a bound), a Rust `impl T for X` block and a JS/TS binding written after its declaration are new binding
 records, as is a JS/TS module-scope object literal's binding name, a Kotlin call's trailing-lambda byte (#155) widens the reference record, and a file's parse-health record gains the
