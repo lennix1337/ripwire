@@ -14,7 +14,8 @@
 #     c_class.py     from m import Widget as Gadget ; Gadget()          a class (target m.py:9 Widget)
 #     c_shadow.py    names = [g for g in fs] ; return g()               a comprehension target does not leak: the call after it is the import
 #     c_override.py  mo_ga.py: f's def + a module `def __getattr__`     PEP 562: __getattr__ answers only names m lacks, so it cannot
-#                                                                       override the def (PY-ALIAS-SPLIT-MARKER; target mo_ga.py:1)
+#                                                                       override the def (PY-ALIAS-SPLIT-MARKER; target mo_ga.py:1);
+#                    mo_gadeco.py: the same with a decorated def        a decorator is not a conditional (target mo_gadeco.py:6)
 #     c_getattr.py   the CALLER file defines `__getattr__`              never consulted for a name the file binds (target m.py:1)
 #   NEAR MISSES (must NOT bind m.py's f)
 #     c_param.py     def call_param(g): g()                             a parameter shadows the import
@@ -62,7 +63,7 @@ callees(){ ( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --callees="$1" --lege
 # ── 0. presence: every fixture file parses (a fixture that fails to parse would pass the near misses inert) ──
 ( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --skipped --legend=compact ) >"$TMP/skipped" 2>/dev/null
 perl -pe 's/<!--.*?-->//g' "$TMP/skipped" >"$TMP/skipped.body"
-if ! grep -q 'degraded_parse="0"' "$TMP/skipped.body" || ! grep -q 'indexed="42"' "$TMP/skipped.body" || grep -q '<f \|<h ' "$TMP/skipped.body"; then no "a fixture file was skipped or degraded"; sed 's/^/        | /' "$TMP/skipped" | head -5
+if ! grep -q 'degraded_parse="0"' "$TMP/skipped.body" || ! grep -q 'indexed="43"' "$TMP/skipped.body" || grep -q '<f \|<h ' "$TMP/skipped.body"; then no "a fixture file was skipped or degraded"; sed 's/^/        | /' "$TMP/skipped" | head -5
 else ok "every fixture file indexed with no parse degrade"; fi
 
 # ── 1. positive arms ──
@@ -83,7 +84,7 @@ if grep -q 'n="call_plain"' "$TMP/callers" && grep -q 'n="call_cond"' "$TMP/call
 else no "--callers=m.py:f misses an aliased caller"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/callers"; fi
 
 # ── 1b. a module `__getattr__` cannot override a def that exists (PY-ALIAS-SPLIT-MARKER): target side mo_ga.py:1, caller side m.py:1 ──
-for a in "call_mo_ga mo_ga.py:1" "call_cgetattr m.py:1"; do
+for a in "call_mo_ga mo_ga.py:1" "call_mo_gadeco mo_gadeco.py:6" "call_cgetattr m.py:1"; do
     set -- $a
     callees "$1"
     row=$( grep -o "<s [^>]*p=\"$2\"[^>]*/>" "$TMP/$1" )

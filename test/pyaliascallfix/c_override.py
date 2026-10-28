@@ -55,3 +55,10 @@ def call_mo_gatry():
 
 def call_mo_gadyn():
     return g11()
+
+
+from mo_gadeco import f as g12
+
+
+def call_mo_gadeco():
+    return g12()
