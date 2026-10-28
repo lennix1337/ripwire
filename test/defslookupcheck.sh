@@ -108,7 +108,16 @@ if printf '%s' "$alts" | grep -q '^<alts side="from" of="run">' && [ "$( printf 
 run --path=A.run,helperA >"$TMP/p2.xml" 2>/dev/null
 if grep -q 'reachable="1"' "$TMP/p2.xml" && ! grep -q '<alts' "$TMP/p2.xml"; then ok "P2: a unique pick prints no <alts> (0 bytes)"; else no "P2: $( head -c 400 "$TMP/p2.xml" )"; fi
 run --path=many,helperA --legend=full >"$TMP/p3.xml" 2>/dev/null
-if grep -q '<alts side="from" of="many" alts_shown="16" defs="18" next="--defs=many">' "$TMP/p3.xml" && xmllint --noout "$TMP/p3.xml" 2>/dev/null; then ok "P3: 17 others past the cap: alts_shown=16 defs=18 next=--defs=many, well-formed"; else no "P3: $( grep -o '<alts [^>]*>' "$TMP/p3.xml" )"; fi
+if grep -q '<alts side="from" of="many" alts_shown="16" defs="18" next="--defs=many --offset=1[67]">' "$TMP/p3.xml" && xmllint --noout "$TMP/p3.xml" 2>/dev/null; then ok "P3: 17 others past the cap: alts_shown=16 defs=18 next=--defs=many --offset=16|17, well-formed"; else no "P3: $( grep -o '<alts [^>]*>' "$TMP/p3.xml" )"; fi
+# F8: the continuation starts AFTER the rows already shown (it used to replay page 1): the 16 shown + the bound + the offset page = 18 distinct, no repeat
+off="$( grep -o '<alts side="from" of="many"[^>]*next="--defs=many --offset=[0-9]*"' "$TMP/p3.xml" | sed 's/.*--offset=//; s/"$//' )"
+run --defs=many --offset="${off:-0}" >"$TMP/p3n.xml" 2>/dev/null
+shownp="$( grep -o '<alts side="from" of="many".*</alts>' "$TMP/p3.xml" | grep -o 'p="[^"]*"' | sort )"
+boundp="$( grep -o '<path [^>]*from_p="[^"]*"' "$TMP/p3.xml" | sed 's/.*from_p=/p=/' )"
+nextp="$( body "$TMP/p3n.xml" | grep -o '<d [^>]*' | grep -o 'p="[^"]*"' | sort )"
+rep="$( printf '%s\n%s\n' "$shownp" "$nextp" | sort | uniq -d | grep -c . )"
+cover="$( printf '%s\n%s\n%s\n' "$shownp" "$nextp" "$boundp" | sort -u | grep -c . )"
+if [ -n "$off" ] && [ "$rep" = 0 ] && [ "$cover" = 18 ]; then ok "P3 next=: --defs=many --offset=$off adds only rows the <alts> did not show (shown 16 + bound + the offset page = 18 distinct, 0 repeats)"; else no "P3 next=: off=$off repeats=$rep distinct=$cover"; fi
 
 echo "-- (P4) an untied C prototype is no second candidate: --path prints no <alts> (endpointDefinitionCount's rule)"
 run --path=orphan,helperA >"$TMP/p4.xml" 2>/dev/null

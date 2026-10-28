@@ -269,7 +269,7 @@ struct PathAlts
 };
 
 // --path's inline alternatives for one endpoint (part 5): every definition the answer does NOT already show, up to the cap,
-// compact rows, then alts_shown=K defs=N next=--defs=NAME when more exist. Empty when the pick is provably unique or
+// compact rows, then alts_shown=K defs=N next=--defs=NAME --offset=M when more exist (M: the first row not yet shown). Empty when the pick is provably unique or
 // nothing is left to tell (0 bytes added). Not alternatives: the bound definition, a definition the answer prints as a pair
 // endpoint (`printed`), an untied C-family prototype (not a second candidate, as endpointDefinitionCount counts it).
 // `bound`: the definition the answer bound (kNoNode when it bound none: every candidate group is then an alternative).
@@ -289,9 +289,10 @@ inline void defAltsXml( PathAlts& acc, const IngestResult& ing, const DefLookup&
     }
     const MemberOwners owners( ing );
     std::string        rows;
-    std::size_t        shown = 0, total = 0;
-    for( const DefRow& r : L.rows )
+    std::size_t        shown = 0, total = 0, nextOffset = 0;
+    for( std::size_t i = 0; i < L.rows.size(); ++i )
     {
+        const DefRow& r = L.rows[i];
         if( skip[ r.group ] || L.groups.untied[ r.group ] )
         {
             continue;
@@ -303,6 +304,7 @@ inline void defAltsXml( PathAlts& acc, const IngestResult& ing, const DefLookup&
             acc.declOnly = acc.declOnly || L.groups.bodyless[ r.group ];
             acc.unproven = acc.unproven || !r.selProven;
             ++shown;
+            nextOffset = i + 1;   // --defs lists the same sorted rows: the ones not shown yet start right after the last one shown
         }
     }
     if( total == 0 )
@@ -314,7 +316,7 @@ inline void defAltsXml( PathAlts& acc, const IngestResult& ing, const DefLookup&
     if( shown < total )
     {
         out += " alts_shown=\"" + std::to_string( shown ) + "\" defs=\"" + std::to_string( L.defs() ) + "\""
-             + nextAttrXml( nextFlag( "--defs=", L.spec ) );
+             + nextAttrXml( nextFlag( "--defs=", L.spec ) + " --offset=" + std::to_string( nextOffset ) );   // past page 1, never a replay of it
     }
     acc.xml += out + ">" + rows + "</alts>";
 }
