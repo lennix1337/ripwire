@@ -19,7 +19,7 @@ impl CallEval {
 pub struct State { decls: Vec<Box<dyn Command>> }
 impl State {
     pub fn get_decl(&self, id: usize) -> &dyn Command { self.decls[id].as_ref() }
-    pub fn boxed_decl(&self, id: usize) -> Box<dyn Command> { if id == 0 { Box::new(Ls) } else { Box::new(Cd) } }
+    pub fn boxed_decl(&self, id: usize) -> Box<dyn Command> { match id { 0 => Box::new(Ls), _ => Box::new(Cd) } }
     pub fn any_decl<T: Command>(&self) -> T { unimplemented!() }
 }
 pub struct Overlay;

@@ -1789,6 +1789,22 @@ inline void shadowJavaFieldsOntoMethods( const IngestResult& ing, const JavaFiel
     }
 }
 
+// one member's declared type into Rule 2b's field table: same class-name#field-name with different declared types, or one reached
+// through `->` alone (a smart pointer's pointee) → tombstone. A member written as a C++ smart-pointer ALIAS (lane iface-peel,
+// resolve.h smartPointerAliasPointees) records the alias's pointee, reached by `->` alone, exactly as `std::shared_ptr<I>` would.
+inline void recordMemberTypeFact( HashMap<std::string, FlatRecvType>& table, const std::string& key, const Reference& cr,
+                                  const HashMap<std::string, FlatRecvType>& aliasPointees )
+{
+    const bool inStd  = fieldTypeWrittenInStd( cr );
+    const auto peeled = cr.viaArrow || inStd ? aliasPointees.end() : aliasPointees.find( cr.calleeName );
+    if( peeled != aliasPointees.end() )
+    {
+        recordFlatRecvTypeFact( table, key, peeled->second.type, peeled->second.writtenQualified, /*arrowOnly=*/true );
+        return;
+    }
+    recordFlatRecvTypeFact( table, key, inStd ? std::string_view{} : std::string_view( cr.calleeName ), !cr.qualifier.empty(), cr.viaArrow );
+}
+
 inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing, const HashMap<std::string, char>& classNames )
 {
     PROFILE_SCOPE_DESCRIBE( "buildGraph/2d: Rule-2b field-narrow tables" );
@@ -1805,13 +1821,7 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing, const 
         key.clear();
         key.append( ing.symbols[ cr.fromSymbol ].name ).push_back( '#' );
         key.append( cr.fieldName );
-        if( const auto peeled = cr.viaArrow || fieldTypeWrittenInStd( cr ) ? aliasPointees.end() : aliasPointees.find( cr.calleeName ); peeled != aliasPointees.end() )
-        {
-            recordFlatRecvTypeFact( t.fieldTypeByClass, key, peeled->second.type, peeled->second.writtenQualified, /*arrowOnly=*/true );
-            continue;
-        }
-        // same class-name#field-name with different declared types, or one reached through `->` alone (a smart pointer's pointee) → tombstone
-        recordFlatRecvTypeFact( t.fieldTypeByClass, key, fieldTypeWrittenInStd( cr ) ? std::string_view{} : std::string_view( cr.calleeName ), !cr.qualifier.empty(), cr.viaArrow );
+        recordMemberTypeFact( t.fieldTypeByClass, key, cr, aliasPointees );
     }
     t.localNameSet.reserve( ing.bindings.size() );
     t.localShadowSpans.reserve( ing.bindings.size() );
