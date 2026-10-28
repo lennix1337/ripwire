@@ -72,7 +72,8 @@
 #   X3 [G] a local `Gm` shadows the glob (tier 0: typed);  X4 [G] no glob: the crate namesake stays typed;  X5 [G] an in-tree glob
 #          (`use crate::hk::*`) and X6 [G] a glob led by an in-tree crate (`use ga::*`) are not out-of-tree: typed
 #   X7 [G] a glob led by a `mod` the file declares, X8 [G] `use super::*`, X9 [G] `use self::Kind::*` are in-tree: typed;
-#   X10 [G] tier 2 without a glob (`use ga::Gother` only) stays typed
+#   X10 [G] tier 2 without a glob (`use ga::Gother` only) stays typed;  X11 [P] a glob inside a brace group
+#          (`use extcrate::{Alpha, prelude::*}`) is an out-of-tree glob too: hedged
 #
 # Usage: bash test/fnslotcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -282,5 +283,8 @@ o="$( run --callers=self_glob_t )"
 has   "X9 use self::Kind::*: typed" "$o" 'into="Gh.hcb" called_by="fire_gh" called_at="crates/gx/src/hk.rs:2" via="slot"'
 o="$( run --callers=used_crate_t )"
 has   "X10 tier 2 without a glob stays typed" "$o" 'into="Gw.wcb" called_by="fire_ga" called_at="crates/ga/src/lib.rs:2" via="slot"'
+o="$( run --callers=nested_glob_t )"
+has   "X11 a glob inside a brace group hedges: slot-name" "$o" 'into="Gh.hcb" called_by="fire_gh" called_at="crates/gx/src/hk.rs:2" via="slot-name"'
+hasnt "X11b never typed" "$o" 'via="slot"'
 if [ "$fail" -eq 0 ]; then echo "fnslotcheck: PASS"; else echo "fnslotcheck: FAIL"; fi
 exit "$fail"
