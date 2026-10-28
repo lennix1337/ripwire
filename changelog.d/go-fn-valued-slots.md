@@ -14,5 +14,7 @@ another package, or a method, never feeds the slot), and a slot never joins acro
 never a proven call and never in `count=`. Not joined: a field named like any Go method in the tree (the call may be that
 method), a nested literal without its own type, a map or slice literal or a named map type, a registrar reached through a
 method or a qualified call, one registrar storing a parameter in two fields; a `slot_by=` whose only store is in test code is
-not printed on a non-test row. Measured on cockroach (batcheval `Command.EvalRW`, 29 commands, called by `evaluateCommand`)
+not printed on a non-test row. The same `cands=K` now also rides on the existing C-family `<vr via="slot">` rows (a function-pointer table such as tmux's
+command table prints `cands="62"`), with one legend clause beside it; across 235 sampled `--impact` answers on tmux and htop that
+is 230 answers, +5.1 % bytes, and no count, reach or hedge moved. Measured on cockroach (batcheval `Command.EvalRW`, 29 commands, called by `evaluateCommand`)
 and terraform (`Local.opPlan` stored in `f`, called by `Local.Operation`). Gate: `test/fnslotcheck.sh`.
