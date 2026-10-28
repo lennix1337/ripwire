@@ -366,13 +366,29 @@ else
 fi
 
 # (B6) MCP: a soft stop answers with the envelope disclosure, and every answer from that partial index keeps it
+#      WHICH files survive crawl:30 is the filesystem's readdir order (recursive_directory_iterator, no sort before the
+#      stop): APFS keeps a/f02.c, ext4's hashed order can keep it or not (a simulation over random orders keeps it
+#      ~37 % of the time). find_symbol of a name outside the kept files is a JSON-RPC ERROR, which has no
+#      result._memory_stop at all (CI 40671724898 and #458 runs: B6b "_memory_stop=''" on ubuntu only). So the
+#      per-answer assertions below use verbs whose answer is a RESULT on ANY partial index (grep, an empty match is
+#      still an envelope), and the find_symbol probe is asserted only on the shape it actually returned.
 printf '%s\n' \
     "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$FX\",\"pattern\":\"a_01\"}}}" \
-    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"$FX\",\"symbol\":\"a_02\"}}}" \
+    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$FX\",\"pattern\":\"a_02\"}}}" \
+    "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"$FX\",\"symbol\":\"a_02\"}}}" \
     | RIPWIRE_TEST_MEMGUARD=crawl:30 mcp_call "$TMP" --max-memory=64M >"$TMP/b6.out"
 ms2="$( mcp_field "$TMP/b6.out" 2 _memory_stop )"; ms3="$( mcp_field "$TMP/b6.out" 3 _memory_stop )"
 case "$ms2" in *"memory guard"*crawl*64M*) ok "(B6) MCP grep under a crawl stop carries _memory_stop";; *) no "(B6) id=2 _memory_stop='${ms2:0:200}' resp: $( head -c 300 "$TMP/b6.out" )";; esac
-case "$ms3" in *"memory guard"*) ok "(B6b) the next answer from the same partial index still carries it";; *) no "(B6b) id=3 _memory_stop='${ms3:0:200}'";; esac
+case "$ms3" in *"memory guard"*) ok "(B6b) the next answer from the same partial index still carries it";; *) no "(B6b) id=3 _memory_stop='${ms3:0:200}' resp: $( grep '"id":3' "$TMP/b6.out" | head -c 300 )";; esac
+# (B6b2) a third verb on the same index: when the symbol is inside the kept files the answer is a result and must carry
+#        the disclosure; when it is outside them the answer is a not-found ERROR, whose shape (no envelope) is not what
+#        this arm pins — said on a NOTE line, not a PASS, so a reader sees which shape ran
+if [ -n "$( mcp_field "$TMP/b6.out" 4 error )" ]; then
+    printf '  NOTE  (B6b2) find_symbol a_02 fell outside the kept files here (readdir order): a not-found error, no envelope to check\n'
+else
+    ms4="$( mcp_field "$TMP/b6.out" 4 _memory_stop )"
+    case "$ms4" in *"memory guard"*) ok "(B6b2) find_symbol from the same partial index still carries it";; *) no "(B6b2) id=4 _memory_stop='${ms4:0:200}'";; esac
+fi
 printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$FX\",\"pattern\":\"a_01\"}}}" \
     | mcp_call "$TMP" >"$TMP/b6c.out"
 if grep -q '_memory_stop' "$TMP/b6c.out"; then
@@ -519,8 +535,11 @@ fi
 #        beside the ingest; a memory-guard refusal used to join that walk's future before exiting, so the exit code waited for
 #        the end of the log. With a git shim whose `log --name-only` (the walk's own stream; its sha-list probe and every other
 #        git call reach the real git) streams one line every 0.1 s for 6 s, the refusal must return well before the stream ends:
-#        the walker stops at its next line and the join ends there (<= 4 s against the 6 s stream: measured 2 s plain and under
-#        ASan on a loaded 10-core host; the pre-fix binary took 17-25 s). Fresh TMPDIR, so no cached stream from an earlier arm
+#        the walker stops at its next line and the join ends there (measured 2 s plain and under ASan on a loaded 10-core host;
+#        the pre-fix binary took 17-25 s). The verdict is NOT a wall-clock bound: a fixed 4 s failed at 5 s on a host at load
+#        average 13-19, where the shim's own 60 spawned sleeps stretch the 6 s stream too. A join can only end when the stream
+#        does, so the shim writes log-done after its last line and the refusal must have returned without it (the abandoned
+#        walker gets SIGPIPE at its next echo and exits before reaching it); the elapsed seconds stay in the message. Fresh TMPDIR, so no cached stream from an earlier arm
 #        stands in for the walk; the shim records that it served the walk.
 SHIM="$TMP/shim"; mkdir -p "$SHIM" "$TMP/b21tmp"
 REALGIT="$( command -v git )"
@@ -531,6 +550,7 @@ for a in "\$@"; do
         : > "$SHIM/log-served"
         i=0
         while [ \$i -lt 60 ]; do echo "shim-line \$i" || exit 0; sleep 0.1; i=\$((i+1)); done
+        : > "$SHIM/log-done"
         exit 0
     fi
 done
@@ -542,10 +562,10 @@ PATH="$SHIM:$PATH" TMPDIR="$TMP/b21tmp" run_trip crawl:30 "$FXG" --no-cache --fo
 el=$(( $( date +%s ) - t0 ))
 if [ ! -e "$SHIM/log-served" ]; then
     no "(B21) premise: the shim never served a git log --name-only — the history walk did not run against it (rc=$rc)"
-elif [ "$rc" = 5 ] && grep -q '^ripwire: .*cannot answer from a partial index' "$TMP/b21.err" && [ "$el" -le 4 ]; then
+elif [ "$rc" = 5 ] && grep -q '^ripwire: .*cannot answer from a partial index' "$TMP/b21.err" && [ ! -e "$SHIM/log-done" ]; then
     ok "(B21) --for over a crawl stop refuses in ${el}s while the shim's log still streams: the walk is abandoned, not joined"
 else
-    no "(B21) rc=$rc elapsed=${el}s (the shim's log streams for 6 s; a join waits it out) stderr: $( grep '^ripwire:' "$TMP/b21.err" | head -c 200 )"
+    no "(B21) rc=$rc elapsed=${el}s stream-finished-before-return=$( [ -e "$SHIM/log-done" ] && echo yes || echo no ) (the shim's log streams for 6 s; a join waits it out) stderr: $( grep '^ripwire:' "$TMP/b21.err" | head -c 200 )"
 fi
 # (B16) --query --format=candidates is a report verb, so it refuses a partial index like the rest (pinned: its
 #       <candidates> root has no header to carry the cut)
