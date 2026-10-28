@@ -130,5 +130,14 @@ hasnt "N3b an unnamed map literal is no field slot" "$o" 'called_by='
 o="$( run '--for=how is MatchV1 scored and matched' )"
 has   "Q1a the MatchV1 row is shown" "$o" 'n="MatchV1" p="fzt/algo.go"'
 hasnt "Q1 a test-only store prints no slot_by=" "$( row "$o" MatchV1 fzt/algo.go )" 'slot_by='
+# CR 4396503857 (train 40): a Go directory whose FIRST file is no .go file (enlist/README.md sorts before reg.go) keys its types all the same
+[ -f "$FIX/enlist/README.md" ] && ok "K3a the fixture directory is led by a non-Go file" || no "K3a enlist/README.md is missing: K3 would prove nothing"
+o="$( run '--for=how does execTasks run the Task Do of realFn and litFn' )"
+has   "K3 a package directory led by README.md still keys enlist.Task: the qualified literal lands (Do=2, not the unknown-type drop)" "$( row "$o" Task enlist/reg.go )" 'slot_fields="Do=2@~execTasks"'
+# CR 4396503829 (train 40): a caller whose NAME holds a `~` (C++ operator~) is not a field-name-only caller: no ~ clause rides
+o="$( run '--for=how does tfire call tdrawImpl through tdraw' )"
+has   "T2a the operator~ caller is printed" "$( row "$o" tdrawImpl tilde/t.cpp )" 'operator~'
+hasnt "T2 a typed caller named operator~ never raises the field-name-only clause" "$o" 'matches the field name only'
+hasnt "T2b nor the long form of it" "$o" 'a ~ before a slot_by= name'
 if [ "$fail" -eq 0 ]; then echo "fnslotcheck: PASS"; else echo "fnslotcheck: FAIL"; fi
 exit "$fail"

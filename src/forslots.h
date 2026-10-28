@@ -40,6 +40,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -374,12 +375,13 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
         const Symbol&  s  = ing.symbols[id];
         std::vector<std::string> names;
         std::size_t              more = 0;
+        bool                     printedNameOnly = false;   // a caller joined by the field NAME alone is in the printed run (not a `~` in some name)
         std::string              run;
         if( s.kind == SymKind::Function || s.kind == SymKind::Method )
         {
             const bool         subjectIsTest = isTestSymbol( ing, id );
             const ValueRefRows rows = valueRefCallerRows( ing, vri, std::span<const NodeId>( &id, 1 ) );
-            std::vector<std::pair<bool, std::string>> by;   // (a test caller, name), first-site order; non-test callers listed first
+            std::vector<std::tuple<bool, bool, std::string>> by;   // (a test caller, a field-name-only caller, name), first-site order; non-test callers listed first
             for( const ValueRefRow& row : rows.rows )
             {
                 if( !subjectIsTest && isTestPath( rootRelPath( ing, ing.references[ row.ref ].fileId ) ) )
@@ -388,7 +390,7 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
                 }
                 for( const NodeId f : vri.calledBy( row.ref ) )
                 {
-                    by.emplace_back( isTestSymbol( ing, f ), slot_detail::ownerName( ing.symbols[f] ) );
+                    by.emplace_back( isTestSymbol( ing, f ), false, slot_detail::ownerName( ing.symbols[f] ) );
                 }
                 for( const std::uint32_t c : row.slotCalls )
                 {
@@ -396,14 +398,16 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
                     if( from < ing.symbols.size() )
                     {
                         // fix1 F-4: `~` marks a caller joined by the field NAME alone (via="slot-name"): a candidate, not a fact
-                        by.emplace_back( isTestSymbol( ing, from ), ( row.slotTyped ? "" : std::string( kForSlotNameMark ) ) + slot_detail::ownerName( ing.symbols[from] ) );
+                        by.emplace_back( isTestSymbol( ing, from ), !row.slotTyped, ( row.slotTyped ? "" : std::string( kForSlotNameMark ) ) + slot_detail::ownerName( ing.symbols[from] ) );
                     }
                 }
             }
-            std::ranges::stable_partition( by, []( const auto& b ) { return !b.first; } );
-            for( auto& [ test, name ] : by )
+            std::ranges::stable_partition( by, []( const auto& b ) { return !std::get<0>( b ); } );
+            for( auto& [ test, nameOnly, name ] : by )
             {
+                const std::size_t before = names.size();
                 slot_detail::addCapped( names, more, std::move( name ) );
+                printedNameOnly = printedNameOnly || ( nameOnly && names.size() > before );   // CR 4396503829: the mark of a PRINTED name-only caller
             }
             if( !names.empty() )
             {
@@ -463,6 +467,7 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
                 if( std::ssize( names ) < kForSlotByCap )
                 {
                     names.push_back( std::move( item ) );
+                    printedNameOnly = printedNameOnly || ( !callerTyped && !caller.empty() );
                 }
                 else
                 {
@@ -478,7 +483,7 @@ inline std::size_t spliceSlotJoinRows( std::string& sigs, const IngestResult& in
         {
             continue;
         }
-        if( nameTier != nullptr && run.find( kForSlotNameMark ) != std::string::npos )
+        if( nameTier != nullptr && printedNameOnly )
         {
             *nameTier = true;
         }
