@@ -52,7 +52,10 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "FAIL: no binary at $BIN"; exit 1; }
 echo "pyaliascallcheck: $( "$BIN" --version 2>/dev/null )"
 
-callees(){ ( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --callees="$1" --legend=compact ) 2>/dev/null >"$TMP/$1"; }
+# CR 4396503889 (train 40): the query's own exit status is the helper's result and EVERY caller reads it — a selector that is no longer
+# indexed answers "not found" with a nonzero exit, and a near-miss arm that only looks for a forbidden path would pass on that.
+callees(){ ( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --callees="$1" --legend=compact ) 2>/dev/null >"$TMP/$1"; local rc=$?
+           [ "$rc" -eq 0 ] || { no "$1: the --callees query failed (rc=$rc), so its arm below proves nothing"; return 1; }; return 0; }
 
 # ── 0. presence: every fixture file parses (a fixture that fails to parse would pass the near misses inert) ──
 ( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --skipped --legend=compact ) >"$TMP/skipped" 2>/dev/null
@@ -62,7 +65,7 @@ else ok "every fixture file indexed with no parse degrade"; fi
 
 # ── 1. positive arms ──
 for c in call_plain call_cond call_outside; do
-    callees "$c"
+    callees "$c" || continue
     row=$( grep -o '<s [^>]*p="m.py:1"[^>]*/>' "$TMP/$c" )
     if [ -n "$row" ] && ! printf '%s' "$row" | grep -q 'via=' && ! grep -q 'p="decoy.py' "$TMP/$c"; then
         ok "$c binds m.py:1 f as a proven edge (no via=\"name\" hedge) and no decoy row"
@@ -70,7 +73,7 @@ for c in call_plain call_cond call_outside; do
         no "$c: expected m.py:1 f (proven, no via=) and no decoy row"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/$c"
     fi
 done
-callees call_class
+callees call_class || :
 if grep -q '<s t="cls" n="Widget" p="m.py:9"/>' "$TMP/call_class"; then ok "call_class binds m.py:9 class Widget as a proven edge"
 else no "call_class: expected m.py:9 Widget"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/call_class"; fi
 ( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --callers=m.py:f --legend=compact ) >"$TMP/callers" 2>/dev/null
@@ -79,31 +82,35 @@ else no "--callers=m.py:f misses an aliased caller"; sed 's/<!--.*-->//; s/^/   
 
 # ── 2. near misses: never m.py's f ──
 for c in call_param call_local call_rebind call_dynamic call_star call_twomod call_fnimport call_inner call_disagree call_reexport call_nested call_external call_twice call_comp call_gen call_lambda call_obj call_self; do
-    callees "$c"
-    if grep -q 'p="m.py:1"\|p="m2.py:1"\|p="m.py:10"\|p="m3.py\|p="jsonish.py' "$TMP/$c"; then
+    callees "$c" || continue
+    # call_disagree imports BOTH f and h as g: neither target may be pinned (h is m.py:5; CR 4396503892)
+    if grep -q 'p="m.py:1"\|p="m2.py:1"\|p="m.py:10"\|p="m3.py\|p="jsonish.py' "$TMP/$c" || { [ "$c" = call_disagree ] && grep -q 'p="m.py:5"' "$TMP/$c"; }; then
         no "$c: bound through the renamed import (must stay undecided)"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/$c"
     else ok "$c: no import-pinned edge"; fi
 done
 
 # ── 2b. the target module rebinds f after its def: a def-line pin to mo_*.py:1 would name the overridden def ──
 for c in call_mo_import call_mo_try call_mo_star call_mo_assign call_mo_dyn call_mo_ostar call_mo_global; do
-    callees "$c"
+    callees "$c" || continue
     if grep -q 'p="mo_[a-z]*.py:1"' "$TMP/$c"; then
         no "$c: pinned the overridden def of a module that rebinds f (must stay undecided)"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/$c"
     else ok "$c: no pin to the overridden def"; fi
 done
 
 # ── 3. unchanged: alias equal to the name keeps the ladder (h in m.py, the edge it had before) ──
-callees call_same
+callees call_same || :
 if grep -q '<s t="fn" n="h" p="m.py:5"/>' "$TMP/call_same"; then ok "call_same: the same ladder edge to m.py:5 h as before"
 else no "call_same changed"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/call_same"; fi
 
 # ── 4. hygiene: determinism and warm == cold ──
-( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --callers=f ) >"$TMP/d1" 2>/dev/null
-( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --callers=f ) >"$TMP/d2" 2>/dev/null
-if cmp -s "$TMP/d1" "$TMP/d2"; then ok "deterministic"; else no "non-deterministic"; fi
-( cd "$FIX" || exit 1; "$BIN" "$FIX" --cache="$TMP/c.bin" --callers=f ) >"$TMP/cold" 2>/dev/null
-( cd "$FIX" || exit 1; "$BIN" "$FIX" --cache="$TMP/c.bin" --callers=f ) >"$TMP/warm" 2>/dev/null
-if cmp -s "$TMP/cold" "$TMP/warm" && cmp -s "$TMP/cold" "$TMP/d1"; then ok "warm == cold == --no-cache"; else no "cache changes the answer"; fi
+# every run's status is read (CR 4396503889): two empty outputs from two failed runs are "equal"
+rc=0
+( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --callers=f ) >"$TMP/d1" 2>/dev/null || rc=1
+( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --callers=f ) >"$TMP/d2" 2>/dev/null || rc=1
+if [ "$rc" -eq 0 ] && [ -s "$TMP/d1" ] && cmp -s "$TMP/d1" "$TMP/d2"; then ok "deterministic"; else no "non-deterministic (or a run failed / answered nothing)"; fi
+rc=0
+( cd "$FIX" || exit 1; "$BIN" "$FIX" --cache="$TMP/c.bin" --callers=f ) >"$TMP/cold" 2>/dev/null || rc=1
+( cd "$FIX" || exit 1; "$BIN" "$FIX" --cache="$TMP/c.bin" --callers=f ) >"$TMP/warm" 2>/dev/null || rc=1
+if [ "$rc" -eq 0 ] && [ -s "$TMP/cold" ] && cmp -s "$TMP/cold" "$TMP/warm" && cmp -s "$TMP/cold" "$TMP/d1"; then ok "warm == cold == --no-cache"; else no "cache changes the answer (or a run failed / answered nothing)"; fi
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME CHECKS FAILED"; exit 1; }
