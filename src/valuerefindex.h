@@ -1255,12 +1255,15 @@ public:
         }
         return isAncestor( member, site ) || isAncestor( site, member );
     }
-    // The class definitions the written base names of class `c` bind to, in reference order (empty: none).
-    std::span<const NodeId> basesOf( NodeId c ) const
+    // Calls `visit( base )` for each class definition the written base names of class `c` bind to, in reference order.
+    template <class Visit>
+    void eachBase( NodeId c, Visit&& visit ) const
     {
         buildBases();
-        const auto it = m_basesOf.find( c );
-        return it == m_basesOf.end() ? std::span<const NodeId>() : std::span<const NodeId>( it->second );
+        if( const auto it = m_basesOf.find( c ); it != m_basesOf.end() )
+        {
+            std::ranges::for_each( it->second, visit );
+        }
     }
 
 private:

@@ -559,15 +559,23 @@ private:
     void collectMessagesAndMethods() const
     {
         m_inClass.assign( m_ing.symbols.size(), 0 );
+        m_fnsOfFile.assign( m_ing.files.size(), {} );
         for( const Symbol& s : m_ing.symbols )
         {
-            const bool fn = s.kind == SymKind::Function || s.kind == SymKind::Method;
-            if( isPython( s.lang ) && fn && m_classes.ownerOf( s.id ) != kNoNode )
+            if( !isPython( s.lang ) )
             {
-                m_inClass[ s.id ] = 1;
-                m_methodsByName[ std::string_view( s.name ) ].push_back( s.id );
+                continue;
             }
-            else if( isPython( s.lang ) && s.kind == SymKind::Class && !handlerNameOf( s.id ).empty() )
+            if( s.kind == SymKind::Function || s.kind == SymKind::Method )
+            {
+                m_fnsOfFile[ s.fileId ].push_back( s.id );
+                if( m_classes.ownerOf( s.id ) != kNoNode )
+                {
+                    m_inClass[ s.id ] = 1;
+                    m_methodsByName[ std::string_view( s.name ) ].push_back( s.id );
+                }
+            }
+            else if( s.kind == SymKind::Class && !handlerNameOf( s.id ).empty() )
             {
                 m_messagesByName[ std::string_view( s.name ) ].push_back( s.id );
             }
@@ -580,18 +588,6 @@ private:
         const auto holds = [ & ]( NodeId f ) { return m_ing.symbols[f].sigStartByte <= at && at < m_ing.symbols[f].endByte; };
         const auto hit   = std::ranges::find_if( m_fnsOfFile[ fileId ] | std::views::reverse, holds );
         return hit == ( m_fnsOfFile[ fileId ] | std::views::reverse ).end() ? kNoNode : *hit;
-    }
-    // The Python function definitions of each file (definition order), and what the readers' classes post.
-    void indexFunctions() const
-    {
-        m_fnsOfFile.assign( m_ing.files.size(), {} );
-        for( const Symbol& s : m_ing.symbols )
-        {
-            if( isPython( s.lang ) && ( s.kind == SymKind::Function || s.kind == SymKind::Method ) )
-            {
-                m_fnsOfFile[ s.fileId ].push_back( s.id );
-            }
-        }
     }
     // Readers of rule `rule`'s attribute (`.A` not assigned) in Python files outside test paths, read from the text, and every
     // method name their classes define (its posters). Per rule: another rule's readers do not post this rule's messages.
@@ -673,14 +669,14 @@ private:
         {
             const NodeId d = todo.back();
             todo.pop_back();
-            for( const NodeId b : m_classes.basesOf( d ) )
+            m_classes.eachBase( d, [ & ]( NodeId b )
             {
                 if( b != c && linkOk( d, b ) && !std::ranges::contains( out, b ) )
                 {
                     out.push_back( b );
                     todo.push_back( b );
                 }
-            }
+            } );
         }
         std::ranges::sort( out );
         m_ancestors[c] = out;
@@ -740,7 +736,6 @@ private:
             }
         }
         collectMessagesAndMethods();
-        indexFunctions();
         HashMap<std::string_view, char> posters;
         for( HandlerRule& rule : m_rules )
         {
