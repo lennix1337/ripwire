@@ -154,6 +154,41 @@ inline std::string_view pythonDocstringQuote( std::string_view t ) noexcept
     return {};
 }
 
+// The statement lines of a body (isStatementLine), a leading Python docstring not counted (F4: only the FIRST statement can be one);
+// counting stops past `stopAbove` (the caller needs no exact count beyond its bound).
+inline std::size_t bodyStatementLines( std::string_view body, Lang lang, std::size_t stopAbove ) noexcept
+{
+    std::size_t      statements = 0;
+    std::string_view docClose;                        // inside a leading multi-line docstring: its closing quote
+    bool             docAllowed = lang == Lang::Python;
+    while( !body.empty() && statements <= stopAbove )
+    {
+        const std::size_t      nl   = body.find( '\n' );
+        const std::string_view line = body.substr( 0, nl );
+        body                        = nl == std::string_view::npos ? std::string_view() : body.substr( nl + 1 );
+        if( !docClose.empty() )
+        {
+            docClose = line.find( docClose ) != std::string_view::npos ? std::string_view() : docClose;
+            continue;
+        }
+        if( !isStatementLine( line, lang ) )
+        {
+            continue;
+        }
+        const std::string_view q = docAllowed ? pythonDocstringQuote( line.substr( line.find_first_not_of( " \t\r" ) ) ) : std::string_view();
+        docAllowed               = false;
+        if( q.empty() )
+        {
+            ++statements;
+            continue;
+        }
+        const std::string_view tr   = line.substr( line.find_first_not_of( " \t\r" ) );
+        const std::size_t      open = tr.find( q );
+        docClose = q.size() == 3 && tr.find( q, open + q.size() ) == std::string_view::npos ? q : std::string_view();
+    }
+    return statements;
+}
+
 // The call sites W's own text holds: every call reference inside its span (resolved, by name, declined, external or undefined alike:
 // a call the graph holds no edge for is still a call), nested lambdas included, and the start byte of the first. Only a Call-role use
 // counts (not a read, a type, an inherit, a doc link or a HAS-A member). One scan of ing.references, run last, after the cheap tests.
@@ -245,52 +280,14 @@ inline NodeId thinDelegate( const IngestResult& ing, const Graph& g, NodeId id )
     {
         return kNoNode;
     }
-    std::string_view body       = std::string_view( *text ).substr( s.sigEndByte, s.endByte - s.sigEndByte );
-    std::size_t      statements = 0;
-    std::string_view docClose;                              // inside a leading multi-line Python docstring: its closing quote
-    bool             docAllowed = s.lang == Lang::Python;   // only the FIRST statement can be the docstring
-    while( !body.empty() )
-    {
-        const std::size_t      nl   = body.find( '\n' );
-        const std::string_view line = body.substr( 0, nl );
-        body                        = nl == std::string_view::npos ? std::string_view() : body.substr( nl + 1 );
-        if( !docClose.empty() )
-        {
-            if( line.find( docClose ) != std::string_view::npos )
-            {
-                docClose = {};
-            }
-            continue;
-        }
-        if( !isStatementLine( line, s.lang ) )
-        {
-            continue;
-        }
-        if( docAllowed )
-        {
-            docAllowed                = false;
-            const std::string_view tr = line.substr( line.find_first_not_of( " \t\r" ) );
-            if( const std::string_view q = pythonDocstringQuote( tr ); !q.empty() )
-            {
-                const std::size_t open = tr.find( q );
-                if( q.size() == 3 && tr.find( q, open + q.size() ) == std::string_view::npos )
-                {
-                    docClose = q;
-                }
-                continue;
-            }
-        }
-        if( ++statements > kThinBodyLines )
-        {
-            return kNoNode;
-        }
-    }
-    if( statements == 0 )
+    const std::string_view body       = std::string_view( *text ).substr( s.sigEndByte, s.endByte - s.sigEndByte );
+    const std::size_t      statements = bodyStatementLines( body, s.lang, kThinBodyLines );
+    if( statements == 0 || statements > kThinBodyLines )
     {
         return kNoNode;
     }
     const SpanCalls calls = callSitesInSpan( ing, s );
-    if( calls.count != 1 || !callIsLastStatement( std::string_view( *text ).substr( s.sigEndByte, s.endByte - s.sigEndByte ), s.sigEndByte, calls.firstByte, s.lang ) )
+    if( calls.count != 1 || !callIsLastStatement( body, s.sigEndByte, calls.firstByte, s.lang ) )
     {
         return kNoNode;   // F2: one call site of ANY kind in W's text; F6: and it is W's last statement (W hands off, it does not compute)
     }

@@ -1804,7 +1804,8 @@ inline std::string_view pathHandlerRuleLegend( const PathHandlerRule& hrule ) no
 inline constexpr std::size_t kRouteBodyMaxHops = 2;   // bridge rows 0..2 (from= and the next two), never the to= row
 inline constexpr std::size_t kRouteBodyMax     = 4;   // spew guard: bodies per answer; past it capped="1" next= the first unshown
 
-inline std::vector<RouteBody> pathRouteBodies( const IngestResult& ing, const Graph& g, const PathBridge& br, const PathHandlerRule& hrule )
+// The route's <bodies of="route" proven="0"> element (routeBodiesXml, the one printer); "" when the answer names no route body.
+inline RouteBodiesXml pathRouteBodies( const IngestResult& ing, const Graph& g, const PathBridge& br, const PathHandlerRule& hrule, std::string_view rootArg )
 {
     std::vector<RouteBody> out;
     std::vector<NodeId>    seen;
@@ -1848,11 +1849,7 @@ inline std::vector<RouteBody> pathRouteBodies( const IngestResult& ing, const Gr
             add( reader.fn, " via=\"name-key\"" );
         }
     }
-    return out;
-}
-inline RouteBodiesXml pathRouteBodiesXml( const IngestResult& ing, std::span<const RouteBody> bodies, std::string_view rootArg )
-{
-    return routeBodiesXml( ing, bodies, "route", " proven=\"0\"", kRouteBodyMax, rootArg );
+    return routeBodiesXml( ing, out, "route", " proven=\"0\"", kRouteBodyMax, rootArg );
 }
 static_assert( kRouteBodyMaxHops == 2 && kRouteBodyMax == 4 && kHopBodyCapBytes == 4000, "the route clause spells the bounds: re-word it with the knobs" );
 inline std::string_view pathRouteBodiesLegend( bool on ) noexcept

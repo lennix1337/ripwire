@@ -2625,7 +2625,7 @@ std::optional<int> runPathServed( const MainDispatch& d, std::span<const rw::Nod
         const bool               pthBodiesOn  = !path.empty() && rw::hopBodiesOn();
         const rw::RouteBodiesXml pthHopBodyEl = pthBodiesOn ? rw::pathHopBodiesXml( ing, rw::pathMiddleHops( ing, g, pthShown, served ), pthBodyRoot ) : rw::RouteBodiesXml{};
         const rw::RouteBodiesXml pthRouteEl   = path.empty() && rw::hopBodiesOn()
-                                                    ? rw::pathRouteBodiesXml( ing, rw::pathRouteBodies( ing, g, pthBridge, pthHandler ), pthBodyRoot ) : rw::RouteBodiesXml{};
+                                                    ? rw::pathRouteBodies( ing, g, pthBridge, pthHandler, pthBodyRoot ) : rw::RouteBodiesXml{};
         const std::string&       pthHopBodies = pthHopBodyEl.xml;
         std::string              pthRootAttrs = rw::pathTestTwinRootAttrs( ing, rw::pathPairsRootAttrs( ing, pthPairs, pthSingleRoot, pthRootPrefix ).rootAttrs, pthTwin, pthSingleRoot, pthRootPrefix );
         const std::string        pthHopNext   = pthBodiesOn && pthRootAttrs.find( " next=\"" ) == std::string::npos ? rw::pathMiddleHopNext( ing, pthShown, pthBodyRoot ) : std::string();

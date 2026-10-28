@@ -3835,7 +3835,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     // F8: no served set here — the MCP `for` answer's graph-verb block calls this twin by name only, so a middle hop that `for`
     // answer already carries prints a second copy on MCP (the CLI passes its served bodies: runPathServed); a known, bounded divergence
     const RouteBodiesXml      ptHopBodyEl = ptBodiesOn ? pathHopBodiesXml( ing, pathMiddleHops( ing, g, ptShown, {} ), ptBodyRoot ) : RouteBodiesXml{};
-    const RouteBodiesXml      ptRouteEl   = pth.empty() && hopBodiesOn() ? pathRouteBodiesXml( ing, pathRouteBodies( ing, g, ptBridge, ptHandler ), ptBodyRoot ) : RouteBodiesXml{};   // BODY-ON-ROUTE, as on the CLI
+    const RouteBodiesXml      ptRouteEl   = pth.empty() && hopBodiesOn() ? pathRouteBodies( ing, g, ptBridge, ptHandler, ptBodyRoot ) : RouteBodiesXml{};   // BODY-ON-ROUTE, as on the CLI
     const std::string&        ptHopBodies = ptHopBodyEl.xml;
     std::string               ptRootAttrs = pathTestTwinRootAttrs( ing, pathPairsRootAttrs( ing, ptPairs, ptSingleRoot, ptRootPrefix ).rootAttrs, ptTwin, ptSingleRoot, ptRootPrefix );
     const std::string         ptHopNext   = ptBodiesOn && ptRootAttrs.find( " next=\"" ) == std::string::npos ? pathMiddleHopNext( ing, ptShown, ptBodyRoot ) : std::string();

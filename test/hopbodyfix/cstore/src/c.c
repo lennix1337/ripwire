@@ -23,7 +23,5 @@ int scale_store_limit(int v)
 }
 int store_and_scale_twice(int v)
 {
-    int a = v * 2;
-    int b = a * 2;
-    return a + b;
+    return ( v * 3 ) - ( v % 7 );
 }
