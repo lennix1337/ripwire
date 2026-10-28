@@ -38,6 +38,7 @@
 #include "filter.h"           // pathTierIndexOver — the near-sink rows' tier key within a depth
 #include "arch.h"             // wildcardMatch — the ONE `*` match, which a glob endpoint reads
 #include "closures.h"         // ClosureIndex — a near-sink row written inside another function's body (why=closure)
+#include "hopbody.h"           // BODY-ON-ROUTE: RouteBody, routeBodiesXml — the one edge-kind-aware body printer
 #include "backhops.h"          // HOP1: BackwardHops (slot + declined hops of a sink), DeclinedCrossRule, builtinSpelledCall
 #include "infra/sortutil.h"   // svLess: the explicit byte order every string_view sort here takes (portablebuildcheck #6)
 #include "infra/enumcount.h"  // enumCountIsExact — the kNearSinkKindCount / kBridgeViaCount sizes follow their enums
@@ -1788,6 +1789,78 @@ inline constexpr std::string_view kHandlerRuleLegend =
 inline std::string_view pathHandlerRuleLegend( const PathHandlerRule& hrule ) noexcept
 {
     return hrule.found() ? kHandlerRuleLegend : std::string_view();
+}
+
+
+// ── BODY-ON-ROUTE (lane path-hop-body-fix1, textual-11): the bodies of the route a reachable=0 answer already names ──────────
+// A reachable=0 answer names a route it never traced: the bridge rows (poster -> queue consumer -> dispatcher) and the handler_rule
+// readers (where the handler name is read and dispatched). The question is usually what those functions DO (textual-11: the post
+// puts onto _message_queue, the loop takes from it, _on_message dispatches and bubbles to _parent) and the answer printed only names.
+// GAIN GATE (the FOR-ROUTE lesson: 25 KB of rows that gained nothing): only symbols the answer already prints on its route, the
+// bridge rows within kRouteBodyMaxHops of from= (never to=) and the <hrd> readers shown; each body under the per-body guard
+// (kHopBodyCapBytes); at most kRouteBodyMax bodies, capped="1" + next= past it. HONESTY: the envelope says proven="0"; a body under a
+// crossing carries that crossing's via= cands= (one candidate's body, never the proven callee), a reader's via="name-key"; nothing
+// here enters reachable=, hops= or any proven count.
+inline constexpr std::size_t kRouteBodyMaxHops = 2;   // bridge rows 0..2 (from= and the next two), never the to= row
+inline constexpr std::size_t kRouteBodyMax     = 4;   // spew guard: bodies per answer; past it capped="1" next= the first unshown
+
+inline std::vector<RouteBody> pathRouteBodies( const IngestResult& ing, const Graph& g, const PathBridge& br, const PathHandlerRule& hrule )
+{
+    std::vector<RouteBody> out;
+    std::vector<NodeId>    seen;
+    const auto add = [ & ]( NodeId n, std::string hedge )
+    {
+        if( n >= ing.symbols.size() || ing.symbols[n].kind == SymKind::ModuleScope || ing.symbols[n].endByte <= ing.symbols[n].sigStartByte
+            || fold_detail::overlapsServed( ing, n, seen, /*orHolds=*/true ) )
+        {
+            return;
+        }
+        seen.push_back( n );
+        out.push_back( { n, std::move( hedge ) } );
+    };
+    if( br.found() && br.hops.size() >= 2 )
+    {
+        const std::size_t last = std::min( kRouteBodyMaxHops, br.hops.size() - 2 );   // the to= row is the last one: never printed
+        for( std::size_t i = 0; i <= last; ++i )
+        {
+            std::string hedge;
+            if( i > 0 && br.via[i] != BridgeVia::Edge )
+            {
+                hedge = " via=\"" + std::string( kBridgeViaNames[ std::size_t( br.via[i] ) ] ) + ( bridgeViaIsSlot( br.via[i] ) ? "\" slot_callers=\"" : "\" cands=\"" )
+                      + std::to_string( br.fan[i] ) + "\"";
+            }
+            else if( i > 0 )
+            {
+                hedge = chainHopHedge( ing, g, br.hops[i - 1], br.hops[i] );   // an edge row: by name / link / split / impl, as on a reached chain
+            }
+            add( br.hops[i], std::move( hedge ) );
+        }
+    }
+    if( hrule.found() && hrule.rule != nullptr )
+    {
+        std::size_t readers = 0;
+        for( const HandlerReader& reader : hrule.rule->readers )
+        {
+            if( readers++ == kHandlerRuleReaders )
+            {
+                break;   // exactly the <hrd> rows pathHandlerRuleXml prints
+            }
+            add( reader.fn, " via=\"name-key\"" );
+        }
+    }
+    return out;
+}
+inline RouteBodiesXml pathRouteBodiesXml( const IngestResult& ing, std::span<const RouteBody> bodies, std::string_view rootArg )
+{
+    return routeBodiesXml( ing, bodies, "route", " proven=\"0\"", kRouteBodyMax, rootArg );
+}
+static_assert( kRouteBodyMaxHops == 2 && kRouteBodyMax == 4 && kHopBodyCapBytes == 4000, "the route clause spells the bounds: re-word it with the knobs" );
+inline std::string_view pathRouteBodiesLegend( bool on ) noexcept
+{
+    return on ? "bodies of=route proven=0: the bodies of the route this answer names but never traced: the bridge rows within 2 hops of "
+                "from= (never to=), then the hrd readers; at most 4 (capped=1, next= the first unshown), each whole up to 4000 bytes "
+                "(truncated=1 past it); a hedge, never in reachable= or hops=. "
+              : "";
 }
 
 }   // namespace rw

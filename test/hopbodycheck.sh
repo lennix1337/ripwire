@@ -38,6 +38,24 @@
 #   X1 [G] determinism   X2 [G] xmllint well-formed   X3 [G] no "--" inside a legend comment
 #   I  [optional, RIPWIRE_BASE_BIN=<pre-change binary>] RIPWIRE_NO_HOP_BODY=1 head == the base binary on every question here
 #
+# FIX1 arms (lane path-hop-body-fix1; [M] = RED on the path-hop-body head 5351fbbb / the merge binary, the review's findings):
+#   H1 [M] a BY-NAME middle hop (P1.process / P2.process): its body carries via="name" cands="2" on the <b> (F1), the hedge clause
+#          rides; a proven middle hop (P1's dispatch) carries none
+#   H2 [M] a declined iface call (ts15 m.match) or an undefined call (missingHelperCall) beside the one proven call: never followed (F2)
+#   H3 [M] a call bound only through a pybind11 binding (amb=, one call site): never followed — pins the ambOut guard (review mutant MA)
+#   H4 [M] C stores `*out = …` are statement lines: scale_and_store is not a thin wrapper (F3)
+#   H5 [M] a documented Python delegator is followed (F4), follow_of names the wrapper as Owner.name (F7)
+#   H6 [M] a class with a field initializer is never a wrapper (F5)
+#   H7 [M] logic beside one call (computeScoreTotal) and a .filter().map().reduce() pipeline are not delegators (F2/F6)
+#   H8 [M] a one-line wrapper over a > 4000 B callee: the follow is cut, truncated="1" lines= next= (kills the review's mutant MB)
+#   H9 [M] the answer-wide follow guard: 3 follow bodies, then <follow_cut n="2" next=> naming the first unfollowed callee
+#   R1 [M] BODY-ON-ROUTE: a reachable=0 poster -> queue -> dispatch answer prints <bodies of="route" proven="0"> with post_message,
+#          _process_messages_loop (via="queue" cands="2"), _dispatch_message and the hrd reader _on_message (via="name-key"), CDATA =
+#          source; never the to= row (on_event); reachable= and hops= unchanged; the of=route clause rides (compact and full)
+#   R2 [M] the route spew guard: a fifth route body is cut, capped="1" next="--expand=pump.py:45:_trace_message"
+#   R3 [M] the hop bound: the 4-hop bridge press -> on_event prints its rows 0..2 only (press, post_message, the loop)
+#   R4 [G] RIPWIRE_NO_HOP_BODY=1: no route element; MCP path_between prints the CLI's route element byte for byte
+#
 # Usage:  bash test/hopbodycheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/hopbodycheck.sh
 # BIN is $1, else RIPWIRE_BIN, else build/ripwire; the first output line names the binary used. Exits non-zero on any failure.
 
@@ -88,6 +106,33 @@ run "$WEB" --for="$T_WEB"              >"$TMP/f3a"
 run "$WEB" --for="$T_LISTEN"           >"$TMP/f3b"
 run "$LOO" --for="$T_LOOSE"            >"$TMP/f4"
 run "$LOO" --callees=handleLooseRequest >"$TMP/f4c"
+
+# FIX1 fixtures (the route ones run from a copy outside test/: a reader under a test path is not a handler_rule reader)
+HB="test/hopbodyfix"
+cp -R "$HB/route" "$HB/routecap" "$TMP/"
+run "$HB/byname" --path=startJ,sinkJ >"$TMP/h1"
+run "$HB/byname" --path=startJ,sinkJ --legend=full >"$TMP/h1f"
+run "$HB/declined" --for="how does relayWorkItem relay a work item" >"$TMP/h2a"
+run "$HB/declined" --callees=relayWorkItem >"$TMP/h2c"
+run "$HB/external" --for="how does relayWorkItem relay a work item" >"$TMP/h2b"
+run "$HB/ffi" --for="How does relay_transform relay a value?" >"$TMP/h3"
+run "$HB/ffi" --callees=relay_transform >"$TMP/h3c"
+run "$HB/cstore" --for="how does scale_and_store scale and store" >"$TMP/h4"
+run "$HB/pydoc" --for="how does Widget post_message post a message" >"$TMP/h5a"
+run "$HB/pydoc" --for="how does Widget post_message_plain post a message" >"$TMP/h5b"
+run "$HB/klass" --for="how does PanelHolder compute the panel size for the holder" >"$TMP/h6"
+run "$HB/klass" --for="how does ChildRunner launch the runner" >"$TMP/h6b"
+run "$HB/logic" --for="how does computeScoreTotal compute the score total" >"$TMP/h7a"
+run "$HB/logic" --for="how does pipelineScore score the pipeline items" >"$TMP/h7b"
+run "$HB/bigfollow" --for="how does relayWorkItem relay a work item" >"$TMP/h8"
+run "$HB/many" --for="How does shipOrder ship an order?" >"$TMP/h9"
+run "$HB/many" --for="How does shipOrder ship an order?" --legend=full >"$TMP/h9f"
+rrun(){ local d="$1"; shift; ( cd "$TMP/$d" || exit 1; "$BIN" "$TMP/$d" --no-cache "$@" 2>/dev/null ); }
+rrun route '--path=post_message,on_*' >"$TMP/r1"
+rrun route '--path=post_message,on_*' --legend=full >"$TMP/r1f"
+rrun routecap '--path=post_message,on_*' >"$TMP/r2"
+rrun route '--path=press,on_event' >"$TMP/r3"
+( cd "$TMP/route" && RIPWIRE_NO_HOP_BODY=1 "$BIN" "$TMP/route" --no-cache '--path=post_message,on_*' 2>/dev/null ) >"$TMP/r1.off"
 
 cat > "$TMP/chk.py" <<'PY'
 import html, re, shlex, subprocess, sys, os
@@ -183,8 +228,45 @@ check("follow_of" not in off, "(F6) RIPWIRE_NO_HOP_BODY=1: no follow_of= and no 
 strip = re.sub(r'<b [^>]*follow_of="[^"]*"[^>]*>.*?</b>', '', f1, flags=re.S)
 mask = lambda t: re.sub(r' est_tokens="\d+"', '', re.sub(r'<!--.*?-->', '', t, flags=re.S))
 check(mask(strip) == mask(off), "(F6) the --for answer minus the follow bodies == the RIPWIRE_NO_HOP_BODY=1 answer (payload, est_tokens masked)")
+# FIX1 H1-H9: the review's findings
+el = hopel(rd("h1")); bs = bodies(el)
+check(len(bs) == 1 and bs[0][0].get("n") == "process" and bs[0][0].get("via") == "name" and bs[0][0].get("cands") == "2", "(H1) a by-name middle hop's body carries via=name cands=2: %r" % [b[0] for b in bs])
+check("b via= cands=" in legend(rd("h1")) and "no proven call" in legend(rd("h1f")), "(H1) the hedge clause rides, compact and full")
+check(bodies(hopel(rd("p1"))) and "via" not in bodies(hopel(rd("p1")))[0][0] and "b via= cands=" not in legend(rd("p1")), "(H1) a proven middle hop carries no hedge and no clause")
+fol = lambda t: [b[0].get("follow_of") for b in bodies(t) if "follow_of" in b[0]]
+check('via="declined"' in rd("h2c") and re.search(r'<b [^>]*n="relayWorkItem"', rd("h2a")) and fol(rd("h2a")) == [], "(H2) a declined call beside the proven one: relayWorkItem served, never followed")
+check(re.search(r'<b [^>]*n="relayWorkItem"', rd("h2b")) and fol(rd("h2b")) == [], "(H2) an undefined call beside the proven one: never followed")
+check('graph_ambiguous="1"' in rd("h3c") and re.search(r'<b [^>]*n="relay_transform"', rd("h3")) and fol(rd("h3")) == [] and not re.search(r'<b [^>]*n="scale_impl"', rd("h3")), "(H3) a binding-only call (amb=) is never followed")
+check(re.search(r'<b [^>]*n="scale_and_store"', rd("h4")) and fol(rd("h4")) == [], "(H4) C *out stores count as statements: no follow")
+check(fol(rd("h5a")) == ["Widget.post_message"] and fol(rd("h5b")) == ["Widget.post_message_plain"], "(H5) documented and plain Python delegators both followed, follow_of=Owner.name: %r %r" % (fol(rd("h5a")), fol(rd("h5b"))))
+check(re.search(r'<b [^>]*n="PanelHolder"', rd("h6")) and fol(rd("h6")) == [], "(H6) a class is never a wrapper")
+check(fol(rd("h6b")) == ["ChildRunner.launch"], "(H5/F7) a super-override follow names its wrapper Owner.name: %r" % fol(rd("h6b")))
+check(re.search(r'<b [^>]*n="computeScoreTotal"', rd("h7a")) and fol(rd("h7a")) == [] and fol(rd("h7b")) == [], "(H7) logic beside one call and a builtin pipeline are not delegators: %r %r" % (fol(rd("h7a")), fol(rd("h7b"))))
+fb = [b for b in bodies(rd("h8")) if "follow_of" in b[0]]; fa = fb[0][0] if fb else {}
+check(fa.get("follow_of") == "relayWorkItem" and fa.get("truncated") == "1" and re.fullmatch(r'1-\d+/\d+', fa.get("lines", "")) and fa.get("next", "").startswith("--expand=src/work.ts:") and len(fb[0][1].encode()) <= 4000, "(H8) the follow of a > 4000 B callee is cut and says so: %r" % {k: fa.get(k) for k in ("follow_of", "truncated", "lines", "next")})
+h9 = rd("h9"); fc = re.search(r'<follow_cut ([^>]*)/>', h9)
+check(len(fol(h9)) == 3 and fc and attrs(fc.group(1)) == {"n": "2", "next": "--expand=src/ship.ts:19:sealOrder2"}, "(H9) 3 follow bodies, then <follow_cut n=2 next=>: %r %r" % (fol(h9), fc.group(0) if fc else None))
+check("follow_cut n= next=" in legend(h9) and "follow_cut n= next=" in legend(rd("h9f")), "(H9) the follow_cut reading rides, compact and full")
+# FIX1 R1-R4: BODY-ON-ROUTE
+routel = lambda t: (re.search(r'<bodies of="route".*?</bodies>', t, re.S) or re.search(r'$', t)).group(0)
+r1 = rd("r1"); el = routel(r1); bs = bodies(el); rt = root(r1)
+check(rt.get("reachable") == "0" and rt.get("hops") == "0" and re.search(r'<bridge [^>]*>', r1), "(R1) reachable=0 hops=0 and the bridge stay")
+check([b[0].get("n") for b in bs] == ["post_message", "_process_messages_loop", "_dispatch_message", "_on_message"], "(R1) the route bodies in order: %r" % [b[0].get("n") for b in bs])
+check(el.startswith('<bodies of="route" proven="0" shown="4" total="4" capped="0">'), "(R1) envelope proven=0 shown=4 total=4 capped=0")
+hed = {b[0].get("n"): (b[0].get("via"), b[0].get("cands")) for b in bs}
+check(hed.get("_process_messages_loop") == ("queue", "2") and hed.get("_on_message") == ("name-key", None) and hed.get("post_message") == (None, None) and hed.get("_dispatch_message") == (None, None), "(R1) each body carries its hop's hedge: %r" % hed)
+check(all(is_source((b[0], b[1]), os.path.join(T, "route")) for b in bs) and "put_nowait" in el and "self._parent.post_message" in el, "(R1) CDATA = source text (the put, the bubble)")
+check('n="on_event"' not in el, "(R1) never the to= row's body")
+check("bodies of=route proven=0" in legend(r1) and "bodies of=route proven=0" in legend(rd("r1f")) and "b via= cands=" in legend(r1), "(R1) the of=route and hedge clauses ride, compact and full")
+el2 = routel(rd("r2"))
+check(el2.startswith('<bodies of="route" proven="0" shown="4" total="5" capped="1" next="--expand=pump.py:45:_trace_message">') and len(bodies(el2)) == 4, "(R2) a fifth route body is cut: capped=1, next= the first unshown")
+b3 = [b[0].get("n") for b in bodies(routel(rd("r3")))]
+check(b3 == ["press", "post_message", "_process_messages_loop"], "(R3) a 4-hop bridge prints rows 0..2 only: %r" % b3)
+check(routel(rd("r1.off")) == "" and "bodies of=route" not in legend(rd("r1.off")), "(R4) RIPWIRE_NO_HOP_BODY=1: no route element, no clause")
+for f in ("h1", "r1", "r2", "r3"):
+    check(subprocess.run(["xmllint", "--noout", os.path.join(T, f)], capture_output=True).returncode == 0, "(X2) %s well-formed" % f)
 # X3
-for f in ("p1", "p1f", "p3f", "p4", "f1", "f1f"):
+for f in ("p1", "p1f", "p3f", "p4", "f1", "f1f", "h1f", "r1f", "h9f"):
     check(all("--" not in c for c in re.findall(r'<!--(.*?)-->', rd(f), re.S)), "(X3) %s: no -- inside a legend comment" % f)
 sys.exit(1 if fails else 0)
 PY
@@ -216,6 +298,24 @@ for i, (a, b, f) in enumerate(cases):
     print("  %s  (P7) MCP path_between %s,%s: %s" % ("PASS" if good else "FAIL", a, b, "the CLI's element" if f not in ("p2", "p3") else "the past-the-gate next="))
     bad += 0 if good else 1
 sys.exit(1 if bad else 0)
+PY
+
+# R4: MCP path_between prints the CLI's route element byte for byte
+python3 - "$BIN" "$TMP/route" "$TMP" <<'PY' || fail=1
+import json, re, subprocess, sys
+binp, d, tmp = sys.argv[1], sys.argv[2], sys.argv[3]
+reqs = [{"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "g", "version": "1"}}},
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "path_between", "arguments": {"path": d, "from": "post_message", "to": "on_*"}}}]
+p = subprocess.run([binp, "--mcp", "--mcp-legend=inline"], input="".join(json.dumps(r) + "\n" for r in reqs), capture_output=True, text=True, timeout=120, cwd=d)
+mcp = ""
+for line in p.stdout.splitlines():
+    try: o = json.loads(line)
+    except ValueError: continue
+    if o.get("id") == 1: mcp = "".join(c.get("text", "") for c in o.get("result", {}).get("content", []))
+el = lambda t: (re.search(r'<bodies of="route".*?</bodies>', t, re.S) or re.search(r'$', t)).group(0)
+good = el(mcp) != "" and el(mcp) == el(open(tmp + "/r1").read())
+print("  %s  (R4) MCP path_between post_message,on_*: the CLI's route element" % ("PASS" if good else "FAIL"))
+sys.exit(0 if good else 1)
 PY
 
 # X1 determinism, X2 well-formed

@@ -3832,7 +3832,11 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     // PATH-HOP-BODY (src/hopbody.h), as on the CLI
     const std::string_view    ptBodyRoot  = ptSingleRoot ? std::string_view( root ) : std::string_view();
     const bool                ptBodiesOn  = !pth.empty() && hopBodiesOn();
-    const std::string         ptHopBodies = ptBodiesOn ? pathHopBodiesXml( ing, pathMiddleHops( ing, ptShown, {} ), ptBodyRoot ) : std::string();
+    // F8: no served set here — the MCP `for` answer's graph-verb block calls this twin by name only, so a middle hop that `for`
+    // answer already carries prints a second copy on MCP (the CLI passes its served bodies: runPathServed); a known, bounded divergence
+    const RouteBodiesXml      ptHopBodyEl = ptBodiesOn ? pathHopBodiesXml( ing, pathMiddleHops( ing, g, ptShown, {} ), ptBodyRoot ) : RouteBodiesXml{};
+    const RouteBodiesXml      ptRouteEl   = pth.empty() && hopBodiesOn() ? pathRouteBodiesXml( ing, pathRouteBodies( ing, g, ptBridge, ptHandler ), ptBodyRoot ) : RouteBodiesXml{};   // BODY-ON-ROUTE, as on the CLI
+    const std::string&        ptHopBodies = ptHopBodyEl.xml;
     std::string               ptRootAttrs = pathTestTwinRootAttrs( ing, pathPairsRootAttrs( ing, ptPairs, ptSingleRoot, ptRootPrefix ).rootAttrs, ptTwin, ptSingleRoot, ptRootPrefix );
     const std::string         ptHopNext   = ptBodiesOn && ptRootAttrs.find( " next=\"" ) == std::string::npos ? pathMiddleHopNext( ing, ptShown, ptBodyRoot ) : std::string();
     ptRootAttrs += ptHopNext.empty() ? std::string() : nextAttrXml( ptHopNext );
@@ -3840,10 +3844,12 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
                        "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + ptKindLegend
                                                            + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to )
                                                            + memberOwnerLegend( ptHasOwner ) + memberOwnerContainedLegend( ptMarks.ownerContained ) + std::string( pathPairsLegend( ptPairs ) ) + pathOrderLegend( ptPairs, ptTwin )
-                                                           + std::string( pathHopBodiesLegend( !ptHopBodies.empty() ) ) + std::string( pathHopNextLegend( !ptHopNext.empty() ) ) ).c_str(),
+                                                           + std::string( pathHopBodiesLegend( !ptHopBodies.empty() ) ) + std::string( pathHopNextLegend( !ptHopNext.empty() ) )
+                                                           + std::string( routeBodyHedgeLegend( ptHopBodyEl.hedged || ptRouteEl.hedged ) ) ).c_str(),
                   ( std::string( toValueRefsLegend( ptToValueRefs.count > 0 ) ) + valueRefsDepthLegend( ptToValueRefs.depthCut.files > 0 ) ).c_str(),
                   ( pathGapsLegend( ptGaps.any(), !ptSinkCallers.empty() ) + pathBridgeLegend( ptBridge )
-                    + nearSinkLegend( ptNear ) + std::string( pathHandlerRuleLegend( ptHandler ) ) + std::string( pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
+                    + nearSinkLegend( ptNear ) + std::string( pathHandlerRuleLegend( ptHandler ) ) + std::string( pathRouteBodiesLegend( !ptRouteEl.xml.empty() ) )
+                    + std::string( pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
                   graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rootRelPathsLegend( ptSingleRoot ) );
     rw::emitTo( mem, "<path from=\"{}\" to=\"{}\"{}{} from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
                   ex( from ).c_str(), ex( to ).c_str(), ptBound.from ? " from_p=\"" + loc( srcUsed ) + "\"" : std::string(),
@@ -3861,7 +3867,8 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
                   pathNearSinkXml( ing, ptNear, ptSingleRoot, ptRootPrefix ),
                   pth.empty() ? pathHandlerRuleXml( ing, ptBackHops->names(), ptHandler, ptSingleRoot, ptRootPrefix ) : std::string() );
     emitPathAnswerRows( mem, ing, g, ptPairs, pth, ptOwners, ptSingleRoot, ptRootPrefix );   // the CLI's own row emitter (pathpairs.h / defattrib.h)
-    rw::emitRaw( mem, ptHopBodies.c_str() );   // PATH-HOP-BODY, as on the CLI
+    rw::emitRaw( mem, ptHopBodies.c_str() );      // PATH-HOP-BODY, as on the CLI
+    rw::emitRaw( mem, ptRouteEl.xml.c_str() );    // BODY-ON-ROUTE, as on the CLI
     rw::emitRaw( mem, "</path>" );
     return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }
