@@ -18,14 +18,15 @@
 #   P2 [P] one production candidate + a test double (tests/loader_test.cc FakeSource): shown="1" test="1" and DiskSource::Fetch's body
 #   P3 [P] Rust &dyn Trait parameter (build_book r.render): Html::render, Cmd::render and pick_renderers ctor="Cmd::new"
 #   P4 [P] the clause rides in both legends when the element does, and defines every attribute the element carries
-#   P5 [G] prefix identity: the answer minus <dispatch> and its clause, est_tokens masked, equals RIPWIRE_NO_DISPATCH_HOP=1
+#   P5 [P] prefix identity: the answer minus <dispatch> and its clause, est_tokens masked, equals RIPWIRE_NO_DISPATCH_HOP=1
 #   P6 [G] next= pasted (--whereis=Fetch) lists every candidate the element names
 #   N1 [G] no element: the bare subject (Loader::Load), the call as a bare word (Loader::Load the Fetch), a wrapper calling its own
-#          name (CachedSource::Fetch inner_->Fetch), a type subject (DiskSource src_->Fetch)
+#          name (CachedSource::Fetch inner_->Fetch), a type subject (DiskSource src_->Fetch), a call declined for another
+#          reason (Python job.run: the ladder tier, no gate — dispatch_job job.run)
 #   N2 [G] no element, byte-identical to RIPWIRE_NO_DISPATCH_HOP=1: --json, --signatures-only, --token-budget=3000
 #   M1 [P] MCP `for` parity: the same element (rows, no inline body — that surface serves bodies by handle) with its own clause;
 #          the bare subject carries none
-#   X1 [G] determinism  X2 [G] xmllint well-formed  X3 [G] no "--" inside a legend comment
+#   X1 [G] determinism  X2 [G] xmllint well-formed  X3 [P] the clause present, no "--" inside a legend comment
 #
 # Usage:  bash test/fordispatchhopcheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/fordispatchhopcheck.sh
 # BIN is $1, else RIPWIRE_BIN, else build/ripwire; the first output line names the binary used. Exits non-zero on any failure.
@@ -46,7 +47,7 @@ verdict(){ if [ "$1" -eq 0 ]; then ok "$2"; else no "$3"; fi; }   # rc, the PASS
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
 cd "$ROOT"
 F="test/fordispatchhopfix"
-[ -f "$F/cpp/loader.cc" ] && [ -f "$F/cpp1/tests/loader_test.cc" ] && [ -f "$F/rs/src/pick.rs" ] && [ -f "$F/cppwrap/cached.cc" ] || { echo "fixture $F missing"; exit 2; }
+[ -f "$F/cpp/loader.cc" ] && [ -f "$F/cpp1/tests/loader_test.cc" ] && [ -f "$F/rs/src/pick.rs" ] && [ -f "$F/cppwrap/cached.cc" ] && [ -f "$F/ladder/main.py" ] || { echo "fixture $F missing"; exit 2; }
 
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"; mkdir -p "$HOME"
@@ -127,6 +128,10 @@ n1 "$F/cpp" "Loader::Load" "the bare subject"
 n1 "$F/cpp" "Loader::Load the Fetch" "the call as a bare word"
 n1 "$F/cppwrap" "CachedSource::Fetch inner_->Fetch" "a wrapper calling its own name"
 n1 "$F/cpp" "DiskSource src_->Fetch" "a type subject"
+n1 "$F/ladder" "dispatch_job job.run" "a call declined by the ladder tier (not gate=iface)"
+if run "$F/ladder" "--for=dispatch_job job.run" | grep -q 'route="name-exact(' && run "$F/ladder" --callees=dispatch_job --legend=full | grep -q '<dc n="run"[^>]*cands="2"'; then
+    ok "(N1pre) the ladder fixture routes name-exact and its job.run IS declined with 2 candidates (the gate=iface guard holds it)"
+else no "(N1pre) the ladder fixture's premise failed"; fi
 run "$F/cppwrap" "--for=CachedSource::Fetch inner_->Fetch" --legend=full >"$TMP/n1w"
 grep -q 'route="name-exact(' "$TMP/n1w" && run "$F/cppwrap" --callees=CachedSource::Fetch --legend=full | grep -q 'gate="iface"' \
     && ok "(N1pre) the wrapper routes name-exact and its call IS iface-declined (the guard, not the premise, holds it)" \
