@@ -2566,6 +2566,31 @@ ForAutoBodiesResult buildForEnrichment( const rw::Config& cfg, const rw::IngestR
     return out;
 }
 
+// UPWARD-2HOP (forcallerhop.h forRankedCallerHopTargets): the ranked caller hop is a LATE splice, on the late splices' posture (the
+// compact auto bundle, XML, the default regime, the whole answer measured, no hops cut marker), never beside the name-exact hop,
+// only on an error-shaped task; it reads the rows <sigs> EMITTED (r= order), so its clause's "r=1..3" holds. `held` is the
+// named hop's render, returned unchanged when that hop rode.
+struct RankedHopPosture
+{
+    bool        bundleCompact = false;   // the auto bundle on the compact route
+    bool        sigsRendered  = false;
+    bool        surfaceOff    = false;
+    bool        hopsCutMarker = false;
+    bool        namedHop      = false;   // the name-exact hop already rode
+    const char* routeTag      = "";
+};
+inline rw::CallerHopRender rankedCallerHop( const RankedHopPosture& p, const rw::Config& cfg, const rw::IngestResult& ing, const rw::Graph& g,
+                                            const std::vector<rw::NodeId>& shownSigIds, std::string_view rootArg, rw::CallerHopRender held )
+{
+    if( p.namedHop || !p.bundleCompact || !p.sigsRendered || p.surfaceOff || p.hopsCutMarker || rw::isNameExactRouteTag( p.routeTag ) || cfg.json
+        || cfg.tokenBudget > 0 || !rw::forCallerHopOn() || !rw::forRankedCallerHopTask( cfg.forTask ) )
+    {
+        return held;
+    }
+    const std::vector<rw::NodeId> ids = rw::forRankedCallerHopTargets( ing, g, shownSigIds );
+    return ids.empty() ? held : rw::renderForCallerHop( ing, g, ids, rootArg, /*ranked=*/true );
+}
+
 // mf1-nx (forcallerhop.h): the ONE function whose callers ride — `nameExactBodies` is the posture runForLensPass knows (the auto
 // <bodies> bundle on the name-exact route); this adds the regime (XML, no explicit --token-budget, the A/B switch) and the target rule.
 inline std::vector<rw::NodeId> forCallerHopIds( const rw::Config& cfg, const rw::IngestResult& ing, const rw::Graph& g, const std::vector<rw::NodeId>& lensSurfaceIds,
@@ -4286,24 +4311,17 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                 headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
             }
         }
-        // ── UPWARD-2HOP (forcallerhop.h forRankedCallerHopTargets): an error-shaped task on a ranked route whose r=1..3 rows hold a
-        // narrow-funnel function carries that function's <callers by="rank"> — seeded from the rows <sigs> EMITTED (r= order), so its
-        // clause's "r=1..3" holds; the same posture as the late splices above, and never beside the name-exact hop
-        if( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forCallerHopOn() && sigsPreRendered
-            && !enrich.surfaceOff && !enrich.hopsCutMarker && !headerParts.callerHopPresent && !isNameExactRouteTag( lr.routeTag )
-            && rw::forRankedCallerHopTask( cfg.forTask ) )
+        // ── UPWARD-2HOP (forcallerhop.h forRankedCallerHopTargets): an error-shaped task's ranked caller hop, a late splice on the
+        // rows <sigs> EMITTED (rankedCallerHop states the posture); its clause rides beside it
+        callerHop = rankedCallerHop( RankedHopPosture{ .bundleCompact = autoBundleMode && plan.compact, .sigsRendered = sigsPreRendered,
+                                                       .surfaceOff = enrich.surfaceOff, .hopsCutMarker = enrich.hopsCutMarker,
+                                                       .namedHop = headerParts.callerHopPresent, .routeTag = lr.routeTag },
+                                     cfg, ing, g, shownSigIds, flRootArg, std::move( callerHop ) );
+        if( !callerHop.xml.empty() && !headerParts.callerHopPresent )
         {
-            const std::vector<rw::NodeId> rankedIds = rw::forRankedCallerHopTargets( ing, g, shownSigIds );
-            if( !rankedIds.empty() )
-            {
-                callerHop = rw::renderForCallerHop( ing, g, rankedIds, flRootArg, /*ranked=*/true );
-            }
-            if( !callerHop.xml.empty() )
-            {
-                headerParts.callerHopPresent = true;   // the ranked clause rides beside the element it defines
-                headerParts.callerHopRanked  = true;
-                headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
-            }
+            headerParts.callerHopPresent = true;   // the ranked clause rides beside the element it defines
+            headerParts.callerHopRanked  = true;
+            headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
         }
         // PR #135: the priced root this header will carry — every late splice and the est_tokens fixpoint, in
         // finishForLensHeader (above runForLens, with each splice's rationale).

@@ -30,6 +30,8 @@
 #include "defattrib.h"       // attributeOneHopAnswer — via="name" on a row, as the callers verb decides it
 #include "filter.h"          // pathTierOf — the ranked seed's noise gate (every first-hop caller a test or bench path)
 #include "graph.h"           // viaNameAttr
+#include "infra/namesplit.h"   // isIdentChar — the ranked seed's task-word fold
+#include "lexical.h"         // splitRouteWords — the ranked seed's task words
 #include "memberowner.h"     // MemberOwners / qualifiedMemberName — n= as the callers verb prints it (QUALNAME-1, train 33)
 #include "model.h"
 #include "nextverb.h"        // nextFlag / nextAttrXml
@@ -153,37 +155,17 @@ inline constexpr std::size_t kForRankedHopHeadRows  = 3;   // r=1..3: the emitte
 inline constexpr std::size_t kForRankedHopMaxCallers = 3;  // the narrow-funnel bar: a wider fan-in is the callers verb's page, not a chain
 
 // The task names an error: a whole word error(s) / exception(s) / panic(s) / fail(s|ed|ure|ures) / crash(es), ASCII case-folded.
-inline bool forRankedCallerHopTask( std::string_view task ) noexcept
+inline bool forRankedCallerHopTask( std::string_view task )
 {
     static constexpr std::string_view kWords[] = { "error", "errors", "exception", "exceptions", "panic", "panics", "fail",
                                                    "fails", "failed", "failure", "failures", "crash", "crashes" };
-    const auto wordByte = []( char c ) noexcept { return ( c >= 'a' && c <= 'z' ) || ( c >= 'A' && c <= 'Z' ) || ( c >= '0' && c <= '9' ) || c == '_'; };
-    for( std::size_t at = 0; at < task.size(); )
+    std::string folded( task );
+    for( char& c : folded )
     {
-        if( !wordByte( task[at] ) )
-        {
-            ++at;
-            continue;
-        }
-        std::size_t end = at;
-        while( end < task.size() && wordByte( task[end] ) ) { ++end; }
-        const std::string_view w = task.substr( at, end - at );
-        for( const std::string_view k : kWords )
-        {
-            bool same = w.size() == k.size();
-            for( std::size_t i = 0; same && i < k.size(); ++i )
-            {
-                const char c = w[i] >= 'A' && w[i] <= 'Z' ? char( w[i] - 'A' + 'a' ) : w[i];
-                same         = c == k[i];
-            }
-            if( same )
-            {
-                return true;
-            }
-        }
-        at = end;
+        c = !namesplit::isIdentChar( c ) ? ' ' : ( c >= 'A' && c <= 'Z' ) ? char( c - 'A' + 'a' ) : c;
     }
-    return false;
+    const std::vector<std::string_view> words = splitRouteWords( folded );
+    return std::ranges::any_of( words, []( std::string_view w ) { return std::ranges::find( kWords, w ) != std::end( kWords ); } );
 }
 
 inline std::vector<NodeId> forRankedCallerHopTargets( const IngestResult& ing, const Graph& g, std::span<const NodeId> rankedHead )
