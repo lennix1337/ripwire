@@ -3226,10 +3226,7 @@ inline bool identifierTokenCountExceeds( const std::string& text, std::string_vi
 {
     std::size_t         tokens = 0;
     StringTokenPosition at{ .text = text };
-    scanCodeTokens( text, 0, text.size(),
-                    CodeScanOptions{ .stripHashComments = usesHashLineComments( lang ), .munchMultiByteOperators = true,   // `->` is one token
-                                     .singleQuoteStrings = usesSingleQuoteStrings( lang ), .slashComments = lang != Lang::Python,
-                                     .tripleQuoteStrings = lang == Lang::Python },
+    scanCodeTokens( text, 0, text.size(), stringAwareScanOptions( lang, /*munchMultiByteOperators=*/true ),   // `->` is one token
                     [ & ]( std::string_view token, CodeTokenKind kind )
                     {
                         if( kind == CodeTokenKind::Identifier || kind == CodeTokenKind::Keyword )

@@ -398,6 +398,8 @@ Discloses: `capped`
 | --- | --- | --- | --- |
 | `kForCallerHopDepth2Rows` | `4` | — | — |
 | `kForCallerHopRows` | `16` | — | — |
+| `kForRankedHopHeadRows` | `3` | BOUNDARY | r=1..3: the emitted head the seed is read from |
+| `kForRankedHopMaxCallers` | `3` | BOUNDARY | the narrow-funnel bar: a wider fan-in is the callers verb's page, not a chain |
 
 ### `src/forctorhop.h`
 
