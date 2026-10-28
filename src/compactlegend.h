@@ -790,6 +790,8 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "runner-root-excluded", "runner-root-excluded=N: Python defs skipped as pytest/unittest test-runner roots; a floor", true, "dead-code", MapHeaderRead::No, {}, "dead-code" },
     // 0.6.6 D4 review: counted apart — a decorator MAY register the def; a wrapper (@property, @lru_cache) registers nothing
     { "decorated-excluded", "decorated-excluded=N: decorated Python defs skipped (a decorator may register them; wrappers included); a floor", true, "dead-code", MapHeaderRead::No, {}, "dead-code" },
+    // D1 TESTONLY-DEAD: present-only — absent at 0, so an answer with no test-only row is byte-identical
+    { "test-only", "test-only=N: <to n= t= p= l=> library functions whose every indexed caller is a test; not dead, not in count=; a candidate, not proof: a use only in an unindexed file (an .inc table), a docs page or a name built at run time is invisible, so verify before deleting", true, "dead-code", MapHeaderRead::No, {}, "dead-code" },
     // edit-check: src/editcheck.h (the <edit-check> root emit)
     { "defs", "defs=N: overloads at this site (same file, scope, name) folded into one contract; params compared by MAX", false, "edit-check", MapHeaderRead::No, {}, "edit-check" },
     // idea #11: present-only — rides only the verdict-only (unchanged, nothing flagged) answer, which prints no c rows

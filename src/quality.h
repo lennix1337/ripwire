@@ -35,6 +35,7 @@
 #include "filter.h"             // B10.1a: isTestPath — the general test-dir convention behind isTestScriptPath
 #include "memguard.h"           // #387: loadRefTree reads the hard line between a commit's ingest and its graph
 #include "infra/Diagnostics.h"  // DISCLOSE — the degrade path when git archive/ingest fails (no-op under NDEBUG; a gate-visible degrade line needs its own fprintf)
+#include "infra/namesplit.h"    // afterLast — a path's last component (isConftestFile, pythonModuleTail), not a third hand-rolled basename
 #include "infra/jsonesc.h"      // L2 — rw::jsonesc::escapeMcp for staleAcksJsonArray's kind= field (the same posture serialize.h's jsonStr uses)
 #include "infra/platform.h"     // RW_LIFETIMEBOUND — the DefectSiteKey projection lambdas; owned here, not transitively
 #include "sourceidentity.h"    // rw::kRipwireSourceIdentity — the producer identity the qsnap/qbody keys and blob header carry
@@ -10118,6 +10119,15 @@ inline bool sourceHasStaticToken( std::string_view source, std::size_t sigStartB
     return false;
 }
 
+// D1 fix round 1: internal linkage of ONE definition. The token is the C-family storage class, so the scan runs only for a
+// language whose LangFacts row says `staticLinkage` (C, C++, Objective-C). A Python parameter `static=False`, a TypeScript literal
+// type `'static'` and a Rust `'static` lifetime are the same four letters and no linkage: before this gate they made a public
+// function an "internal-linkage" row (--dead-code `<d>`: zed listed 67 Rust rows; the test-only `<to>` rows inherited it).
+inline bool symbolHasStaticLinkage( const Symbol& s, std::string_view source ) noexcept
+{
+    return langFacts( s.lang ).staticLinkage && sourceHasStaticToken( source, s.sigStartByte, s.sigEndByte );
+}
+
 // The nearest non-blank, non-comment line above a Python def at `defByte` (or the def's own first byte) opens with '@'.
 inline bool pythonDefIsDecorated( std::string_view source, std::size_t defByte ) noexcept
 {
@@ -10199,6 +10209,100 @@ inline bool pythonRunnerRoot( std::string_view path, const Symbol& s, std::strin
     const std::size_t scopeSep = s.scope.rfind( "::" );
     return pythonClassBasesNameTestCase( source, scopeSep == std::string::npos ? std::string_view( s.scope ) : std::string_view( s.scope ).substr( scopeSep + 2 ),
                                          s.sigStartByte );
+}
+
+// D1 TESTONLY-DEAD: Python's own internal-interface evidence, standing in for the `static` token C/C++ spells — PEP 8's
+// "internal interfaces" convention: a leading-underscore name, or a def inside a module or package whose path component
+// starts with one underscore (`_segment_tools.py`, `_internal/x.py`). A dunder component (`__init__.py`, `__main__.py`)
+// is the language's own spelling, not a privacy mark. `relPath` is ROOT-relative, so a directory above the root never
+// counts. MODULE-LEVEL defs only (empty scope): a method's reach is its class's, and a class in a private module is often
+// re-exported as public API (textual's widgets/_data_table.py DataTable), with methods a framework dispatches by name
+// (action_*, _on_*). Only a language whose LangFacts row sets underscorePrivacy (Python); every other language is false.
+// Read only by --dead-code's test-only rows (test-only=).
+inline bool underscorePrivateDef( std::string_view relPath, const Symbol& s ) noexcept
+{
+    if( !langFacts( s.lang ).underscorePrivacy || !s.scope.empty() )
+    {
+        return false;
+    }
+    const auto privateMark = []( std::string_view part ) noexcept { return part.size() > 1 && part[ 0 ] == '_' && part[ 1 ] != '_'; };
+    if( privateMark( s.name ) )
+    {
+        return true;
+    }
+    std::size_t start = 0;
+    while( start < relPath.size() )
+    {
+        const std::size_t slash = relPath.find( '/', start );
+        const std::size_t end   = slash == std::string_view::npos ? relPath.size() : slash;
+        if( privateMark( relPath.substr( start, end - start ) ) )
+        {
+            return true;
+        }
+        start = end + 1;
+    }
+    return false;
+}
+
+// D1 fix round 1 (F4): pytest's own test file. A root `conftest.py` sits outside every test/ directory, so the shared test-path
+// rule (filter.h isTestPath) reads its helpers as library code; --dead-code's test-only rows must not list them as library
+// functions. The base name alone decides (any conftest.py, at any depth).
+inline bool isConftestFile( std::string_view path ) noexcept
+{
+    return namesplit::afterLast( path, "/" ) == "conftest.py";
+}
+
+// D1 fix round 1 (F3): the module name a Python file answers to at its tail: the file stem, or the package directory's name for
+// `__init__.py`. "" for a path that is not a .py file (or an __init__.py with no directory).
+inline std::string_view pythonModuleTail( std::string_view relPath ) noexcept
+{
+    if( !relPath.ends_with( ".py" ) )
+    {
+        return {};
+    }
+    relPath.remove_suffix( 3 );
+    if( namesplit::afterLast( relPath, "/" ) != "__init__" )
+    {
+        return namesplit::afterLast( relPath, "/" );
+    }
+    relPath.remove_suffix( relPath.size() == 8 ? 8 : 9 );   // "__init__" or "/__init__"
+    return namesplit::afterLast( relPath, "/" );
+}
+
+// D1 fix round 1 (F3): the tail of every module a `from <module> import *` line in `text` names (`from ._impl import *` and
+// `from pkg._impl import *` both give "_impl"). A glob re-exports the module's public names through the importing package, so a
+// def in that module is part of the package's public surface even when no other file spells its name. Line-based text, not
+// parsed Python: a glob inside a string or a comment reads as one too (a row fewer, never one more).
+inline std::vector<std::string_view> pythonGlobImportTails( std::string_view text )
+{
+    std::vector<std::string_view> tails;
+    for( std::size_t at = 0; at < text.size(); )
+    {
+        const std::size_t eol  = std::min( text.find( '\n', at ), text.size() );
+        std::string_view  line = text.substr( at, eol - at );
+        at                     = eol + 1;
+        line.remove_prefix( std::min( line.find_first_not_of( " \t" ), line.size() ) );
+        const std::size_t imp = line.find( " import " );
+        if( !line.starts_with( "from " ) || imp == std::string_view::npos )
+        {
+            continue;
+        }
+        std::string_view after = line.substr( imp + 8 );
+        after.remove_prefix( std::min( after.find_first_not_of( " \t" ), after.size() ) );
+        if( !after.starts_with( '*' ) )
+        {
+            continue;
+        }
+        std::string_view module = line.substr( 5, imp - 5 );
+        module.remove_prefix( std::min( module.find_first_not_of( " \t" ), module.size() ) );
+        const std::size_t dot = module.rfind( '.' );
+        const std::string_view tail = dot == std::string_view::npos ? module : module.substr( dot + 1 );
+        if( !tail.empty() )
+        {
+            tails.push_back( tail );
+        }
+    }
+    return tails;
 }
 
 // lane/safe-delete: the --dead-code high-confidence PRECONDITIONS on symbol KIND/PLACEMENT alone — a
