@@ -16,4 +16,4 @@ written by 0.6.8 is re-parsed once. `kCacheVersion` 36 → 46: a Rust binding ty
 (`&dyn T`, `impl T`, a bound), a Rust `impl T for X` block and a JS/TS binding written after its declaration are new binding
 records, as is a JS/TS module-scope object literal's binding name, a Kotlin call's trailing-lambda byte (#155) widens the reference record, and a file's parse-health record gains the
 Rust re-parse count, so a cache written before them is rejected and rebuilt (the branches that added them used 37, 38, 39, 41, 42 and 45). The quality-snapshot scheme moves 22 → 24 (#228: Django and
-unittest hooks and closure self-dispatch change the dead set; old snapshots are not used; the branch used 23). The session legend dictionary is `dictv=dfb4cb46b05ed3c3 entries=947`.
+unittest hooks and closure self-dispatch change the dead set; old snapshots are not used; the branch used 23). The session legend dictionary is `dictv=a3aaaa12b102080c entries=958`.
