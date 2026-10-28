@@ -1,8 +1,8 @@
 ### Added — name-keyed lookups join both hedged walks (`via="name-key"`)
 
 A function that looks a method up by a name built from a template now hops to the definitions that name fits, in both hedged
-walks. The sites are the template lookups `--callers` already listed as `<pd>` rows: `getattr( self, 'do_' + cmd )`,
-`hasattr`, `X.__dict__.get( f"on_{n}" )` in Python, and `o[ 'handle' + e ]` or ``o[ `handle${e}` ]`` in JavaScript and
+walks. The sites are the template lookups that make a call, which `--callers` already listed as `<pd>` rows: `getattr( self, 'do_' + cmd )`,
+`X.__dict__.get( f"on_{n}" )` in Python, and `o[ 'handle' + e ]` or ``o[ `handle${e}` ]`` in JavaScript and
 TypeScript. The `--path` hedged `<bridge>` crosses such a lookup (`<s … via="name-key" cands=K/>`) when the template names at
 most 16 definitions. `--impact` follows it in its hedged ring, so `reaches_hedged=` counts the dispatcher and its proven
 callers, and a two-hop chain prints `<rh … via="name-key" …/>`. This is slice 7a of issue #375 (a shared capture for calls by
