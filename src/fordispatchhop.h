@@ -68,7 +68,7 @@ inline constexpr std::string_view kForDispatchHopLegend =
     "type's constructor (where it is made), one shown candidate carries its body b, capped=1 if cut, next= lists every definition";
 inline constexpr std::string_view kForCompactDispatchHopLegend =
     "; dispatch call= in= p=: a task-named call declined at an interface/trait receiver, s rows the implementations that can run "
-    "(unproven which), cands= shown= test= doubles, s ctor= rows make that type, one candidate: its body b, capped=1 if cut";
+    "(unproven which), cands= shown= test= doubles, s ctor= rows make that type, one candidate: its body b, capped=1 if cut, next= every definition";
 static_assert( kForDispatchHopLegend.find( ';', 1 ) == std::string_view::npos && kForCompactDispatchHopLegend.find( ';', 1 ) == std::string_view::npos
                    && kForDispatchHopLegend.find( "--" ) == std::string_view::npos && kForCompactDispatchHopLegend.find( "--" ) == std::string_view::npos,
                "one clause each, and no \"--\": it rides inside an XML comment" );
@@ -207,8 +207,9 @@ inline std::vector<NodeId> dispatchOwnerCtors( const IngestResult& ing, NodeId c
 
 // Does any non-test code outside the candidate's own type name that type? A reference (call, type use, member type, base clause,
 // qualifier) spelling the owner's name, from a file holding none of the owner's members and from a non-test symbol in a non-test
-// file. By name only, so a collision keeps a candidate shown (never the other way): a candidate whose type only test code names
-// (ninja's VirtualFileSystem, defined in src/test.cc and used by *_test.cc only) is a test double, counted in test=.
+// file. By name only, so a collision keeps a candidate shown (never the other way): a candidate whose type test code names and
+// nothing else does (ninja's VirtualFileSystem, defined in src/test.cc and used by *_test.cc only) is a test double, counted in
+// test=; a type nothing outside its own files names (a Rust unit struct built in place) keeps its row — no evidence, no demotion.
 inline bool ownerNamedByProduction( const IngestResult& ing, NodeId cand )
 {
     const Symbol& c = ing.symbols[ cand ];
@@ -226,16 +227,21 @@ inline bool ownerNamedByProduction( const IngestResult& ing, NodeId cand )
             ownFiles.push_back( s.fileId );
         }
     }
+    bool testNames = false;
     for( const Reference& r : ing.references )
     {
-        if( ( r.calleeName != owner && r.qualifier != owner ) || r.isDocLink || std::ranges::find( ownFiles, r.fileId ) != ownFiles.end()
-            || isTestPath( rootRelPath( ing, r.fileId ) ) || ( r.fromSymbol != kNoNode && isTestSymbol( ing, r.fromSymbol ) ) )
+        if( ( r.calleeName != owner && r.qualifier != owner ) || r.isDocLink || std::ranges::find( ownFiles, r.fileId ) != ownFiles.end() )
         {
+            continue;
+        }
+        if( isTestPath( rootRelPath( ing, r.fileId ) ) || ( r.fromSymbol != kNoNode && isTestSymbol( ing, r.fromSymbol ) ) )
+        {
+            testNames = true;
             continue;
         }
         return true;
     }
-    return false;
+    return !testNames;   // named by nothing outside its own files: no evidence either way, so it stays a candidate
 }
 
 inline DispatchHopRender renderForDispatchHop( const IngestResult& ing, const Graph& g, std::span<const std::uint32_t> sites, const BodyFoldInputs& bodyIn )
