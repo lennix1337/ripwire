@@ -2,7 +2,9 @@
 # defslookupcheck.sh — `--defs=NAME[,NAME…]` (src/defslookup.h rw::lookupDefs) and --path's inline <alts> (lane D2 DEFS-LOOKUP).
 #
 # RED-FIRST (recorded 2026-10-28 against the train-40 base 1318069a): every arm below fails there — the base has no --defs
-# flag (rc=1 "unknown flag") and its --path answer carries no <alts>; the (P2) unique-pick negative passes on both.
+# flag (18 FAIL) and its --path answer carries no <alts>. Three NEGATIVES pass vacuously there (no row is a JSON key, every
+# sel= proven, P2 no <alts>); each was proven able to fail by a mutant on f966224b: the data-Section filter dropped (6 FAIL),
+# picksAlone always false (4 FAIL), defPickProvablyUnique false at one group (P2 FAIL).
 # Arms: namesakes across files with a test copy and a JSON key (A), a C prototype folded with its definition (B), every
 # printed sel= re-resolved by another verb to one definition (C), file:name / Owner.name spellings (D), zero found (E), over
 # the 16-row cap with --offset paging (F), several names in one call (G), the JSON twin spelling every row as the XML does (J),
@@ -16,7 +18,7 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 FIX="$ROOT/test/defslookupfix"
 fail=0
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
 echo "defslookupcheck: BIN=$BIN  FIX=$FIX"
@@ -28,17 +30,17 @@ body(){ perl -0pe 's/<!--.*?-->//gs' "$1"; }
 echo "-- (A) namesakes: two source methods, one test copy, one JSON key"
 run --defs=run --legend=full >"$TMP/a.xml" 2>"$TMP/a.err"; rc=$?
 name="$( body "$TMP/a.xml" | grep -o '<name [^>]*>' )"
-[ "$rc" -eq 0 ] && printf '%s' "$name" | grep -q 'defs="3"' && ok "defs=3 (two classes + the test copy)" || no "defs= not 3 (rc=$rc): $name"
-printf '%s' "$name" | grep -q 'data_defs="1"' && ok "the JSON key is data_defs=1" || no "no data_defs=1: $name"
+if [ "$rc" -eq 0 ] && printf '%s' "$name" | grep -q 'defs="3"'; then ok "defs=3 (two classes + the test copy)"; else no "defs= not 3 (rc=$rc): $name"; fi
+if printf '%s' "$name" | grep -q 'data_defs="1"'; then ok "the JSON key is data_defs=1"; else no "no data_defs=1: $name"; fi
 grep -q 'lang="json"' "$TMP/a.xml" && no "a JSON key is listed as a definition" || ok "no row is a JSON key"
 classes="$( grep -o 'class="[a-z]*"' "$TMP/a.xml" | tr '\n' ' ' )"
-[ "$classes" = 'class="source" class="source" class="test" ' ] && ok "source rows before the test row" || no "row order by class wrong: $classes"
-xmllint --noout "$TMP/a.xml" 2>/dev/null && ok "--legend=full answer is well-formed XML" || no "--legend=full answer is not well-formed"
+if [ "$classes" = 'class="source" class="source" class="test" ' ]; then ok "source rows before the test row"; else no "row order by class wrong: $classes"; fi
+if xmllint --noout "$TMP/a.xml" 2>/dev/null; then ok "--legend=full answer is well-formed XML"; else no "--legend=full answer is not well-formed"; fi
 grep -q 'sel_proven=' "$TMP/a.xml" && no "a sel= was not proven: $( grep -o '<d [^>]*>' "$TMP/a.xml" )" || ok "every sel= proven"
 
 echo "-- (B) a C prototype and its definition are one group"
 run --defs=work >"$TMP/b.xml" 2>/dev/null
-grep -q '<name q="work" defs="1">' "$TMP/b.xml" && grep -q 'p="src/work.c:2"' "$TMP/b.xml" && ok "work: one group, the bodied definition" || no "work not one group: $( grep -o '<name.*' "$TMP/b.xml" | head -c 300 )"
+if grep -q '<name q="work" defs="1">' "$TMP/b.xml" && grep -q 'p="src/work.c:2"' "$TMP/b.xml"; then ok "work: one group, the bodied definition"; else no "work not one group: $( grep -o '<name.*' "$TMP/b.xml" | head -c 300 )"; fi
 
 echo "-- (C) every printed sel= re-resolves to exactly one definition group in another verb (no multi-group <def> table)"
 n=0; bad=0
@@ -47,58 +49,55 @@ for s in $( grep -o 'sel="[^"]*"' "$TMP/a.xml" "$TMP/b.xml" | sed 's/.*sel="//; 
     out="$( run --callers="$s" 2>/dev/null )"
     { printf '%s' "$out" | grep -q '<callers ' && ! printf '%s' "$out" | grep -q '<def ix='; } || { bad=$(( bad + 1 )); echo "    sel=$s -> $( printf '%s' "$out" | grep -o '<callers [^>]*>' | head -c 200 )"; }
 done
-[ "$n" -ge 4 ] && [ "$bad" -eq 0 ] && ok "$n sel= spellings each bind one definition group" || no "$bad of $n sel= spellings did not bind one definition group"
+if [ "$n" -ge 4 ] && [ "$bad" -eq 0 ]; then ok "$n sel= spellings each bind one definition group"; else no "$bad of $n sel= spellings did not bind one definition group"; fi
 
 echo "-- (D) spellings the shared resolver accepts"
 run --defs=src/b.ts:run >"$TMP/d1.xml" 2>/dev/null
-grep -q 'defs="1"' "$TMP/d1.xml" && grep -q 'sel="src/b.ts:run"' "$TMP/d1.xml" && ok "file:name -> one row, sel= as given" || no "file:name: $( grep -o '<name.*' "$TMP/d1.xml" | head -c 300 )"
+if grep -q 'defs="1"' "$TMP/d1.xml" && grep -q 'sel="src/b.ts:run"' "$TMP/d1.xml"; then ok "file:name -> one row, sel= as given"; else no "file:name: $( grep -o '<name.*' "$TMP/d1.xml" | head -c 300 )"; fi
 run --defs=A.run >"$TMP/d2.xml" 2>/dev/null
-grep -q 'defs="1"' "$TMP/d2.xml" && grep -q 'n="A.run"' "$TMP/d2.xml" && ok "Owner.name -> one row" || no "Owner.name: $( grep -o '<name.*' "$TMP/d2.xml" | head -c 300 )"
+if grep -q 'defs="1"' "$TMP/d2.xml" && grep -q 'n="A.run"' "$TMP/d2.xml"; then ok "Owner.name -> one row"; else no "Owner.name: $( grep -o '<name.*' "$TMP/d2.xml" | head -c 300 )"; fi
 
 echo "-- (E) zero found: the shared refusal"
 run --defs=zzqdefsnone >"$TMP/e.xml" 2>"$TMP/e.err"; rc=$?
-[ "$rc" -eq 1 ] && grep -q 'found="0"' "$TMP/e.xml" && grep -q 'symbol not found' "$TMP/e.err" && ok "rc=1, found=0, stderr refusal" || no "zero found: rc=$rc $( head -c 300 "$TMP/e.xml" )"
+if [ "$rc" -eq 1 ] && grep -q 'found="0"' "$TMP/e.xml" && grep -q 'symbol not found' "$TMP/e.err"; then ok "rc=1, found=0, stderr refusal"; else no "zero found: rc=$rc $( head -c 300 "$TMP/e.xml" )"; fi
 
 echo "-- (F) over the cap: 16 rows, defs= the true count, --offset pages"
 run --defs=many >"$TMP/f1.xml" 2>/dev/null
 rows="$( body "$TMP/f1.xml" | grep -o '<d ' | wc -l | tr -d ' ' )"
-grep -q 'defs="18" shown="16" offset="0" next="--defs=many --offset=16"' "$TMP/f1.xml" && [ "$rows" = 16 ] && ok "page 1: 16 rows of 18, next= names page 2" || no "page 1: rows=$rows $( grep -o '<name [^>]*>' "$TMP/f1.xml" )"
+if grep -q 'defs="18" shown="16" offset="0" next="--defs=many --offset=16"' "$TMP/f1.xml" && [ "$rows" = 16 ]; then ok "page 1: 16 rows of 18, next= names page 2"; else no "page 1: rows=$rows $( grep -o '<name [^>]*>' "$TMP/f1.xml" )"; fi
 run --defs=many --offset=16 >"$TMP/f2.xml" 2>/dev/null
 rows2="$( body "$TMP/f2.xml" | grep -o '<d ' | wc -l | tr -d ' ' )"
-[ "$rows2" = 2 ] && ! body "$TMP/f2.xml" | grep -q 'next=' && ok "page 2: the last 2 rows, no next=" || no "page 2: rows=$rows2"
-cat "$TMP/f1.xml" "$TMP/f2.xml" | grep -o 'p="gen/m[0-9]*.ts:1"' | sort -u | wc -l | grep -q '^ *18$' && ok "the two pages cover all 18, no repeats" || no "pages do not cover 18 distinct definitions"
+if [ "$rows2" = 2 ] && ! body "$TMP/f2.xml" | grep -q 'next='; then ok "page 2: the last 2 rows, no next="; else no "page 2: rows=$rows2"; fi
+if cat "$TMP/f1.xml" "$TMP/f2.xml" | grep -o 'p="gen/m[0-9]*.ts:1"' | sort -u | wc -l | grep -q '^ *18$'; then ok "the two pages cover all 18, no repeats"; else no "pages do not cover 18 distinct definitions"; fi
 
 run --defs=many --limit=5 --offset=5 >"$TMP/f3.xml" 2>/dev/null
-grep -q 'defs="18" shown="5" offset="5" next="--defs=many --offset=10 --limit=5"' "$TMP/f3.xml" && [ "$( body "$TMP/f3.xml" | grep -o '<d ' | wc -l | tr -d ' ' )" = 5 ] \
-  && ok "--limit=5 --offset=5: rows 5..9, next= keeps the limit" || no "--limit page: $( grep -o '<name [^>]*>' "$TMP/f3.xml" | tail -1 )"
+if grep -q 'defs="18" shown="5" offset="5" next="--defs=many --offset=10 --limit=5"' "$TMP/f3.xml" && [ "$( body "$TMP/f3.xml" | grep -o '<d ' | wc -l | tr -d ' ' )" = 5 ]; then ok "--limit=5 --offset=5: rows 5..9, next= keeps the limit"; else no "--limit page: $( grep -o '<name [^>]*>' "$TMP/f3.xml" | tail -1 )"; fi
 run --defs=many,run --offset=3 >/dev/null 2>"$TMP/f4.err"; rc=$?
-[ "$rc" -eq 1 ] && grep -q -- '--offset' "$TMP/f4.err" && ok "--offset beside several names refuses (never ignored)" || no "--offset with several names: rc=$rc"
+if [ "$rc" -eq 1 ] && grep -q -- '--offset' "$TMP/f4.err"; then ok "--offset beside several names refuses (never ignored)"; else no "--offset with several names: rc=$rc"; fi
 
 echo "-- (G) several names, one call"
 run --defs=run,work,zzqdefsnone >"$TMP/g.xml" 2>/dev/null; rc=$?
-[ "$rc" -eq 0 ] && [ "$( body "$TMP/g.xml" | grep -o '<name q=' | wc -l | tr -d ' ' )" = 3 ] && grep -q '<name q="zzqdefsnone" defs="0" next="--defs=zzqdefsnone">' "$TMP/g.xml" \
-  && ok "3 <name> rows; the missing one defs=0 with its refusal as next=" || no "multi-name: rc=$rc $( grep -o '<name [^>]*>' "$TMP/g.xml" | tr '\n' ' ' )"
+if [ "$rc" -eq 0 ] && [ "$( body "$TMP/g.xml" | grep -o '<name q=' | wc -l | tr -d ' ' )" = 3 ] && grep -q '<name q="zzqdefsnone" defs="0" next="--defs=zzqdefsnone">' "$TMP/g.xml"; then ok "3 <name> rows; the missing one defs=0 with its refusal as next="; else no "multi-name: rc=$rc $( grep -o '<name [^>]*>' "$TMP/g.xml" | tr '\n' ' ' )"; fi
 
 echo "-- (J) the JSON twin spells every row as the XML does (checklist 41)"
 run --defs=run --json >"$TMP/j.json" 2>/dev/null
-python3 - "$TMP/j.json" "$TMP/a.xml" <<'PY' && ok "JSON rows equal the XML rows (n, p, sel, class, in)" || no "JSON twin differs from XML"
+python3 - "$TMP/j.json" "$TMP/a.xml" <<'PY'
 import json, re, sys
 j = json.load( open( sys.argv[1] ) )["names"][0]["rows"]
 x = re.findall( r'<d n="([^"]*)" t="[^"]*" p="([^"]*)" sel="([^"]*)" lang="[^"]*" class="([^"]*)" in="([0-9]+)"', open( sys.argv[2] ).read() )
 sys.exit( 0 if [ ( r["n"], r["p"], r["sel"], r["class"], str( r["in"] ) ) for r in j ] == x and len( x ) == 3 else 1 )
 PY
+jrc=$?
+if [ "$jrc" -eq 0 ]; then ok "JSON rows equal the XML rows (n, p, sel, class, in)"; else no "JSON twin differs from XML"; fi
 
 echo "-- (P) --path lists the other definitions only when the pick is not provably unique"
 run --path=run,helperA >"$TMP/p1.xml" 2>/dev/null
 alts="$( grep -o '<alts .*</alts>' "$TMP/p1.xml" )"
-printf '%s' "$alts" | grep -q '^<alts side="from" of="run">' && [ "$( printf '%s' "$alts" | grep -o '<d ' | wc -l | tr -d ' ' )" = 2 ] \
-  && printf '%s' "$alts" | grep -q 'sel="src/b.ts:run"' && ! printf '%s' "$alts" | grep -q 'p="src/a.ts:2"' \
-  && ok "P1: from=run binds A.run; <alts> lists the 2 others (B.run, the test copy), not the bound one" || no "P1: $alts"
+if printf '%s' "$alts" | grep -q '^<alts side="from" of="run">' && [ "$( printf '%s' "$alts" | grep -o '<d ' | wc -l | tr -d ' ' )" = 2 ] && printf '%s' "$alts" | grep -q 'sel="src/b.ts:run"' && ! printf '%s' "$alts" | grep -q 'p="src/a.ts:2"'; then ok "P1: from=run binds A.run; <alts> lists the 2 others (B.run, the test copy), not the bound one"; else no "P1: $alts"; fi
 run --path=A.run,helperA >"$TMP/p2.xml" 2>/dev/null
-grep -q 'reachable="1"' "$TMP/p2.xml" && ! grep -q '<alts' "$TMP/p2.xml" && ok "P2: a unique pick prints no <alts> (0 bytes)" || no "P2: $( head -c 400 "$TMP/p2.xml" )"
+if grep -q 'reachable="1"' "$TMP/p2.xml" && ! grep -q '<alts' "$TMP/p2.xml"; then ok "P2: a unique pick prints no <alts> (0 bytes)"; else no "P2: $( head -c 400 "$TMP/p2.xml" )"; fi
 run --path=many,helperA --legend=full >"$TMP/p3.xml" 2>/dev/null
-grep -q '<alts side="from" of="many" alts_shown="16" defs="18" next="--defs=many">' "$TMP/p3.xml" && xmllint --noout "$TMP/p3.xml" 2>/dev/null \
-  && ok "P3: 17 others past the cap: alts_shown=16 defs=18 next=--defs=many, well-formed" || no "P3: $( grep -o '<alts [^>]*>' "$TMP/p3.xml" )"
+if grep -q '<alts side="from" of="many" alts_shown="16" defs="18" next="--defs=many">' "$TMP/p3.xml" && xmllint --noout "$TMP/p3.xml" 2>/dev/null; then ok "P3: 17 others past the cap: alts_shown=16 defs=18 next=--defs=many, well-formed"; else no "P3: $( grep -o '<alts [^>]*>' "$TMP/p3.xml" )"; fi
 
 [ "$fail" -eq 0 ] && echo "defslookupcheck: OK" || echo "defslookupcheck: FAILURES above"
 exit "$fail"
