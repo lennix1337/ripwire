@@ -62,6 +62,15 @@
 #   N15 [G] `(self.inner.f)( … )` is never typed as Self's field: in_t keeps its caller, out_t (Outer.f) is never via="slot" —
 #          kills the source mutant "slotCallAt types any self.… chain" (review MG2)
 #   W1 [P] `std::sync::Arc::new( f )` is the wrapper by its LAST path segment: the value lands in Dyn.g (F-4)
+# fix round 2 (second lens rv-fn-slot-2-lens L-1, L-2; fixture crates selfmod, ga, gx):
+#   S1 [P] `use crate::workspace_settings_module::{self, Other}` (module path past SSO) binds the module: `workspace_settings_module::Ws { … }`
+#          is that file's Ws, typed (L-1: the `self` branch kept a view into the string it then reassigned)
+#   S2 [P] `use crate::{a::{self}}` binds `a`: `a::Sa { … }` is a.rs's Sa, never the writing file's own Sa (L-1 short module)
+#   X1 [P] a bare `Gh { … }` in a file with an OUT-OF-TREE glob (`use extcrate::*`) is a guess among crate namesakes: via="slot-name",
+#          never typed (L-2 tier 1)
+#   X2 [P] a bare `Gw { … }` in a file that `use`s the defining crate by name AND has an out-of-tree glob: the same hedge (L-2 tier 2)
+#   X3 [G] a local `Gm` shadows the glob (tier 0: typed);  X4 [G] no glob: the crate namesake stays typed;  X5 [G] an in-tree glob
+#          (`use crate::hk::*`) and X6 [G] a glob led by an in-tree crate (`use ga::*`) are not out-of-tree: typed
 #
 # Usage: bash test/fnslotcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -241,5 +250,27 @@ hasnt "N15 (self.inner.f)( … ) is never typed as Self's field" "$o" 'via="slot
 o="$( run --callers=arc_t )"
 has   "W1 std::sync::Arc::new( f ) hands the value to the field" "$o" 'into="Dyn.g" called_by="go" called_at="crates/qual/src/wrap.rs:2" via="slot"'
 hasnt "W1b no argument row into the Arc::new wrapper" "$o" 'into="Arc::new'
+o="$( run --callers=self_long_t )"
+has   "S1 {self} of a long module path binds the module" "$o" 'into="Ws.scb" called_by="fire_ws" called_at="crates/selfmod/src/workspace_settings_module.rs:2" via="slot"'
+hasnt "S1b never the writing file's own Ws" "$o" 'fire_ws_local'
+o="$( run --callers=self_short_t )"
+has   "S2 {self} of a short module path binds the module" "$o" 'into="Sa.acb" called_by="fire_sa" called_at="crates/selfmod/src/a.rs:2" via="slot"'
+hasnt "S2b never the writing file's own Sa" "$o" 'fire_sa_local'
+o="$( run --callers=glob_t1 )"
+has   "X1a the store still prints, joined by the field name" "$o" 'into="Gh.hcb" called_by="fire_gh"'
+has   "X1 an out-of-tree glob hedges the crate tier: slot-name" "$o" 'via="slot-name"'
+hasnt "X1b never typed" "$o" 'via="slot"'
+o="$( run --callers=glob_t2 )"
+has   "X2a the store still prints, joined by the field name" "$o" 'into="Gw.wcb" called_by="fire_ga"'
+has   "X2 an out-of-tree glob hedges the used-crate tier: slot-name" "$o" 'via="slot-name"'
+hasnt "X2b never typed" "$o" 'via="slot"'
+o="$( run --callers=glob_loc_t )"
+has   "X3 a local struct shadows the glob: typed" "$o" 'into="Gm.mcb" called_by="fire_gm_local" called_at="crates/gx/src/g3.rs:3" via="slot"'
+o="$( run --callers=plain_t )"
+has   "X4 no glob: the crate namesake stays typed" "$o" 'into="Gh.hcb" called_by="fire_gh" called_at="crates/gx/src/hk.rs:2" via="slot"'
+o="$( run --callers=intree_glob_t )"
+has   "X5 an in-tree glob is no out-of-tree glob: typed" "$o" 'into="Gh.hcb" called_by="fire_gh" called_at="crates/gx/src/hk.rs:2" via="slot"'
+o="$( run --callers=crate_glob_t )"
+has   "X6 a glob led by an in-tree crate: typed" "$o" 'into="Gw.wcb" called_by="fire_ga" called_at="crates/ga/src/lib.rs:2" via="slot"'
 if [ "$fail" -eq 0 ]; then echo "fnslotcheck: PASS"; else echo "fnslotcheck: FAIL"; fi
 exit "$fail"
