@@ -177,6 +177,26 @@ inline std::vector<std::uint32_t> forDispatchSites( const IngestResult& ing, con
     return out;
 }
 
+// The MCP `for` twin's body candidates (it has no auto <bodies> bundle): the r=1 row and every ranked-head row sharing its name and
+// scope — the decl/def pair the CLI's anchor-restricted head holds on the same name-exact route.
+inline std::vector<NodeId> dispatchHeadCandidates( const IngestResult& ing, std::span<const NodeId> head )
+{
+    std::vector<NodeId> out;
+    if( head.empty() || head.front() >= ing.symbols.size() )
+    {
+        return out;
+    }
+    const Symbol& top = ing.symbols[ head.front() ];
+    for( const NodeId id : head )
+    {
+        if( id < ing.symbols.size() && ing.symbols[id].name == top.name && ing.symbols[id].scope == top.scope )
+        {
+            out.push_back( id );
+        }
+    }
+    return out;
+}
+
 struct DispatchHopRender
 {
     std::string xml;              // <dispatch …>…</dispatch> per site; empty when nothing rides
@@ -244,7 +264,9 @@ inline bool ownerNamedByProduction( const IngestResult& ing, NodeId cand )
     return !testNames;   // named by nothing outside its own files: no evidence either way, so it stays a candidate
 }
 
-inline DispatchHopRender renderForDispatchHop( const IngestResult& ing, const Graph& g, std::span<const std::uint32_t> sites, const BodyFoldInputs& bodyIn )
+// `withBody` false: the MCP `for` twin, which serves no inline body (its bodies ride by fetch_body handle) — rows only.
+inline DispatchHopRender renderForDispatchHop( const IngestResult& ing, const Graph& g, std::span<const std::uint32_t> sites, const BodyFoldInputs& bodyIn,
+                                               bool withBody = true )
 {
     DispatchHopRender     out;
     std::vector<char>     esc;
@@ -321,7 +343,7 @@ inline DispatchHopRender renderForDispatchHop( const IngestResult& ing, const Gr
         {
             appendCallerHopRow( x, rc, who, std::string( " ctor=\"" ) + std::string( escapeXml( qualifiedMemberName( owners, ing.symbols[ ctor ] ), esc ) ) + '"' );
         }
-        if( prod.size() == 1 )
+        if( withBody && prod.size() == 1 )
         {
             if( const std::optional<std::string> body = fold_detail::renderOneBody( bodyIn, prod.front() ) )
             {
@@ -333,6 +355,12 @@ inline DispatchHopRender renderForDispatchHop( const IngestResult& ing, const Gr
         out.xml += x;
     }
     return out;
+}
+
+// The MCP twin's own comment: the element carries its definition beside it (the MCP for header's clauses are fixed at render time).
+inline std::string dispatchHopMcpXml( const DispatchHopRender& r )
+{
+    return r.xml.empty() ? std::string() : "<!-- ripwire for" + std::string( kForDispatchHopLegend ) + " -->" + r.xml;
 }
 
 }   // namespace rw

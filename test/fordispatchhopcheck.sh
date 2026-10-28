@@ -23,6 +23,8 @@
 #   N1 [G] no element: the bare subject (Loader::Load), the call as a bare word (Loader::Load the Fetch), a wrapper calling its own
 #          name (CachedSource::Fetch inner_->Fetch), a type subject (DiskSource src_->Fetch)
 #   N2 [G] no element, byte-identical to RIPWIRE_NO_DISPATCH_HOP=1: --json, --signatures-only, --token-budget=3000
+#   M1 [P] MCP `for` parity: the same element (rows, no inline body — that surface serves bodies by handle) with its own clause;
+#          the bare subject carries none
 #   X1 [G] determinism  X2 [G] xmllint well-formed  X3 [G] no "--" inside a legend comment
 #
 # Usage:  bash test/fordispatchhopcheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/fordispatchhopcheck.sh
@@ -136,6 +138,24 @@ for flag in --json --signatures-only --token-budget=3000; do
     if [ -s "$TMP/n2a" ] && cmp -s "$TMP/n2a" "$TMP/n2b"; then ok "(N2) $flag: byte-identical to RIPWIRE_NO_DISPATCH_HOP=1"
     else no "(N2) $flag differs from the hop-off answer"; fi
 done
+
+# ── M1 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+mcp_for(){ printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"for","arguments":{"path":"%s","task":"%s"}}}\n' "$ROOT/$1" "$2" \
+           | "$BIN" --mcp 2>/dev/null | python3 -c '
+import sys, json
+for l in sys.stdin:
+    try: j = json.loads(l)
+    except ValueError: continue
+    sys.stdout.write("".join(c.get("text", "") for c in j.get("result", {}).get("content", [])))'; }
+mcp_for "$F/rs" "build_book r.render" >"$TMP/m1"
+mcp_for "$F/cpp" "Loader::Load" >"$TMP/m1n"
+M1="$( hop "$TMP/m1" )"
+if [ -n "$M1" ] && [ "$M1" = "$H3" ] && grep -q 'dispatch call=: the task names a call' "$TMP/m1" && [ -s "$TMP/m1n" ] && [ -z "$( hop "$TMP/m1n" )" ]; then
+    ok "(M1) MCP for carries the CLI's element byte-for-byte (no body on this fixture) with its clause; the bare subject none"
+else no "(M1) MCP for: [$M1] vs CLI [$H3]"; fi
+H2M="$( mcp_for "$F/cpp1" "Loader::Load src_->Fetch" >"$TMP/m1b"; hop "$TMP/m1b" )"
+if has "$H2M" 'shown="1" test="1"' && ! has "$H2M" '<b '; then ok "(M1b) MCP for: the one-candidate element carries no inline body"
+else no "(M1b) MCP one-candidate element: [$H2M]"; fi
 
 # ── X ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 run "$F/rs" "--for=build_book r.render" >"$TMP/x1"
