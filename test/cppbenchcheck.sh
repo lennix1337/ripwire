@@ -133,6 +133,15 @@ fi
 # Reuses WORK1's indexes (no cold build) and scores ONE arm: this arm is about the mining path, not the scoring one (the two
 # runs above cover that). The refreshed lock goes to its own file; its content hash must equal the frozen lock's.
 RLOCK="$TMP/refreshed.lock"
+# CR 4396503879 (train 40): RLOCK starts as a TAMPERED copy of the frozen lock. The harness mines a MISSING lock anyway, so an arm that
+# starts without one passes when --refresh-dataset stops working; with a lock present, only the refresh replaces it (a plain run on
+# this one refuses: the hash does not match its instances).
+python3 - "$LOCK" "$RLOCK" <<'PY' || { no "(v) could not seed the tampered lock"; }
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["content_sha256"] = "0" * 64
+json.dump(d, open(sys.argv[2], "w"), indent=2)
+PY
 RIPWIRE="$BIN" python3 "$HARNESS" \
     --source-repo "$ROOT" --branch-scope head --cap 3 --max-scan 400 --refresh-dataset --arms=for \
     --work-dir "$WORK1" --dataset-lock "$RLOCK" >"$TMP/run_r.log" 2>&1
