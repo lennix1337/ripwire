@@ -57,6 +57,7 @@ def rows( out ):
     out = re.sub( r"<!--.*?-->", "", out, flags = re.S )
     return [ ( m.group( 1 ), dict( re.findall( r'([a-z_]+)="([^"]*)"', m.group( 2 ) ) ) ) for m in re.finditer( r"<(s|dc) ([^>]*)/>", out ) ]
 def edges( out ):    return [ a for k, a in rows( out ) if k == "s" ]
+def leaf( n ):       return ( n or "" ).rsplit( ".", 1 )[ -1 ]   # train 40: js-def-naming prints a TS/JS method row as Class.method; arms naming a method compare its leaf
 def declines( out ): return [ a for k, a in rows( out ) if k == "dc" ]
 
 print( "(T) TypeScript: a stated field's type, never the caller's own namesake" )
@@ -71,8 +72,8 @@ for sym, line in ( ( "exec/executor.ts:Executor.provide", "20" ), ( "viaPublic",
 o = run( "ts", "--callees=viaPrivBox" ); e = edges( o )
 say( len( e ) == 1 and e[ 0 ].get( "p" ) == "src/exec/box.ts:2" and "via" not in e[ 0 ], "P T3 viaPrivBox", "`#boxp: Box` → the one proven Box.provide edge", str( e ) )
 o = run( "ts", "--callers=exec/executor.ts:Executor.provide" ); e = edges( o )
-say( not any( x.get( "n" ) in ( "viaPublic", "viaLate", "viaPrivBox" ) for x in e ), "P T4 callers", "no via=name caller row from a stated-field call", str( e ) )
-say( any( x.get( "n" ) == "viaSelfField" for x in e ) and any( x.get( "n" ) == "viaUntyped" and x.get( "via" ) == "name" for x in e ), "C T4 control",
+say( not any( leaf( x.get( "n" ) ) in ( "viaPublic", "viaLate", "viaPrivBox" ) for x in e ), "P T4 callers", "no via=name caller row from a stated-field call", str( e ) )
+say( any( leaf( x.get( "n" ) ) == "viaSelfField" for x in e ) and any( leaf( x.get( "n" ) ) == "viaUntyped" and x.get( "via" ) == "name" for x in e ), "C T4 control",
      "the same callers run lists the proven own-class caller and the untyped field's by-name caller (the absence above is not an empty run)", str( e ) )
 o = run( "ts", "--callees=flush" ); e = edges( o )
 say( not any( x.get( "p" ) == "src/exec/solo.ts:5" for x in e ), "P T5 flush", "`out: Sink` (an interface no class implements) never binds Solo's own write", str( e ) )
@@ -134,7 +135,7 @@ o = run( "tsone", "--path=dispatch,routers/a.ts:match" ); b = bridge( o ); r = r
 say( 'p="src/routers/a.ts:3" via="declined" cands="1"' in b and 'proven="0"' in b and r.get( "reachable" ) == "0", "P F1 dispatch",
      "`this.router.match( … )` (router: Router, ONE in-tree implementor) is a HEDGED crossing via=declined cands=1: bridge proven=0, the root stays reachable=0", b[ -300: ] or o[ -300: ] )
 o = run( "tsone", "--path=viaParam,routers/a.ts:match" ); e = edges( o )
-say( root( o ).get( "reachable" ) == "1" and any( x.get( "via" ) == "name" and x.get( "n" ) == "match" for x in e ), "C F1 viaParam",
+say( root( o ).get( "reachable" ) == "1" and any( x.get( "via" ) == "name" and leaf( x.get( "n" ) ) == "match" for x in e ), "C F1 viaParam",
      "`app.router.match( … )` on a parameter keeps its hedged by-name edge (this lane does not touch the parameter shape)", str( e ) )
 o = run( "tsone", "--path=dispatch,routers/a.ts:match" ); s = sink( o )
 say( s.get( "why", "" ).startswith( "declined:" ) and s.get( "in" ) == "dispatch", "P F2 near_sink",
@@ -158,7 +159,7 @@ say( len( d ) == 1 and d[ 0 ].get( "gate" ) == "iface" and d[ 0 ].get( "cands" )
      'the 17-wide interface is still one <dc gate="iface" cands="17"> (the width the near_sink row leaves to --callees)', str( d ) )
 
 o = run( "tsext", "--path=dispatch,routers/a.ts:match" ); e = edges( o )
-say( bridge( o ) == "" and root( o ).get( "reachable" ) == "1" and any( x.get( "via" ) == "name" and x.get( "n" ) == "match" for x in e ), "C F9 tsext",
+say( bridge( o ) == "" and root( o ).get( "reachable" ) == "1" and any( x.get( "via" ) == "name" and leaf( x.get( "n" ) ) == "match" for x in e ), "C F9 tsext",
      "the field's type imported from a package (`import { Router } from 'express'`, the tree has an interface of that name too) is not stated in-tree: the by-name edge stays, no crossing", str( e ) )
 
 print( "(Y) Python: annotations and module-qualified constructors type fields and locals" )
