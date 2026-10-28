@@ -1633,15 +1633,7 @@ inline PathHandlerRule pathHandlerRule( const IngestResult& ing, const NameKeyHo
         out.listed.clear();
     }
     std::ranges::stable_sort( out.rows, []( const PathHandlerRow& a, const PathHandlerRow& b ) { return a.cands > b.cands; } );
-    const NodeId first = out.rows.front().cls;
-    for( const HandlerRule& rule : hr.rules() )
-    {
-        if( hr.classes().descendsFrom( first, rule.base ) )
-        {
-            out.rule = &rule;
-            break;
-        }
-    }
+    out.rule = hr.ruleOf( out.rows.front().cls );   // the ONE rule pick (handlerrule.h): the nearest rule base
     return out;
 }
 
@@ -1758,7 +1750,7 @@ inline std::string pathHandlerRuleXml( const IngestResult& ing, const NameKeyHop
     }
     out += ">";
     std::size_t readers = 0;
-    for( const HandlerReader& reader : hr.readers() )
+    for( const HandlerReader& reader : rule.readers )
     {
         const NodeId rd = reader.fn;
         if( readers == kHandlerRuleReaders )

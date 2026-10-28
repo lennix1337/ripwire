@@ -610,7 +610,7 @@ private:
 class NameKeyHops
 {
 public:
-    NameKeyHops( const IngestResult& ing, const ValueRefIndex& values ) : m_ing( ing ), m_values( values ), m_rules( ing ) {}
+    NameKeyHops( const IngestResult& ing, const ValueRefIndex& values ) : m_ing( ing ), m_values( values ), m_rules( ing, values ) {}
 
     // The sink's NAME-KEY hops: one per function holding a template lookup that can name the sink (the sink's own lookups excluded).
     void backHops( NodeId sink, std::vector<BackHop>& out ) const

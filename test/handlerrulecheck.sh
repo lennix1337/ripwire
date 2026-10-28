@@ -27,6 +27,16 @@
 #   (W1) 17 handler defs: handlers="17", no <h> rows, next= lists one name's defs.
 #   (L1) the <handler_rule> clause rides only with the block (full + compact); every answer parses as XML.
 #   (M1) MCP path_between carries the same <handler_rule>.
+#   FIX ROUND 1 (review rv-on-name-v2; each arm red on 00d4c21d)
+#   (R1) the f-string's hole is TRACED to its assignments: a converter called for another attribute while the hole is built by
+#        .lower() is no rule; a converter call split over lines is still one.
+#   (R2) a rule write under an if/else (a guard, a kwarg branch) is no rule; one after a closed block, at the top level, is.
+#   (R3) the NEAREST rule base wins (Command's own do_ rule beats Message's on_); a class below an intermediate that rewrites the
+#        attribute with something else is never named; the intermediate itself still obeys the base above it.
+#   (R4) a subclass of an unrelated same-named base gets no hop; the one whose import resolves to the ruled base keeps it.
+#   (R5) readers and posters are per rule: Bus.emit reads the other rule's attribute, so it is not the Message block's reader and
+#        posts no Message; Pump posts no Event.
+#   (R7) `self.X(` names the caller's class FAMILY only (Input.Changed + MaskedInput.Changed, never Select.Changed).
 #
 # Usage: test/handlerrulecheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -158,7 +168,7 @@ cp "$TMP/fw/case.py" "$TMP/fw/message.py" "$TMP/fw/pump.py" "$TMP/wide/"
 } > "$TMP/wide/w.py"
 
 python3 - "$BIN" "$TMP" <<'PY'
-import json, re, subprocess, sys
+import json, os, re, subprocess, sys
 binp, tmp = sys.argv[1], sys.argv[2]
 fail = 0
 def ok( m ): print( "  PASS  " + m )
@@ -220,6 +230,84 @@ t = run( fw, "--path=post_message,on_*", "--legend=full" )
 check( xml_ok( t ) and "<handler_rule via=name-key base= attr=" in t, "L1 full clause rides with the block" )
 t = run( fw, "--path=Button.press,Form.on_tick" )
 check( t is not None and "handler_rule" not in t, "L1 no block, no clause" )
+
+def write( d, files ):
+    for name, text in files.items():
+        path = os.path.join( d, name )
+        os.makedirs( os.path.dirname( path ), exist_ok = True )
+        with open( path, "w" ) as f:
+            f.write( text )
+case_py, pump_py = open( f"{fw}/case.py" ).read(), open( f"{fw}/pump.py" ).read()
+def rule_msg( body, sig = "cls, namespace=None" ):
+    return "from case import camel_to_snake\n\n\nclass Message:\n    def __init_subclass__(" + sig + "):\n        super().__init_subclass__()\n" + body
+BODY = '        parts = cls.__qualname__.rsplit(".", 2)[-2:]\n'
+HEAD = "from message import Message\nfrom pump import Pump\n\n\ndef leaf(x):\n    return x\n\n\n"
+def fixture( name, message, widgets, extra = None ):
+    d = f"{tmp}/{name}"
+    write( d, { "case.py": case_py, "pump.py": pump_py, "message.py": message, "widgets.py": HEAD + widgets, **( extra or {} ) } )
+    return d
+BTN = "class Button(Pump):\n    class %s(Message):\n        pass\n\n    def press(self):\n        self.post_message(self.%s())\n\n\nclass Form(Pump):\n    def %s(self, m):\n        return leaf(m)\n\n    def %s(self, m):\n        return m\n"
+def btn( cls, h1, h2 ): return BTN % ( cls, cls, h1, h2 )
+
+def hedged( d, name ):
+    t = run( d, f"--impact={name}" )
+    return attr( root( t, "impact" ), "reaches_hedged" ) if t is not None else "ERR"
+
+# R1: the hole is traced to its assignment
+d = fixture( "r1", rule_msg( '        cls.log_key = camel_to_snake(cls.__qualname__.rsplit(".", 2)[-2:][0])\n        name = cls.__name__.lower()\n        cls.handler_name = f"on_{name}"\n' ),
+             btn( "PressedNow", "on_pressednow", "on_button_pressed_now" ) )
+t = run( d, "--path=post_message,on_*" )
+check( t is not None and "<handler_rule" not in t and hedged( d, "on_button_pressed_now" ) is None, "R1 a converter called for another attribute, hole built by .lower(): no rule, no hop" )
+d = fixture( "r1ok", rule_msg( BODY + '        name = "_".join(\n            camel_to_snake(p)\n            for p in parts\n        )\n        cls.handler_name = f"on_{name}"\n' ),
+             btn( "Pressed", "on_pressed", "on_button_pressed" ) )
+t = run( d, "--path=post_message,on_*" )
+check( t is not None and 'h="on_button_pressed"' in t and hedged( d, "on_button_pressed" ) == "1", "R1 near miss: a converter call split over lines is still the rule" )
+
+# R2: a conditional write is not the rule for every class
+d = fixture( "r2", rule_msg( BODY + '        name = "_".join(camel_to_snake(p) for p in parts)\n        if "handler_name" not in cls.__dict__:\n            cls.handler_name = f"on_{name}"\n' ),
+             btn( "Pressed", "on_click", "on_button_pressed" ).replace( "class Pressed(Message):", 'class Pressed(Message):\n        handler_name = "on_click"' ) )
+t = run( d, "--path=post_message,on_*" )
+check( t is not None and "<handler_rule" not in t and hedged( d, "on_button_pressed" ) is None, "R2 a guarded rule write (if handler_name not in __dict__): no rule, no hop" )
+d = fixture( "r2b", rule_msg( BODY + '        name = "_".join(camel_to_snake(p) for p in parts)\n        if handler_name is not None:\n            cls.handler_name = handler_name\n        else:\n            cls.handler_name = f"on_{name}"\n', "cls, handler_name=None" ),
+             btn( "Pressed", "on_click", "on_button_pressed" ).replace( "(Message)", '(Message, handler_name="on_click")' ) )
+t = run( d, "--path=post_message,on_*" )
+check( t is not None and "<handler_rule" not in t and hedged( d, "on_button_pressed" ) is None, "R2 a kwarg if/else (two writes, one in a branch): no rule, no hop" )
+
+# R3: nearest rule base; an intermediate rewrite declines
+CMD = "class Command(Message):\n    def __init_subclass__(cls, **kw):\n        super().__init_subclass__(**kw)\n%s\n\n\nclass Save(Command):\n    pass\n\n\nclass Editor(Pump):\n    def save(self):\n        self.post_message(Save())\n\n    def run(self):\n        self.post_message(Command())\n\n\nclass Form(Pump):\n    def %s(self, m):\n        return leaf(m)\n\n    def on_save(self, m):\n        return m\n\n    def on_command(self, m):\n        return m\n"
+msg = rule_msg( BODY + '        name = "_".join(camel_to_snake(p) for p in parts)\n        cls.handler_name = f"on_{name}"\n' )
+d = fixture( "r3", msg, "from case import camel_to_snake\n\n\n" + CMD % ( '        cls.handler_name = "on_command"', "on_command" ) )
+check( hedged( d, "on_save" ) is None, "R3 a subclass rewriting handler_name below the rule base: Save is never named on_save" )
+t = run( d, "--path=post_message,on_command" )
+check( t is not None and 'base="Message"' in root( t, "handler_rule" ) and 'h="on_command"' in t, "R3 the intermediate itself still obeys the base above it (Command -> on_command)" )
+d = fixture( "r3b", msg, "from case import camel_to_snake\n\n\n" + CMD % ( '        name = camel_to_snake(cls.__name__)\n        cls.handler_name = f"do_{name}"', "do_save" ) )
+t = run( d, "--path=post_message,do_*" )
+hr = root( t, "handler_rule" )
+check( 'base="Command"' in hr and 'name="do_{snake(Class)}"' in hr and 'h="do_save"' in ( t or "" ) and hedged( d, "do_save" ) == "1" and hedged( d, "on_save" ) is None,
+       f"R3 the nearest rule (Command's do_) wins in the name AND in the block's rule pick ({hr[:160]})" )
+
+# R4: a same-named base of another module
+TWO = { "other/__init__.py": "", "other/message.py": "class Message:\n    pass\n",
+        "other/widgets.py": "from other.message import Message\nfrom pump import Pump\n\n\nclass Ping(Message):\n    pass\n\n\nclass Sender(Pump):\n    def send(self):\n        self.post_message(Ping())\n\n\nclass Form(Pump):\n    def on_ping(self, m):\n        return m\n" }
+d = fixture( "r4", msg, "class Pong(Message):\n    pass\n\n\nclass Caller(Pump):\n    def call(self):\n        self.post_message(Pong())\n\n\nclass Panel(Pump):\n    def on_pong(self, m):\n        return leaf(m)\n", TWO )
+t = run( d, "--path=post_message,on_ping" )
+check( t is not None and "<handler_rule" not in t and hedged( d, "on_ping" ) is None, "R4 a subclass of an unrelated same-named Message: no hop" )
+t = run( d, "--path=post_message,on_pong" )
+check( t is not None and 'h="on_pong"' in t and hedged( d, "on_pong" ) == "1", "R4 near miss: the subclass whose import resolves to the ruled Message keeps its hop" )
+
+# R5: readers and posters per rule
+BUS = "from case import camel_to_snake\n\n\nclass Event:\n    def __init_subclass__(cls):\n        super().__init_subclass__()\n        name = camel_to_snake(cls.__name__)\n        cls.slot = f\"when_{name}\"\n\n\nclass Bus:\n    def emit(self, event):\n        for h in self.handlers:\n            getattr(h, event.slot)(event)\n"
+d = fixture( "r5", msg, "from bus import Event, Bus\n\n\nclass Tick(Message):\n    pass\n\n\nclass Saved(Event):\n    pass\n\n\nclass Clock(Pump):\n    def tick(self, bus):\n        self.post_message(Tick())\n        bus.emit(Saved())\n        self.post_message(Saved())\n        bus.emit(Tick())\n\n\nclass Form(Pump):\n    def on_tick(self, m):\n        return leaf(m)\n\n    def when_saved(self, m):\n        return m\n", { "bus.py": BUS } )
+t = run( d, "--path=post_message,on_tick" )
+check( t is not None and 'base="Message"' in root( t, "handler_rule" ) and '<hrd n="Bus.emit"' not in t and 'posts="1"' in root( t, "handler_rule" ), "R5 the Message block does not list the other rule's reader (Bus.emit); bus.emit(Tick()) is no Message post" )
+t = run( d, "--path=emit,when_saved" )
+hr = root( t, "handler_rule" )
+check( 'base="Event"' in hr and '<hrd n="Bus.emit"' in ( t or "" ) and "Pump._on_message" not in ( t or "" ) and 'posts="1"' in hr, f"R5 the Event block lists Bus.emit only; one post (self.post_message(Saved()) is not an Event post) ({hr[:160]})" )
+
+# R7: self.X names the caller's class family only (kills a mutant that takes any owner)
+FAM = "class Input(Pump):\n    class Changed(Message):\n        pass\n\n    def edit(self):\n        self.post_message(self.Changed())\n\n\nclass MaskedInput(Input):\n    class Changed(Message):\n        pass\n\n\nclass Select(Pump):\n    class Changed(Message):\n        pass\n\n\nclass Form(Pump):\n    def on_input_changed(self, m):\n        return leaf(m)\n\n    def on_masked_input_changed(self, m):\n        return m\n\n    def on_select_changed(self, m):\n        return m\n"
+d = fixture( "r7", msg, FAM )
+check( hedged( d, "on_input_changed" ) == "1" and hedged( d, "on_masked_input_changed" ) == "1" and hedged( d, "on_select_changed" ) is None, "R7 self.Changed() reaches Input.Changed + MaskedInput.Changed, never Select.Changed" )
 
 req = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n' + json.dumps( { "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "path_between", "arguments": { "from": "post_message", "to": "on_*" } } } ) + "\n"
 p = subprocess.run( [ binp, "--mcp", fw, "--no-cache" ], cwd = fw, input = req, capture_output = True, text = True, timeout = 120 )
