@@ -106,7 +106,11 @@ if cmd == "rr":            # ON OFF [names] — ON is the round-robin of OFF; fi
 elif cmd == "fold":        # ON OFF — the fold's rows are the score top three (OFF's first three rows), and ON's fold is OFF's
     t = load(args[0]); m = re.search(r'<fold [^>]*>(.*?)</fold>', t, re.S)
     if not m: fail("no <fold>")
-    got = [attrs(x.group(1)).get("n") for x in re.finditer(r'<(?:b|skip|slice) ([^>]*)>', m.group(1))]
+    # WRAPPER-FOLLOW (src/hopbody.h): a <b follow_of=> is a thin wrapper's callee riding after it, not a ranked row — the ranked rows
+    # are still exactly the score top three; a follow body must name a wrapper the fold serves
+    pieces = [attrs(x.group(1)) for x in re.finditer(r'<(?:b|skip|slice) ([^>]*)>', m.group(1))]
+    got = [a.get("n") for a in pieces if "follow_of" not in a]
+    if any(a["follow_of"] not in got for a in pieces if "follow_of" in a): fail("a follow_of body names no served wrapper")
     want = [n for p, n in rows(load(args[1]))[:3]]
     mo = re.search(r'<fold [^>]*>.*?</fold>', load(args[1]), re.S)
     if not mo or mo.group(0) != m.group(0): fail("the fold differs from the RIPWIRE_NO_HEAD_RR=1 answer's")
