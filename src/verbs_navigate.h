@@ -150,10 +150,11 @@ inline std::string notFoundGitRoot( const rw::IngestResult& ing, const rw::Confi
     return ing.realPaths.empty() && cfg.roots.size() == 1 ? std::string( cfg.roots[0] ) : std::string();
 }
 
-inline int refuseNotFoundWithAnswer( const rw::IngestResult& ing, const rw::Config& cfg, const rw::NotFoundAnswer& answer,
+inline int refuseNotFoundWithAnswer( const rw::IngestResult& ing, const rw::Config& cfg, rw::NotFoundAnswer answer,
                                      std::string_view prefix, std::string_view spec, std::string_view retryForm )
 {
     rw::emitTo( stderr, "{}{}{}{}\n", prefix, spec, rw::notFoundRenameClause( answer.near ), rw::selectorFaultClause( ing, spec, retryForm ) );
+    answer.refused = rw::refusedMatchCount( ing, spec );   // js-def-naming fix 1: several definitions fit and none was chosen: refused=N beside found=0
     rw::writeNotFoundAnswer( stdout, answer, cfg.json );
     return 1;
 }
@@ -336,9 +337,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         const bool        chDiscloseCap = ( pw.end - pw.begin ) < result.size();
         // QUALNAME-1: n="Owner.name" on a member row (memberowner.h) — the rows MF1-NX's <callers> block shares; its legend clause
         // rides exactly when a shown row carries an owner.
-        const rw::MemberOwners chOwners( ing );
-        const bool             chHasOwner = std::any_of( result.begin() + std::ptrdiff_t( pw.begin ), result.begin() + std::ptrdiff_t( pw.end ),
-                                                         [ & ]( rw::NodeId id ) { return !chOwners.ownerOf( ing.symbols[ id ] ).empty(); } );
+        const rw::MemberOwners    chOwners( ing );
+        const rw::MemberOwnerRows chOwnerRows = rw::memberOwnerRows( ing, std::span<const rw::NodeId>( result ).subspan( pw.begin, pw.end - pw.begin ) );
         char              pab[ kPageDisclosureCap ];
 
         const auto [ chNextSelector, chNextIsBare ] = rw::callHierarchyNextSelector( ing, chRows, sym, wantCallers );
@@ -418,13 +418,13 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                            + rw::viaNameLegend( chHasVia, false, cfg.columnar )                   // FE-B: likewise for via="name"
                            + rw::viaLinkLegend( chHasLink )
                            + rw::defTableLegend( chAttr.groups.multi(), chListing.cut ) + rw::splitArmLegend( chHasSplit )   // attrib-multidef: likewise
-                           + rw::memberOwnerLegend( chHasOwner ) ).c_str(),   // QUALNAME-1: likewise, exactly when a shown row names its owner
+                           + rw::memberOwnerLegendFor( chOwnerRows ) ).c_str(),   // QUALNAME-1: likewise, exactly when a shown row names its owner
                          ( std::string( rw::modScopeLegend( chHasModScope ) )   // #60: likewise, exactly when a t="modscope" row is
                            + rw::callSitesAtLegend( chSites.any, chSites.anyCut, rw::kCallSitesPerRowCap ) ).c_str(),   // CALLSITE-AT: likewise for sites_at=/sites_total=
                          ( rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ) + rw::valueRefsLegend( !chRows.valueRefs.rows.empty(), wantCallers )
                            + rw::valueRefsDepthLegendFor( chRows.valueRefs )   // exactly when the root carries the depth disclosure
                            + rw::patternDispatchLegend( !chRows.valueRefs.patternSites.empty() || !chRows.valueRefs.patternWideSites.empty(), wantCallers )
-                           + std::string( rw::slotJoinLegend( wantCallers ? chRows.valueRefs.slotCallers : !chRows.valueRefs.slotSites.empty(), wantCallers ) )   // IX-1: exactly when a slot join rides
+                           + std::string( rw::slotJoinLegend( wantCallers ? chRows.valueRefs.slotCallers : !chRows.valueRefs.slotSites.empty(), wantCallers, wantCallers && chRows.valueRefs.slotCands ) )   // IX-1: exactly when a slot join rides
                            + std::string( rw::closureBlocksLegend( !chClosures.empty() ) ) ).c_str(),   // IX-3: exactly when pattern_dispatch= rides; ix2-slice: exactly when an <in> block rides
                          rw::rootRelPathsLegend( chSingleRoot ),
                          rw::multiRootTableLegend( ing.rootLabels.size() >= 2 ) );
@@ -1060,6 +1060,7 @@ struct SafeDeleteLegendFlags
     bool        patternDispatch = false; // IX-3: pattern_dispatch= / pattern_too_wide= on the root (valuerefs.h)
     bool        patternWideRows = false; // IX-3: the <pdw> rows ride (risk=hedged and a too-wide template can name SYM)
     bool        slotJoin        = false; // IX-1: a <vr> row carries via=slot|slot-name
+    bool        slotCands       = false; // IX1-V2: a <vr> row carries cands=
     bool        callersFloor  = false;   // callers_floor= on the root (countfloor.h): callers= may be short for THIS definition
     bool        usesFloor     = false;   // uses_floor= on the root: this kind's reads/type mentions are not indexed in this run
     bool        hasSitesAt    = false;   // a <c sites_at=> row is on this page (CALLSITE-AT)
@@ -1174,7 +1175,7 @@ inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs
                                + rw::declinedSitesLegend( flags.declinedSites );
     declinedClause += rw::valueRefsSafeDeleteLegend( flags.valueRefs > 0 );   // exactly when the root carries value_refs=
     declinedClause += rw::patternDispatchLegend( flags.patternDispatch, true, flags.patternWideRows );     // IX-3: exactly when the root carries pattern_dispatch=/pattern_too_wide=
-    declinedClause += rw::slotJoinLegend( flags.slotJoin, true );   // IX-1: exactly when a <vr> row carries via=
+    declinedClause += rw::slotJoinLegend( flags.slotJoin, true, flags.slotCands );   // IX-1: exactly when a <vr> row carries via=
     declinedClause += rw::valueRefsDepthLegend( flags.valueRefDepthCut );      // exactly when it carries the depth disclosure
     declinedClause += safeDeleteFloorLegend( flags, risk );   // count-floor + CALLSITE-AT: present-only clauses
     rw::emitTo( stdout, "<!-- ripwire safe-delete: composes signals the tool already computes into one \"can I delete this?\" READ "
@@ -1373,7 +1374,7 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
                 }
                 std::fclose( file );
                 // 0.6.6 D4: the dead-code verb's own shape — a Python test-runner or decorator root is never a candidate
-                deadCodeCandidate = sourceHasStaticToken( source, only.sigStartByte, only.sigEndByte )
+                deadCodeCandidate = quality::symbolHasStaticLinkage( only, source )
                                     && !quality::pythonDecoratedDef( only, source ) && !quality::pythonRunnerRoot( ing.files[ only.fileId ], only, source );
             }
         }
@@ -1453,7 +1454,7 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
                           SafeDeleteLegendFlags{ .singleRoot = sdSingleRoot, .hasUnindexed = rw::graphGaugeClauses( g ),
                                                  .hasModScope = anyModuleScopeRow( ing, std::span<const NodeId>( callerIds ).subspan( sdLw.begin, sdLw.end - sdLw.begin ) ),
                                                  .declinedCalls = sdDeclinedCalls, .gateDeclined = g.gateDeclinedCalls > 0, .stdDeclined = g.stdMemberDeclinedCalls > 0,
-                                                 .valueRefs = sdValueRefs.rows.size(), .patternDispatch = !sdPatterns.empty() || !sdWide.empty(), .patternWideRows = sdWideRows, .slotJoin = sdValueRefs.slotCallers, .callersFloor = sdFloor.isFloor, .usesFloor = usesFloor,
+                                                 .valueRefs = sdValueRefs.rows.size(), .patternDispatch = !sdPatterns.empty() || !sdWide.empty(), .patternWideRows = sdWideRows, .slotJoin = sdValueRefs.slotCallers, .slotCands = sdValueRefs.slotCands, .callersFloor = sdFloor.isFloor, .usesFloor = usesFloor,
                                                  .hasSitesAt = sdSites.any, .sitesCut = sdSites.anyCut, .valueRefDepthCut = sdValueRefs.depthCut.files > 0,
                                                  .defTable = sdAttr.groups.multi(), .defTableCut = sdListing.cut, .splitArms = sdHasSplit,
                                                  .linkRows = sdHasLink, .anchorRows = sdHasMiss,
@@ -2568,14 +2569,15 @@ std::optional<int> runPath( const MainDispatch& d )
         }
         const rw::ToValueRefs pthToValueRefs = path.empty() ? rw::toValueRefs( ing, true, dstDefs, &*pthValueIdx ) : rw::ToValueRefs{};
         const rw::PathSearchGaps pthGaps = path.empty() ? rw::pathSearchGaps( ing, g, srcDefs, *pthValueIdx ) : rw::PathSearchGaps{};
-        // ix2-slice: the sink-side frontier beside the forward gap rows (src/pathgaps.h pathNearSink), reachable="0" only
-        const rw::PathNearSink   pthNear = path.empty() ? rw::pathNearSink( ing, g, dstDefs, pthGaps.cone, *pthValueIdx ) : rw::PathNearSink{};
         // HOP1 (src/backhops.h): the ONE backward hop provider the bridge's slot crossings and the root next= below read
         std::optional<rw::BackwardHops> pthBackHops;
         if( path.empty() )
         {
             pthBackHops.emplace( ing, g, *pthValueIdx );
         }
+        // ix2-slice: the sink-side frontier beside the forward gap rows (src/pathgaps.h pathNearSink), reachable="0" only; its name-key
+        // ways in come from the same provider
+        const rw::PathNearSink   pthNear = path.empty() ? rw::pathNearSink( ing, g, dstDefs, pthGaps.cone, *pthValueIdx, pthBackHops->names() ) : rw::PathNearSink{};
         // TRACE-EP (src/pathpairs.h): a reached answer whose names have several definitions lists EVERY reaching definition pair
         // (up to kPathPairChains chains, the rest alt=), never one silently; a glob endpoint keeps its any-of-these meaning
         const rw::PathPairs pthPairs = path.empty() || srcGlob || dstGlob ? rw::PathPairs{}
@@ -2615,10 +2617,10 @@ std::optional<int> runPath( const MainDispatch& d )
                      "graph holds none. {}{}{}{}-->{}", ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ) + rw::viaNameLegend( pthHasVia )
                                                          + rw::viaLinkLegend( pthHasLink ) + rw::anchorMissLegend( pthHasMiss )
                                                          + rw::splitArmLegend( pthHasSplit ) + rw::pathUnboundLegend( !pthBound.from || !pthBound.to )
-                                                         + rw::memberOwnerLegend( pthHasOwner ) + std::string( rw::pathPairsLegend( pthPairs ) ) + rw::pathOrderLegend( pthPairs, pthTwin ) ).c_str(),
+                                                         + rw::memberOwnerLegend( pthHasOwner ) + rw::memberOwnerContainedLegend( pthMarks.ownerContained ) + std::string( rw::pathPairsLegend( pthPairs ) ) + rw::pathOrderLegend( pthPairs, pthTwin ) ).c_str(),
                      ( std::string( rw::toValueRefsLegend( pthToValueRefs.count > 0 ) ) + rw::valueRefsDepthLegend( pthToValueRefs.depthCut.files > 0 ) ).c_str(),
                      ( rw::pathGapsLegend( pthGaps.any(), !pthSinkCallers.empty() ) + rw::pathBridgeLegend( pthBridge )
-                       + std::string( rw::nearSinkLegend( !pthNear.rows.empty() ) ) + std::string( rw::pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
+                       + rw::nearSinkLegend( pthNear ) + std::string( rw::pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
                      rw::graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rw::rootRelPathsLegend( pthSingleRoot ) );
         rw::emitTo( stdout, "<path from=\"{}\" to=\"{}\"{}{} from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
                      ex( srcN ).c_str(), ex( dstN ).c_str(), pthBound.from ? " from_p=\"" + loc( srcUsed ) + "\"" : std::string(),
@@ -3020,11 +3022,11 @@ inline void emitImpactLegend( const rw::Config& cfg, const rw::IngestResult& ing
                    + rw::impactRollupLegend( !imFiles.rows.empty() && !cfg.columnar, imports.umbrella, rw::impactRollupHedged( imFiles ),
                                              !imports.next.empty() && !cfg.columnar, rw::ImpactRollupTypeClauses{ imFiles.typed, imFiles.typeDefs, imFiles.typeCapped } )
                    + rw::defTableLegend( imAttr.groups.multi(), imListing.cut )
-                   + rw::memberOwnerLegend( rw::anyMemberOwnerRow( ing, std::span<const rw::NodeId>( show ).subspan( imPage.begin, imPage.end - imPage.begin ) ) ) ).c_str(),   // QUALNAME-1
+                   + rw::memberOwnerLegendFor( rw::memberOwnerRows( ing, std::span<const rw::NodeId>( show ).subspan( imPage.begin, imPage.end - imPage.begin ) ) ) ).c_str(),   // QUALNAME-1
                  ( std::string( rw::valueRefsReachLegend( !imValueRefs.rows.empty() ) )
                    + rw::valueRefsDepthLegendFor( imValueRefs )
                    + rw::patternDispatchLegend( !imValueRefs.patternSites.empty() || !imValueRefs.patternWideSites.empty(), true )   // IX-3: exactly when pattern_dispatch=/pattern_too_wide= rides
-                   + std::string( rw::slotJoinLegend( imValueRefs.slotCallers, true ) )   // IX-1: exactly when a <vr> row carries via=slot|slot-name
+                   + std::string( rw::slotJoinLegend( imValueRefs.slotCallers, true, imValueRefs.slotCands ) )   // IX-1: exactly when a <vr> row carries via=slot|slot-name
                    + std::string( rw::impactRingLegend( imRing, !cfg.columnar ) ) ).c_str(),   // HOP1: exactly when reaches_hedged= / <ring> ride
                  rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
 }

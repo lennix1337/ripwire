@@ -573,6 +573,41 @@ inline constexpr char kValueRefDepthCutScope = 'd';
 // declared struct type, or a typedef alias). Distinct from every other scope char.
 inline constexpr char kValueRefSlotCallScope = 's';
 inline constexpr char kValueRefSlotFactScope = 't';
+// IX1-V2 (lane fn-slot): a PARAMETER stored into a slot (`func Reg( impl F ) { … Command{ EvalRW: impl } … }`): role Value,
+// name "" (no row), recvVar = the storing function's name, argCount = the parameter's position (argCountKnown), memberPath =
+// the field, memberCtor = the slot's type ("" unknown). valuerefindex.h SlotIndex re-slots an ARGUMENT row of a bare call of
+// that function at that position (`Reg( Put )`) into the same field. Distinct from every other scope char.
+inline constexpr char kValueRefSlotParamScope = 'q';
+
+// IX-1 / IX1-V2: which languages record a slot join, and how its CALL side is found — the one table both the extractor
+// (ingest_valuerefs.h) and the join (valuerefindex.h) read. byFieldName: a member call `x.F( … )` (an ordinary Call reference
+// with memberCall) is a call through field F when some function value is stored in a field F, joined at index time by the
+// field name (the receiver's type is not read: the name tier, via="slot-name"); otherwise the extractor records the field
+// calls itself (C family: kValueRefSlotCallScope rows, everyFieldCall = every `x->f( … )` in C, the C++ gate otherwise).
+struct VrSlotLang
+{
+    Lang lang;
+    bool everyFieldCall;
+    bool byFieldName;
+};
+inline constexpr VrSlotLang kVrSlotLangs[] = {
+    { Lang::C, true, false },
+    { Lang::Cpp, false, false },
+    { Lang::Go, false, true },
+};
+inline constexpr std::array<bool, kLangCount> kSlotByFieldNameOfLang = []
+{
+    std::array<bool, kLangCount> byLang {};
+    for( const VrSlotLang& row : kVrSlotLangs )
+    {
+        byLang[ static_cast<std::size_t>( row.lang ) ] = row.byFieldName;
+    }
+    return byLang;
+}();
+inline bool slotJoinsByFieldName( Lang l ) noexcept
+{
+    return enumTableAt( kSlotByFieldNameOfLang, l, false );
+}
 // A slot type key written with the `struct` / `union` keyword (`struct thandle`) leads with this mark: a C tag is no typedef
 // name, so the join never reads it through an alias. A slot fact whose composeRel is kValueRefSlotBodyRel declares that its
 // owner's struct BODY is in this file (no field): one tag with bodies in two files is two types, so it joins nothing.
@@ -1418,6 +1453,13 @@ enum class LocalBindKind : std::uint8_t
     // (via=name); over a `var x;` / `let x;` / undeclared name only the root's SPELLING stops deciding (`Eng = Foo; Eng.make()` is
     // not the class `Eng`) while a stated type (`let app; … app = new Hono(); app.request()`) keeps its receiver reading. APPENDED (cache u8).
     JsRebind,
+    // Lane js-def-naming (QN-OBJLIT-NAMED): a JS/TS MODULE-SCOPE object literal bound to a name — `const Widget = { run() {} }`,
+    // `export const Widget = { … }`, `var Widget = { … }`. var = the binding name; spanStart/spanEnd = the object literal, so a
+    // member inside it is that literal's (the index stores no owner for it: langfacts.h objectLiteralMembers). fromSymbol kNoNode
+    // (a module-level statement). Read by graph.h resolveAllByWrittenSpelling ONLY: a spelling whose owner segment is the
+    // literal's name (`Widget.run`) could name that member, so beside a class of that name it is unknown, never the class alone.
+    // APPENDED (cache u8).
+    JsObjectLiteral,
 };
 // fix round 4: the TypeAlias rows that bind a spelling with no alias target (model.h LocalBindKind::TypeAlias, typeName)
 inline constexpr std::string_view kTypeBindForward  = "forward";
@@ -1425,7 +1467,7 @@ inline constexpr std::string_view kTypeBindShadow   = "shadow";
 inline constexpr std::string_view kTypeBindUnparsed = "unparsed";
 inline constexpr std::string_view kTypeBindUnrecorded = "unrecorded";
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
-inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::JsRebind ) + 1;
+inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::JsObjectLiteral ) + 1;
 // FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).
 // L6's ImplBlock is in the set for the same reason: its var is the TRAIT / interface being implemented, never a name bound in the
 // enclosing function, so the generic binding readers (localNameSet, the fn-pointer tables, nonlocalstate) must skip it (its two
@@ -2328,7 +2370,7 @@ inline bool isSlotJoinRecord( const Reference& r ) noexcept
     {
         return false;
     }
-    return ( r.role == RefRole::Value && r.qualifier[0] == kValueRefSlotFactScope )
+    return ( r.role == RefRole::Value && ( r.qualifier[0] == kValueRefSlotFactScope || r.qualifier[0] == kValueRefSlotParamScope ) )
         || ( r.role == RefRole::Through && r.qualifier[0] == kValueRefSlotCallScope );
 }
 

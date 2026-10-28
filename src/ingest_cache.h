@@ -150,7 +150,9 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 // lane rust-degraded's placeholder 42.
 // 44 (train 37b, lane rust-degraded; its placeholder was 42): the FILE record gains a sixth FileHealth u32, useBoundsBlanked
 // (the Rust precise-capture re-parse, src/rustusebounds.h), so an older cache must be rejected. 44 is above train 36's 43.
-constexpr std::uint32_t kCacheVersion = 44;           // 44: train 37b — rust-degraded FileHealth::useBoundsBlanked (above 43 / placeholder 42)
+constexpr std::uint32_t kCacheVersion = 46;           // 46: train 40 — lane js-def-naming's LocalBindKind JsObjectLiteral (appended; its placeholder 45),
+                                                      //    strictly above main 44 and that placeholder; no other train-40 lane changed a record format.
+                                                      // 44: train 37b — rust-degraded FileHealth::useBoundsBlanked (above 43 / placeholder 42)
                                                       // 43: train 36 — #155 Kotlin trailingLambda ref byte (above 40 / 41 / 42)
                                                       // 40: train 34 — strictly above main 39 and every live value (train-33 refs, #432 39; #427 / #429 38): the
                                                       //    fc3-js-rebind record change (LocalBindKind JsRebind, appended) lands; no other train-34 lane changed a format.
@@ -361,7 +363,12 @@ constexpr std::uint32_t kCacheVersion = 44;           // 44: train 37b — rust-
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 239;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 251;          // bump on any grammar/.scm/extraction change
+                                                      // 251 = 2026-10-27 (train 40: lanes js-def-naming (placeholder 238; JS `module.exports = <anonymous fn>` named
+                                                      //   by its file stem, module-scope `NAME = { … }` binding names), string-keyed (241; Pattern qualifier "t" at a
+                                                      //   hasattr test / JS-TS subscript store) and fn-slot (247; Go function-valued slot records)). Strictly above
+                                                      //   train 39's 239 (rich 240) and every lane placeholder (238, 241/242, 247/248, fn-slot-2's 249/250). Rich file
+                                                      //   tag 252. kCacheVersion 46 (js-def-naming's LocalBindKind JsObjectLiteral record change).
                                                       // 239 = 2026-10-27 (train 39: lane receiver-fixes, placeholder 237 / rich 238): TS `#private` field declarations and
                                                       //   `this.#f = …` record MemberType; Python `self.f: T` / `T | None` / `Optional[ T ]` annotations and `mod.X( … )`
                                                       //   constructors type fields and locals (a RecvType / MemberType with its qualifier), and `x = mod.X( … )` no longer

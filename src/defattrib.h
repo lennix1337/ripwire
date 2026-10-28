@@ -1022,13 +1022,14 @@ inline PathEndpointBinding pathEndpointBinding( const Graph& g, std::size_t srcD
 // A bare hop name made the reader re-resolve it: a path through A::go and B::go read n="go" n="go". QUALNAME-1 moved the rule to
 // memberowner.h (MemberOwners) so every member row shares it — the owner is the parser's own scope, printed only when the index
 // DEFINES its last segment as a member owner in the hop's language; a type hop, a C++ namespace-scope function, a function-local
-// def (a closure) and a language whose defs carry no sc= (TS/JS, Java, C#, Swift, Kotlin `object`) keep bare rows — a floor, not
-// a claim. The separator is the language's own (langfacts.h memberSeparator: `Builder::Build`, `Application#run`, `Pattern.Match`).
-// Per hop, the owner its row prints ("" = bare). Built only when some hop has a scope at all: a free-function path costs nothing.
+// def (a closure) and a language whose defs carry no sc= (Java, C#, Swift, Kotlin `object`) keep bare rows — a floor, not a claim;
+// a TS/JS method prints the class whose body holds it (memberowner.h). The separator is the language's own (langfacts.h memberSeparator: `Builder::Build`, `Application#run`, `Pattern.Match`).
+// Per hop, the owner its row prints ("" = bare). Built only when some hop could print one (memberOwnerPossible): a free-function
+// path costs nothing.
 inline std::vector<std::string_view> pathHopOwners( const IngestResult& ing, std::span<const NodeId> path )
 {
     std::vector<std::string_view> owner( path.size() );
-    const bool anyScope = std::any_of( path.begin(), path.end(), [ & ]( NodeId id ) { return !ing.symbols[ id ].scope.empty(); } );
+    const bool anyScope = std::any_of( path.begin(), path.end(), [ & ]( NodeId id ) { return memberOwnerPossible( ing.symbols[ id ] ); } );
     if( !anyScope )
     {
         return owner;
@@ -1040,10 +1041,6 @@ inline std::vector<std::string_view> pathHopOwners( const IngestResult& ing, std
     }
     ENSURES( owner.size() == path.size(), "one owner slot per hop" );
     return owner;
-}
-inline bool anyPathHopOwner( std::span<const std::string_view> owners ) noexcept
-{
-    return std::any_of( owners.begin(), owners.end(), []( std::string_view o ) { return !o.empty(); } );
 }
 // THE hop rows of a --path answer — the CLI (stdout) and MCP path_between (its memstream) both write through this, so the two
 // transports cannot drift (they were two copies of one loop). Row i's via="name" (FE-B), via="link" and anchor="missing" (a

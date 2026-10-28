@@ -41,6 +41,7 @@
 #include "slice.h"         // lane/tc-sliceat: the shared --slice / MCP slice def-use core (sliceBundleText — ONE emitter, two surfaces)
 #include "fielduses.h"     // the member-variable round: the ONE --uses=Owner.field renderer (renderFieldUses — CLI ≡ MCP)
 #include "testmap.h"       // lane/t10-mcp-coverage: writeAffectedReport — the shared --affected / `affected` verb renderer
+#include "forgraphverb.h"   // FOR-ROUTE-DECLINED: the `for` verb's subject-read graph-verb block (the CLI twin's wrapper)
 #include "pathgaps.h"      // PATH-GAP: the shared gap analysis + clause of --path / path_between
 #include "pathpairs.h"     // TRACE-EP: the reaching definition pairs of --path / path_between
 
@@ -2440,6 +2441,11 @@ inline std::string_view mcpPageRankFlags( bool noRoute )
     return noRoute ? std::string_view( " --no-route" ) : std::string_view();
 }
 
+// defined below; forTaskText's FOR-ROUTE-DECLINED block calls them (the path_between / connect twins)
+inline std::optional<std::string> pathText( const std::string& root, const std::string& from, const std::string& to );
+inline std::string connectText( const std::string& root, const std::vector<std::string>& symbolSpecs, std::uint32_t radius, std::string& err, RedactCounts* redact );
+inline std::string batchCdata( const std::string& s );   // the callers twin's JSON rides as CDATA
+
 inline std::optional<std::string> forTaskText( const std::string& root, const std::string& task, RedactCounts* redact = nullptr,
                                 std::size_t budgetTokens = 0, bool noRoute = false,
                                 McpPageArgs page = {},   // L-W: limit/offset select the FILE PAGE (forpage.h), the CLI --for --limit twin
@@ -2901,6 +2907,40 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     }
     std::string out = std::move( *chosen.doc );
     priceForTaskRoot( out, chosen.cut.rowDropCut && budgetTokens == 0 );   // R1: est_tokens=; over_ceiling="1" only past the runaway guard
+    // FOR-ROUTE-DECLINED (src/forgraphverb.h): the CLI --for's <graph_verb endpoints="subject"> block, the same wrapper around
+    // this surface's twin of the verb (path_between / find_referencing_symbols / connect), before </ctx>; priced like the CLI's (not)
+    if( std::optional<GraphSubjectArgs> gsa = chooseGraphSubjectArgs( ing, task ); gsa && out.ends_with( "</ctx>" ) )
+    {
+        if( budgetTokens > 0 )
+        {
+            // budget_tokens is a request the block must obey (S2): the verb does not run, the tag names it (held="budget", verb= is the call)
+            out.insert( out.size() - 6, graphSubjectOpenXml( *gsa, GraphSubjectOpen{ .held = true } ) );
+            return out;
+        }
+        std::string verb;
+        GraphSubjectOpen opts;
+        if( gsa->form == GraphSubjectForm::Path )
+        {
+            verb              = pathText( root, gsa->endpoints[0], gsa->endpoints[1] ).value_or( std::string() );
+            opts.nameTestHops = graphSubjectNameTestHops( verb );
+        }
+        else if( gsa->form == GraphSubjectForm::Common )
+        {
+            std::string err;
+            verb = connectText( root, gsa->endpoints, connectcfg::kDefaultRadius, err, redact );
+        }
+        else
+        {
+            // the MCP callers twin answers JSON: carried as CDATA text (S1; escaping it cost x1.38 bytes), dialect="json" says why it is not <callers>
+            const std::string json = symbolQueryJson( root, gsa->endpoints[0], /*referencingOnly=*/true );
+            verb                   = json.empty() ? std::string() : batchCdata( json );
+            opts.jsonDialect       = true;
+        }
+        if( !verb.empty() )
+        {
+            out.insert( out.size() - 6, graphSubjectOpenXml( *gsa, opts ) + verb + std::string( kGraphSubjectCloseXml ) );
+        }
+    }
     return out;
 }
 
@@ -3282,12 +3322,12 @@ inline std::optional<std::string> impactText( const std::string& root, const std
                   declinedIfaceLegend( declinedIface > 0 ),                                          // likewise declined_iface=, as on the CLI
                   ( std::string( valueRefsReachLegend( !imValueRefs.rows.empty() ) )                  // exactly when the root carries value_refs=, as on the CLI
                     + valueRefsDepthLegendFor( imValueRefs )                                             // ... and the depth disclosure, as on the CLI
-                    + std::string( slotJoinLegend( imValueRefs.slotCallers, true ) )                 // IX-1: exactly when a <vr> row carries via=, as on the CLI
+                    + std::string( slotJoinLegend( imValueRefs.slotCallers, true, imValueRefs.slotCands ) )                 // IX-1: exactly when a <vr> row carries via=, as on the CLI
                     + impactRingLegend( imRing, true )                     // HOP1: exactly when reaches_hedged= / <ring> ride, as on the CLI
                     + impactRollupLegend( !imFiles.rows.empty(), imports.umbrella, impactRollupHedged( imFiles ), !imports.next.empty(),
                                           ImpactRollupTypeClauses{ imFiles.typed, imFiles.typeDefs, imFiles.typeCapped } )   // idea #6; FIX1 R1; L7, as on the CLI
                     + defTableLegend( imAttr.groups.multi(), imListing.cut )                                                         // attrib-multidef, as on the CLI
-                    + memberOwnerLegend( anyMemberOwnerRow( ing, std::span<const NodeId>( show ).subspan( ipw.begin, ipw.end - ipw.begin ) ) ) ).c_str(),   // QUALNAME-1, as on the CLI
+                    + memberOwnerLegendFor( memberOwnerRows( ing, std::span<const NodeId>( show ).subspan( ipw.begin, ipw.end - ipw.begin ) ) ) ).c_str(),   // QUALNAME-1, as on the CLI
                   graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), renderDisclosure( prD, DiscloseAs::LegendClause ).c_str() );
     // r27-emitters §P2.1: the listing is capped at 40 by rank. Without shown=/capped= a 40-row answer to
     // "is it safe to change X?" reads as the WHOLE blast radius when it can be 3% of it. Same attributes,
@@ -3759,12 +3799,12 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     const ToValueRefs ptToValueRefs = toValueRefs( ing, pth.empty(), dstDefs, &valueRefIndexOf( ix ) );
     // PATH-GAP: the CLI --path's gap clause, by the same analysis and emitter (src/pathgaps.h).
     const PathSearchGaps ptGaps = pth.empty() ? pathSearchGaps( ing, g, srcDefs, valueRefIndexOf( ix ) ) : PathSearchGaps{};
-    const PathNearSink        ptNear       = pth.empty() ? pathNearSink( ing, g, dstDefs, ptGaps.cone, valueRefIndexOf( ix ) ) : PathNearSink{};   // ix2-slice, as on the CLI
     std::optional<BackwardHops> ptBackHops;   // HOP1: the CLI's one backward hop provider, as on the CLI
     if( pth.empty() )
     {
         ptBackHops.emplace( ing, g, valueRefIndexOf( ix ) );
     }
+    const PathNearSink        ptNear       = pth.empty() ? pathNearSink( ing, g, dstDefs, ptGaps.cone, valueRefIndexOf( ix ), ptBackHops->names() ) : PathNearSink{};   // ix2-slice, as on the CLI
     // TRACE-EP: the CLI's reaching definition pairs, by the same call (src/pathpairs.h)
     const PathPairs ptPairs = pth.empty() || srcGlob || dstGlob ? PathPairs{}
         : pathReachingPairs( ing, g, srcDefs, dstDefs, pth, std::string( from ) + "," + std::string( to ), [ & ]( std::span<const NodeId> dstMembers )
@@ -3790,10 +3830,10 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     rw::emitTo( mem, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                        "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + ptKindLegend
                                                            + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to )
-                                                           + memberOwnerLegend( ptHasOwner ) + std::string( pathPairsLegend( ptPairs ) ) + pathOrderLegend( ptPairs, ptTwin ) ).c_str(),
+                                                           + memberOwnerLegend( ptHasOwner ) + memberOwnerContainedLegend( ptMarks.ownerContained ) + std::string( pathPairsLegend( ptPairs ) ) + pathOrderLegend( ptPairs, ptTwin ) ).c_str(),
                   ( std::string( toValueRefsLegend( ptToValueRefs.count > 0 ) ) + valueRefsDepthLegend( ptToValueRefs.depthCut.files > 0 ) ).c_str(),
                   ( pathGapsLegend( ptGaps.any(), !ptSinkCallers.empty() ) + pathBridgeLegend( ptBridge )
-                    + std::string( nearSinkLegend( !ptNear.rows.empty() ) ) + std::string( pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
+                    + nearSinkLegend( ptNear ) + std::string( pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
                   graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rootRelPathsLegend( ptSingleRoot ) );
     rw::emitTo( mem, "<path from=\"{}\" to=\"{}\"{}{} from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
                   ex( from ).c_str(), ex( to ).c_str(), ptBound.from ? " from_p=\"" + loc( srcUsed ) + "\"" : std::string(),
