@@ -1782,7 +1782,7 @@ inline constexpr std::string_view kHandlerRuleLegend =
     "base='s __init_subclass__ writes attr= (p=) as name= (snake: an underscore between a lower and an upper letter, then lower case; Owner = the class it is "
     "nested in), read from this repo's own source; posts= calls of from= whose first argument constructs a subclass of base= that names a to= handler, "
     "classes= those classes, handlers= the to= definitions those names match (methods; which one runs depends on the receiver's class). "
-    "<hrd n= p= passes=>: a function that reads attr= (outside tests), and the method it hands the name to on that line (the lookup side). "
+    "<hrd n= p= passes=>: a function that reads attr= (outside tests) and, in passes=, the method it hands the name to: a call on the line of the read, or a later call passing the local it was read into (the lookup side; no such call found: no passes=). "
     "<hm n= h= in= site= posts= cands=>: one posted class (widest first, shown= of classes=), its handler name, its first post site, cands=K definitions of h=. "
     "<h n= p=>: every handler definition when handlers= is at most 16; above that next= lists one name's definitions. Matched, never traced; a hedge, never a hop. ";
 inline std::string_view pathHandlerRuleLegend( const PathHandlerRule& hrule ) noexcept

@@ -36,6 +36,7 @@
 #   (R4) a subclass of an unrelated same-named base gets no hop; the one whose import resolves to the ruled base keeps it.
 #   (R5) readers and posters are per rule: Bus.emit reads the other rule's attribute, so it is not the Message block's reader and
 #        posts no Message; Pump posts no Event.
+#   (R6) the hrd legend names where passes= comes from: the read's line, or a later call passing the local it was read into.
 #   (R7) `self.X(` names the caller's class FAMILY only (Input.Changed + MaskedInput.Changed, never Select.Changed).
 #
 # Usage: test/handlerrulecheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
@@ -230,6 +231,9 @@ t = run( fw, "--path=post_message,on_*", "--legend=full" )
 check( xml_ok( t ) and "<handler_rule via=name-key base= attr=" in t, "L1 full clause rides with the block" )
 t = run( fw, "--path=Button.press,Form.on_tick" )
 check( t is not None and "handler_rule" not in t, "L1 no block, no clause" )
+t = run( fw, "--path=post_message,on_*", "--legend=full" )
+c = run( fw, "--path=post_message,on_*" )
+check( "a later call passing the local it was read into" in ( t or "" ) and "a later call passing the local it was read into" in ( c or "" ), "R6 the hrd legend (full + compact) says passes= may come from a later call (the fixture's does: read pump.py:6, passed pump.py:11)" )
 
 def write( d, files ):
     for name, text in files.items():
@@ -272,6 +276,10 @@ d = fixture( "r2b", rule_msg( BODY + '        name = "_".join(camel_to_snake(p) 
              btn( "Pressed", "on_click", "on_button_pressed" ).replace( "(Message)", '(Message, handler_name="on_click")' ) )
 t = run( d, "--path=post_message,on_*" )
 check( t is not None and "<handler_rule" not in t and hedged( d, "on_button_pressed" ) is None, "R2 a kwarg if/else (two writes, one in a branch): no rule, no hop" )
+
+d = fixture( "r2c", rule_msg( BODY + '        name = "_".join(camel_to_snake(p) for p in parts)\n        cls.handler_name = f"on_{name}"\n        cls.handler_name = "on_other"\n' ), btn( "Pressed", "on_other", "on_button_pressed" ) )
+t = run( d, "--path=post_message,on_*" )
+check( t is not None and "<handler_rule" not in t and hedged( d, "on_button_pressed" ) is None, "R2 a second write of the attribute after the template (the later one decides): no rule" )
 
 # R3: nearest rule base; an intermediate rewrite declines
 CMD = "class Command(Message):\n    def __init_subclass__(cls, **kw):\n        super().__init_subclass__(**kw)\n%s\n\n\nclass Save(Command):\n    pass\n\n\nclass Editor(Pump):\n    def save(self):\n        self.post_message(Save())\n\n    def run(self):\n        self.post_message(Command())\n\n\nclass Form(Pump):\n    def %s(self, m):\n        return leaf(m)\n\n    def on_save(self, m):\n        return m\n\n    def on_command(self, m):\n        return m\n"
