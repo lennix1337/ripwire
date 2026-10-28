@@ -46,6 +46,7 @@
 //            because it operates on the resolved file→file include graph, not on any language's name-lookup.
 
 #include "model.h"
+#include "langfacts.h"   // langFacts(l).aliasPeelsSmartPointer — smartPointerAliasPointees (lane iface-peel)
 #include "arch.h"        // §B1.3: relForHash — the root-relative path segment canonicalIdRelTo keys on
 #include "smallvec.h"
 #include "infra/namesplit.h"   // stripTemplateArgs — a C++ template-id scope's family (appendTemplateFamilyKey), a `using Base<T>::m;` qualifier (buildUsingReexports)
@@ -4881,6 +4882,112 @@ struct FlatRecvType
     bool        writtenQualified = false;
     bool        arrowOnly        = false;
 };
+
+// Lane iface-peel (LangFacts::aliasPeelsSmartPointer): a C++ alias NAME → the class its std smart pointer's `->` reaches —
+// `using FilterSharedPtr = std::shared_ptr<Filter>;` / `typedef std::unique_ptr<Filter> FilterPtr;` (the alias record's
+// memberCtor / memberVia, ingest_relations.h emitTypeAlias), through a chain of plain aliases (`using Handle = FilterSharedPtr;`)
+// at most kAliasPeelDepth deep. `type` the pointee's last name, `writtenQualified` whether it was written with a namespace.
+// NO ENTRY (the member keeps its base reading) when: two same-named aliases disagree (a tie is refused, never picked); the
+// pointee was written in `std` (`std::shared_ptr<std::string>`); the chain is longer than the cap or loops; the alias NAME is
+// also a real class somewhere (a class-like symbol at a non-alias site, the addTypeAliasBases rule) — a member written that
+// name may mean the class. Read by buildFieldNarrowTables alone, which records the pointee as reached by `->` only.
+inline constexpr int kAliasPeelDepth = 4;
+inline HashMap<std::string, FlatRecvType> smartPointerAliasPointees( const IngestResult& ing )
+{
+    HashMap<std::string, FlatRecvType> out;
+    HashMap<std::string, FlatRecvType> direct;   // alias → pointee; an empty type is a refusal (std pointee, or a disagreement)
+    HashMap<std::string, std::string>  plain;    // alias → its non-std target name; "" is a disagreement
+    HashMap<std::string, char>         sites;    // "file:line:alias" of every alias record (the real-class test)
+    std::string                        key;
+    const auto siteKey = [ & ]( std::uint32_t fileId, std::uint32_t line, std::string_view name )
+    {
+        key.assign( std::to_string( fileId ) ).push_back( ':' );
+        key.append( std::to_string( line ) ).push_back( ':' );
+        key.append( name );
+    };
+    for( const Reference& r : ing.references )
+    {
+        if( !isTypeAliasRecord( r ) || r.recvVar.empty() || !langFacts( r.lang ).aliasPeelsSmartPointer )
+        {
+            continue;
+        }
+        siteKey( r.fileId, r.line, r.recvVar );
+        sites.try_emplace( key, '\0' );
+        if( !r.memberCtor.empty() )
+        {
+            const FlatRecvType t{ r.memberVia == "std" ? std::string() : r.memberCtor, !r.memberVia.empty(), true };
+            if( const auto [ it, fresh ] = direct.try_emplace( r.recvVar, t ); !fresh && ( it->second.type != t.type || it->second.writtenQualified != t.writtenQualified ) )
+            {
+                it->second.type.clear();
+            }
+        }
+        else if( !fieldTypeWrittenInStd( r ) && !r.calleeName.empty() )
+        {
+            if( const auto [ it, fresh ] = plain.try_emplace( r.recvVar, r.calleeName ); !fresh && it->second != r.calleeName )
+            {
+                it->second.clear();
+            }
+        }
+        else
+        {
+            plain.insert_or_assign( r.recvVar, std::string() );   // `using V = std::vector<Filter>;`: a std target that is no pointer
+        }
+    }
+    if( direct.empty() )
+    {
+        return out;
+    }
+    HashMap<std::string, char> realClass;
+    for( const Symbol& s : ing.symbols )
+    {
+        const bool classLike = s.kind == SymKind::Class || isStructOrNamedType( s.kind ) || s.kind == SymKind::Interface;
+        if( classLike && ( direct.find( s.name ) != direct.end() || plain.find( s.name ) != plain.end() ) )
+        {
+            siteKey( s.fileId, s.line, s.name );
+            if( sites.find( key ) == sites.end() )
+            {
+                realClass.try_emplace( s.name, '\0' );
+            }
+        }
+    }
+    const auto peel = [ & ]( const std::string& alias ) -> const FlatRecvType*
+    {
+        std::string name = alias;
+        for( int depth = 0; depth < kAliasPeelDepth; ++depth )
+        {
+            if( realClass.find( name ) != realClass.end() )
+            {
+                return nullptr;
+            }
+            if( const auto d = direct.find( name ); d != direct.end() )
+            {
+                return ( d->second.type.empty() || plain.find( name ) != plain.end() ) ? nullptr : &d->second;
+            }
+            const auto p = plain.find( name );
+            if( p == plain.end() || p->second.empty() )
+            {
+                return nullptr;
+            }
+            name = p->second;
+        }
+        return nullptr;   // past the cap (or a loop): no reading
+    };
+    for( const auto& [ alias, target ] : plain )
+    {
+        if( const FlatRecvType* t = peel( alias ) )
+        {
+            out.try_emplace( alias, *t );
+        }
+    }
+    for( const auto& [ alias, t ] : direct )
+    {
+        if( const FlatRecvType* p = peel( alias ) )
+        {
+            out.try_emplace( alias, *p );
+        }
+    }
+    return out;
+}
 
 // fold one declared type into a flat table: the first type wins, a different later type tombstones, and an agreeing
 // declaration that wrote it qualified marks the entry. `type` is "" for a refused (`std::`) type, which tombstones too. A type

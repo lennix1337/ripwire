@@ -1536,6 +1536,12 @@ inline TypeWrap typeWrapOf( CallResultFamily f, std::string_view name ) noexcept
 }
 // Binding::resultIndex of a record about a WHOLE result (a single non-tuple result; a Rust `let t = pair()?` binding all of it).
 inline constexpr std::uint8_t kWholeResult = 0xFF;
+// lane iface-peel (LangFacts::returnTypedDispatchLet): a ReturnType whose unwrapDepth carries this bit names a TRAIT the result
+// dispatches through (Rust `-> &dyn T` / `-> Box<dyn T>` / `-> impl T`), never a class: typeName = the trait, importedName = its
+// path when qualified. No call-result reader that compares depths can match it by accident (a call's own depth never has the
+// bit); graph.h typeCallResults alone reads it, and types the local as SOME implementor of the trait (ReceiverEvidence::LocalFact
+// iface). The low bits stay the Result/Option layers (always 0 today: a layered trait object is not read).
+inline constexpr std::uint8_t kDispatchResultBit = 0x80;
 // The importedName of a Ruby class-object binding that acts on each class INCLUDING the module, not on the module
 // (LocalBindKind::RubySingletonDef, RubyClassMixin; parser version 145): written in a concern's `included do`, or a def
 // in its `class_methods do`.

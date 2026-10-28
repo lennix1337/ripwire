@@ -1794,6 +1794,8 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing, const 
     PROFILE_SCOPE_DESCRIBE( "buildGraph/2d: Rule-2b field-narrow tables" );
     FieldNarrowTables t;
     std::string       key;   // reused "Class#field" / "<fromSymbol>#var" key buffer
+    // lane iface-peel: a member written as a C++ smart-pointer alias (`Http::FilterSharedPtr handle_;`) is its pointee through `->`
+    const HashMap<std::string, FlatRecvType> aliasPointees = smartPointerAliasPointees( ing );
     for( const Reference& cr : ing.references )
     {
         if( !cr.isCompose || cr.fromSymbol == kNoNode || cr.fieldName.empty() || cr.calleeName.empty() )
@@ -1803,6 +1805,11 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing, const 
         key.clear();
         key.append( ing.symbols[ cr.fromSymbol ].name ).push_back( '#' );
         key.append( cr.fieldName );
+        if( const auto peeled = cr.viaArrow || fieldTypeWrittenInStd( cr ) ? aliasPointees.end() : aliasPointees.find( cr.calleeName ); peeled != aliasPointees.end() )
+        {
+            recordFlatRecvTypeFact( t.fieldTypeByClass, key, peeled->second.type, peeled->second.writtenQualified, /*arrowOnly=*/true );
+            continue;
+        }
         // same class-name#field-name with different declared types, or one reached through `->` alone (a smart pointer's pointee) → tombstone
         recordFlatRecvTypeFact( t.fieldTypeByClass, key, fieldTypeWrittenInStd( cr ) ? std::string_view{} : std::string_view( cr.calleeName ), !cr.qualifier.empty(), cr.viaArrow );
     }
@@ -9015,6 +9022,18 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 const std::uint32_t ri = rtIt->second;
                 const Binding&      rt = ing.bindings[ ri ];
+                if( ( rt.unwrapDepth & kDispatchResultBit ) != 0 )
+                {
+                    // lane iface-peel: `-> &dyn T` — the local is SOME implementor of T (the dispatch tier reads it); same
+                    // position, no unwrap at the call, and the Rust path qualifier check as for a class result
+                    if( langFacts( cs.lang ).returnTypedDispatchLet && rt.resultIndex == cr.resultIndex && cr.unwrapDepth == 0
+                        && recvEv.rustQualifierTypes( r, cr.importedName, callee, rt.isFromAssignment ) )
+                    {
+                        recvEv.typeCallResultDispatch( cr, rt );
+                        break;
+                    }
+                    continue;
+                }
                 const bool          match = rt.resultIndex == cr.resultIndex && ( rule2Sink ? rt.unwrapDepth <= 1 : rt.unwrapDepth == cr.unwrapDepth )
                                             && recvEv.rustQualifierTypes( r, cr.importedName, callee, rt.isFromAssignment );   // Rust T::f(): its T reaches f's class
                 if( !match )

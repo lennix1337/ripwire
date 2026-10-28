@@ -1183,66 +1183,6 @@ inline std::string_view stdElementContainerText( TSNode typeNode, std::string_vi
     return externalnames::cppStdElementArgIndex( nodeFieldText( tmpl, NodeField::Name, src ) ) < 0 ? std::string_view{} : nodeTextOf( typeNode, src );
 }
 
-// one alias record: `aliasNode` names `target`, the class `spec` spells (see captureTypeAlias for the record's fields)
-inline void emitTypeAlias( TypeAliasCtx& cx, TSNode aliasNode, TSNode spec, std::string_view target )
-{
-    const std::string_view alias = nodeTextOf( aliasNode, cx.src );
-    if( alias.empty() || alias == target )
-    {
-        return;   // a self-alias (`typedef struct Node Node;`) adds nothing to walk
-    }
-    RawRef r;
-    r.fileId     = cx.fileId;
-    r.startByte  = ts_node_start_byte( aliasNode );
-    r.line       = ts_node_start_point( aliasNode ).row + 1;
-    r.lang       = cx.lang;
-    r.isCompose  = true;
-    r.composeRel = "alias";
-    r.name       = target;
-    r.recvVar    = alias;
-    r.qualifier  = writtenTypeNamespace( spec, cx.src );
-    r.memberPath = stdElementContainerText( spec, cx.src );   // `typedef std::map<K, V> Bindings;`: the text its element type is read from
-    cx.out.push_back( std::move( r ) );
-}
-
-// C/C++/ObjC TYPE ALIAS → the class it names, for the resolver's inheritance NAME graph (resolve.h addTypeAliasBases). An alias
-// declares no class, so a base walk keyed by class names dead-ended at one: `class CGBuilderTy : public CGBuilderBaseTy` with
-// `typedef llvm::IRBuilder<F, I> CGBuilderBaseTy;` stopped at CGBuilderBaseTy, and a member `CGBuilderTy Builder;` never reached
-// IRBuilderBase::CreateCall (test/fieldnarrowcheck.sh arm t). Rides the compose record shape — cached field for field, so the blob
-// format is unchanged — marked composeRel "alias" with an EMPTY fieldName, the one shape no member record has: `recvVar` = the
-// alias, `name` = the target's class name, `qualifier` = the namespace the target was written in (a `std` target is refused by
-// its reader), `memberPath` = the target's whole text when it is a std element container (stdElementContainerText, parser
-// version 166; graph.h StdMemberGate's element receivers read it, nothing else does). Only a PLAIN alias of a named class records: a pointer/reference/array/function declarator, a target that names no
-// class (aliasTargetName), a self-alias and an alias local to a function body (it types no member, and the name graph has no
-// scopes to keep it local) record nothing.
-inline void captureTypeAlias( TypeAliasCtx& cx, TSNode n, const char* t )
-{
-    const auto [ spec, nameNode ] = aliasSpecifierAndName( n, t );
-    const std::string_view target = aliasTargetName( spec, cx.src );
-    if( target.empty() || insideFunctionBody( n ) )
-    {
-        return;
-    }
-    if( !ts_node_is_null( nameNode ) )
-    {
-        if( kindIs( ts_node_type( nameNode ), "type_identifier" ) )
-        {
-            emitTypeAlias( cx, nameNode, spec, target );
-        }
-        return;
-    }
-    ChildCursor cursor( n );
-    forEachChild( n, cursor.cur, [ & ]( TSNode c )
-    {
-        const char* field = ts_tree_cursor_current_field_name( &cursor.cur );
-        if( field != nullptr && kindIs( field, "declarator" ) && kindIs( ts_node_type( c ), "type_identifier" ) )
-        {
-            emitTypeAlias( cx, c, spec, target );
-        }
-        return true;
-    } );
-}
-
 // The std smart pointers whose `->` reaches their FIRST template argument. No other template is read through: an in-repo
 // Holder<T> or util::Box<T> may overload `->` onto anything, std::weak_ptr has no `->`, and std::auto_ptr left in C++17.
 inline constexpr std::array<std::string_view, 2> kStdSmartPointers{ "unique_ptr", "shared_ptr" };
@@ -1292,6 +1232,77 @@ inline WrittenPointee stdSmartPointee( TSNode typeNode, std::string_view src ) n
         return { nodeTextOf( name, src ), writtenTypeNamespace( type, src ) };
     }
     return {};
+}
+
+// one alias record: `aliasNode` names `target`, the class `spec` spells (see captureTypeAlias for the record's fields)
+inline void emitTypeAlias( TypeAliasCtx& cx, TSNode aliasNode, TSNode spec, std::string_view target )
+{
+    const std::string_view alias = nodeTextOf( aliasNode, cx.src );
+    if( alias.empty() || alias == target )
+    {
+        return;   // a self-alias (`typedef struct Node Node;`) adds nothing to walk
+    }
+    RawRef r;
+    r.fileId     = cx.fileId;
+    r.startByte  = ts_node_start_byte( aliasNode );
+    r.line       = ts_node_start_point( aliasNode ).row + 1;
+    r.lang       = cx.lang;
+    r.isCompose  = true;
+    r.composeRel = "alias";
+    r.name       = target;
+    r.recvVar    = alias;
+    r.qualifier  = writtenTypeNamespace( spec, cx.src );
+    r.memberPath = stdElementContainerText( spec, cx.src );   // `typedef std::map<K, V> Bindings;`: the text its element type is read from
+    if( langFacts( cx.lang ).aliasPeelsSmartPointer )
+    {
+        // lane iface-peel: `using FilterSharedPtr = std::shared_ptr<Filter>;` — the pointee `->` reaches (memberCtor) and the
+        // namespace it was written in (memberVia; `std` is refused by the reader), beside the unchanged `shared_ptr` target
+        // every other reader keeps reading (graph.h buildFieldNarrowTables is the one reader of the pair)
+        if( const WrittenPointee pointee = stdSmartPointee( spec, cx.src ); !pointee.name.empty() )
+        {
+            r.memberCtor = pointee.name;
+            r.memberVia  = pointee.qualifier;
+        }
+    }
+    cx.out.push_back( std::move( r ) );
+}
+
+// C/C++/ObjC TYPE ALIAS → the class it names, for the resolver's inheritance NAME graph (resolve.h addTypeAliasBases). An alias
+// declares no class, so a base walk keyed by class names dead-ended at one: `class CGBuilderTy : public CGBuilderBaseTy` with
+// `typedef llvm::IRBuilder<F, I> CGBuilderBaseTy;` stopped at CGBuilderBaseTy, and a member `CGBuilderTy Builder;` never reached
+// IRBuilderBase::CreateCall (test/fieldnarrowcheck.sh arm t). Rides the compose record shape — cached field for field, so the blob
+// format is unchanged — marked composeRel "alias" with an EMPTY fieldName, the one shape no member record has: `recvVar` = the
+// alias, `name` = the target's class name, `qualifier` = the namespace the target was written in (a `std` target is refused by
+// its reader), `memberPath` = the target's whole text when it is a std element container (stdElementContainerText, parser
+// version 166; graph.h StdMemberGate's element receivers read it, nothing else does). Only a PLAIN alias of a named class records: a pointer/reference/array/function declarator, a target that names no
+// class (aliasTargetName), a self-alias and an alias local to a function body (it types no member, and the name graph has no
+// scopes to keep it local) record nothing.
+inline void captureTypeAlias( TypeAliasCtx& cx, TSNode n, const char* t )
+{
+    const auto [ spec, nameNode ] = aliasSpecifierAndName( n, t );
+    const std::string_view target = aliasTargetName( spec, cx.src );
+    if( target.empty() || insideFunctionBody( n ) )
+    {
+        return;
+    }
+    if( !ts_node_is_null( nameNode ) )
+    {
+        if( kindIs( ts_node_type( nameNode ), "type_identifier" ) )
+        {
+            emitTypeAlias( cx, nameNode, spec, target );
+        }
+        return;
+    }
+    ChildCursor cursor( n );
+    forEachChild( n, cursor.cur, [ & ]( TSNode c )
+    {
+        const char* field = ts_tree_cursor_current_field_name( &cursor.cur );
+        if( field != nullptr && kindIs( field, "declarator" ) && kindIs( ts_node_type( c ), "type_identifier" ) )
+        {
+            emitTypeAlias( cx, c, spec, target );
+        }
+        return true;
+    } );
 }
 
 // S5-E HAS-A composition edges: walk a class/struct node's field_declaration_list and emit a
