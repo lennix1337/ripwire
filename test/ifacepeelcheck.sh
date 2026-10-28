@@ -37,8 +37,9 @@ FIX="$ROOT/test/ifacepeelfix"
 [ -d "$FIX" ] || { echo "fixture missing: test/ifacepeelfix"; exit 2; }
 SCR="$( mktemp -d )"; trap 'rm -rf "$SCR"' EXIT
 export HOME="$SCR" TMPDIR="$SCR/"
+fail=0
 npass=0; nfail=0
-say() { if [ "$1" = 1 ]; then npass=$((npass+1)); echo "  PASS  $2"; else nfail=$((nfail+1)); echo "  FAIL  $2"; fi; }
+say() { if [ "$1" != 1 ]; then fail=1; echo "  FAIL  $2"; nfail=$((nfail+1)); else echo "  PASS  $2"; npass=$((npass+1)); fi; }
 callees() { ( cd "$1" && "$BIN" "$1" --no-cache "--callees=$2" </dev/null 2>/dev/null | sed 's/^<!--.*-->//' ); }
 has()  { case "$1" in *"$2"*) echo 1;; *) echo 0;; esac; }
 hasnt(){ case "$1" in *"$2"*) echo 0;; *) echo 1;; esac; }
@@ -70,4 +71,5 @@ say "$( has "$o" '<s t="method" n="string::size" p="filter.h:22" via="name"/>' )
 o="$( callees "$RS" "src/lib.rs:eval_generic" )"
 say "$( hasnt "$o" 'gate="iface"' )" "N6 a generic -> R result is not read as a trait object"
 echo "ifacepeelcheck: $npass passed, $nfail failed"
-[ "$nfail" = 0 ]
+[ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
+exit "$fail"
