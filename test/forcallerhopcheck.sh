@@ -28,6 +28,13 @@
 #   B3 [P] a d="2" row carries via="name" when its own callers row does (Python driver(c): c.submit(None))
 #   Q1 [P] train 33 (MF1-NX x QUALNAME-1): every first-hop row's n= and p= equal the callers verb's own row; a member caller
 #          folds its owner into n= (n="Client.submit", no sc=)
+#   R1 [P] UPWARD-2HOP: an error-shaped task ("dependency cycle error") on the ranked route whose r=1 row is a narrow-funnel function
+#          (verify_dag, 1 caller) carries <callers by="rank" of="verify_dag">: recompute_node, then recompute_dirty / recompute_edges d="2"
+#   R2 [P] the ranked clause rides in both legends (the named-route clause does not) and defines every attribute the element carries
+#   R3 [P] a 4-caller r=1 function is skipped and the next r=1..3 narrow funnel is the seed (the cockroach-01 shape: r=3)
+#   R4 [G] every first-hop caller a test path: none   R5 [G] the same head, no error word: none   R6 [G] the narrow funnel at r>3: none
+#   R7 [G] prefix identity vs RIPWIRE_NO_CALLER_HOP=1 (both legends)   R8 [P] est_tokens prices it
+#   R9 [G] --json / --signatures-only / --token-budget=3000: byte-identical to the hop-off answer   R10 [P] first-hop rows = --callers rows
 #   X1 [G] determinism  X2 [G] xmllint well-formed  X3 [G] no "--" inside a legend comment
 #
 # Usage:  bash test/forcallerhopcheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/forcallerhopcheck.sh
@@ -243,8 +250,78 @@ for q in "b3:test/forcallerhopfix/d2via:Ledger::post_entry" "p1:$FC:start_server
 done
 printf '%s' "$H3b" | grep -q '<s t="fn" n="Client.submit" p="m.py:7" sites_at="m.py:8"/>'; verdict $? "(Q1b) a member caller folds its owner into n= and prints no sc=" "(Q1b) the Client.submit hop row is not n=\"Client.submit\" without sc=: [$H3b]"
 
+# ── R: UPWARD-2HOP, the ranked seed (forcallerhop.h forRankedCallerHopTargets; [P] arms RED on the train-40 binary 5163ffbdb) ──
+FR="test/forcallerhopfix/rank"
+[ -f "$FR/graph.c" ] || { no "(R-pre) fixture $FR missing"; }
+run "$FR" --for="dependency cycle error" >"$TMP/r1"
+run "$FR" --for="dependency cycle error" --legend=full >"$TMP/r1f"
+R1="$( hop "$TMP/r1" )"
+if grep -q 'route="subtoken+body' "$TMP/r1" && grep -q '<d [^>]*n="verify_dag"[^>]*r="1"' "$TMP/r1"; then ok "(R1pre) the error task routes subtoken+body with verify_dag at r=1"; else no "(R1pre) the fixture does not rank verify_dag r=1 on a ranked route — the arm proves nothing"; fi
+printf '%s' "$R1" | python3 -c '
+import re, sys
+x = sys.stdin.read()
+ok = x.startswith("<callers by=\"rank\" of=\"verify_dag\" shown=\"1\" total=\"1\"") and re.search(r"<s t=\"fn\" n=\"recompute_node\" p=\"graph.c:\d+\" sites_at=", x) \
+     and re.search(r"n=\"recompute_dirty\"[^>]* d=\"2\"", x) and re.search(r"n=\"recompute_edges\"[^>]* d=\"2\"", x) and "next=\"--impact=verify_dag\"" in x
+sys.exit(0 if ok else 1)'
+verdict $? "(R1) an error task's r=1 narrow-funnel function carries <callers by=\"rank\">: recompute_node, then recompute_dirty / recompute_edges at d=2" "(R1) the ranked hop is missing or wrong: [$R1]"
+for f in r1 r1f; do
+    python3 - "$TMP/$f" <<'PY'
+import re, sys
+t = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+m = re.search(r'<callers by="rank"[^>]*>.*?</callers>', t, re.S)
+if not m: sys.exit(1)
+legend = "".join(re.findall(r'<!--(.*?)-->', t, re.S))
+i = legend.find("; callers by=rank of=:")
+if i < 0 or "; callers of=: the route named" in legend: sys.exit(2)
+clause = legend[i:]
+names = set(re.findall(r'\s([a-z_0-9]+)="', m.group(0)))
+miss = [n for n in names if not re.search(r'(?<![a-z_0-9])' + n + '=', clause)]
+sys.exit(3 if miss else 0)
+PY
+    verdict $? "(R2) $f: the ranked clause rides (not the named one) and defines every attribute the element carries" "(R2) $f: the ranked clause is missing, the named clause rode, or an attribute is undefined"
+done
+run "$FR" --for="manifest syntax error" >"$TMP/r3"
+R3="$( hop "$TMP/r3" )"
+if grep -q '<d [^>]*n="parse_manifest"[^>]*in="4"[^>]*r="1"' "$TMP/r3" && printf '%s' "$R3" | grep -q '^<callers by="rank" of="load_one" '; then ok "(R3) a 4-caller r=1 function is skipped; the next r=1..3 narrow funnel (load_one, r=2) is the seed"; else no "(R3) the wide r=1 function was not skipped for r=2: [$R3]"; fi
+run "$FR" --for="lockfile release error" >"$TMP/r4"
+if [ -s "$TMP/r4" ] && grep -q '<d [^>]*n="release_lockfile"[^>]*r="1"' "$TMP/r4" && ! grep -q '<callers ' "$TMP/r4"; then ok "(R4) [G] every caller a test path: no ranked hop"; else no "(R4) a ranked hop rode although release_lockfile's only caller is a test (or the fixture moved)"; fi
+run "$FR" --for="dependency cycle detection" >"$TMP/r5"
+if [ -s "$TMP/r5" ] && grep -q '<d [^>]*n="verify_dag"[^>]*r="1"' "$TMP/r5" && ! grep -q '<callers ' "$TMP/r5"; then ok "(R5) [G] the same head without an error word: no ranked hop"; else no "(R5) a ranked hop rode on a task that names no error (or the fixture moved)"; fi
+run "$FR" --for="socket timeout error" >"$TMP/r6"
+if [ -s "$TMP/r6" ] && grep -q '<d [^>]*n="poll_socket_once"[^>]*in="1"[^>]*r="[4-9]"' "$TMP/r6" && ! grep -q '<callers ' "$TMP/r6"; then ok "(R6) [G] a narrow funnel below r=3: no ranked hop"; else no "(R6) a ranked hop rode for a row below r=3 (or the fixture moved)"; fi
+for lg in compact full; do
+    run "$FR" --for="dependency cycle error" --legend=$lg >"$TMP/r7on.$lg"; strip "$TMP/r7on.$lg" >"$TMP/r7on.s.$lg"
+    python3 - "$TMP/r7on.s.$lg" <<'PY'
+import re, sys
+p = sys.argv[1]; t = open(p, encoding="utf-8").read()
+t = re.sub(r'; callers by=rank of=:.*?next=(?: lists)? the (?:whole caller )?radius', '', t, flags=re.S)
+open(p, "w", encoding="utf-8").write(t)
+PY
+    RIPWIRE_NO_CALLER_HOP=1 run "$FR" --for="dependency cycle error" --legend=$lg >"$TMP/r7off.$lg"; strip "$TMP/r7off.$lg" >"$TMP/r7off.s.$lg"
+    if [ -s "$TMP/r7off.s.$lg" ] && cmp -s "$TMP/r7on.s.$lg" "$TMP/r7off.s.$lg" && ! grep -q '<callers ' "$TMP/r7off.$lg"; then ok "(R7) [G] $lg: the answer minus the ranked hop equals RIPWIRE_NO_CALLER_HOP=1"; else no "(R7) $lg: the ranked hop changed bytes outside itself (or the switch did not turn it off)"; fi
+done
+r8on="$( est "$TMP/r7on.compact" )"; r8off="$( est "$TMP/r7off.compact" )"
+if [ -n "$r8on" ] && [ -n "$r8off" ] && [ "$r8on" -gt "$r8off" ]; then ok "(R8) est_tokens prices the ranked hop ($r8off -> $r8on)"; else no "(R8) est_tokens did not grow with the ranked hop (on=[$r8on] off=[$r8off])"; fi
+for extra in --json --signatures-only --token-budget=3000; do
+    run "$FR" --for="dependency cycle error" "$extra" >"$TMP/r9.on"
+    RIPWIRE_NO_CALLER_HOP=1 run "$FR" --for="dependency cycle error" "$extra" >"$TMP/r9.off"
+    if [ -s "$TMP/r9.on" ] && cmp -s "$TMP/r9.on" "$TMP/r9.off"; then ok "(R9) [G] $extra: no ranked hop, byte-identical to the hop-off answer"; else no "(R9) $extra: the ranked hop changed the answer"; fi
+done
+run "$FR" --callers=verify_dag >"$TMP/r10"
+python3 - "$TMP/r1" "$TMP/r10" <<'PY'
+import re, sys
+hop = re.search(r'<callers by="rank"[^>]*>(.*?)</callers>', open(sys.argv[1]).read(), re.S)
+cal = open(sys.argv[2]).read()
+if not hop: sys.exit(1)
+key = lambda r: (re.search(r' n="([^"]*)"', r).group(1), re.search(r' p="([^"]*)"', r).group(1))
+first = [key(r) for r in re.findall(r'<s [^>]*/>', hop.group(1)) if ' d="2"' not in r]
+verb = {key(r) for r in re.findall(r'<s [^>]*/>', cal) if ' n="' in r and ' p="' in r}
+sys.exit(0 if first and all(k in verb for k in first) else 1)
+PY
+verdict $? "(R10) every first-hop row of the ranked hop is --callers=verify_dag's own row" "(R10) a ranked first-hop row differs from --callers=verify_dag"
+
 # ── X ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-python3 - "$TMP/p1" "$TMP/p4f" <<'PY'
+python3 - "$TMP/p1" "$TMP/p4f" "$TMP/r1" "$TMP/r1f" <<'PY'
 import re, sys
 for p in sys.argv[1:]:
     for c in re.findall(r'<!--(.*?)-->', open(p).read(), re.S):
@@ -254,7 +331,7 @@ verdict $? "(X3) no -- inside a legend comment" "(X3) a legend comment holds --"
 run "$FC" --for=start_server >"$TMP/x2"
 cmp -s "$TMP/p1" "$TMP/x2"; verdict $? "(X1) deterministic" "(X1) two runs differ"
 if command -v xmllint >/dev/null 2>&1; then
-    for f in p1 p2 p3 p4f p8 b3 f1.on dp.f; do xmllint --noout "$TMP/$f" 2>/dev/null; verdict $? "(X2) well-formed: $f" "(X2) xmllint rejects $f"; done
+    for f in p1 p2 p3 p4f p8 b3 f1.on dp.f r1 r1f r3; do xmllint --noout "$TMP/$f" 2>/dev/null; verdict $? "(X2) well-formed: $f" "(X2) xmllint rejects $f"; done
 else
     printf '  SKIP  (X2) xmllint not installed\n'
 fi
