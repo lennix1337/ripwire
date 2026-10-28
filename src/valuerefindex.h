@@ -1830,11 +1830,19 @@ private:
     // `path` is `tail` or ends with it on a "::" boundary / `head` is `path` or leads it on one.
     static bool scopePathEndsWith( std::string_view path, std::string_view tail ) noexcept
     {
-        return !tail.empty() && ( path == tail || ( path.size() > tail.size() && path.ends_with( tail ) && path[ path.size() - tail.size() - 1 ] == ':' ) );
+        if( tail.empty() || !path.ends_with( tail ) )
+        {
+            return false;
+        }
+        return path.size() == tail.size() || path[ path.size() - tail.size() - 1 ] == ':';
     }
     static bool scopePathStartsWith( std::string_view path, std::string_view head ) noexcept
     {
-        return head.empty() || path == head || ( path.size() > head.size() && path.starts_with( head ) && path[ head.size() ] == ':' );
+        if( head.empty() )
+        {
+            return true;
+        }
+        return path.starts_with( head ) && ( path.size() == head.size() || path[ head.size() ] == ':' );
     }
     // How many C-family class / struct definitions (a body) the repo has named `name` (counted once, on first use).
     std::size_t classDefsNamed( std::string_view name ) const

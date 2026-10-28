@@ -618,8 +618,14 @@ struct VrUsings
     // The qualifier a `using` of class `owner` writes ("" when none).
     std::string_view qualifierOf( std::string_view owner ) const noexcept
     {
-        const auto it = std::ranges::find( declared, owner, &std::pair<std::string, std::string>::first );
-        return it == declared.end() ? std::string_view() : std::string_view( it->second );
+        for( const auto& [ cls, qualifier ] : declared )
+        {
+            if( cls == owner )
+            {
+                return qualifier;
+            }
+        }
+        return {};
     }
     std::string directivesJoined() const
     {
