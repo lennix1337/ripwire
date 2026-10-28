@@ -4,15 +4,20 @@
 // WHY. A reached --path answer prints each hop as a <s t= n= p=> row and nothing else. When the path is short, the question is often
 // what happens INSIDE the middle hop: hono's `Hono.fetch -> Hono.#dispatch -> compose` names #dispatch, and the whole request flow
 // (path extraction, router match, Context, the one-handler fast path, compose, error handling) lives in its body, which the answer
-// never printed (readout-40 G: 0 of 7 items; the same body through --expand: 6 of 7).
+// never printed (readout-40 G: 0 of 7 items; the same body through --expand: 6 of 7). The --for body fold has the twin gap: it serves
+// `fetch`, a one-line wrapper around `this.#dispatch(...)`, and stops there.
 //
 // WHAT. (1) PATH-HOP-BODY: a reached --path whose shown chain has at most kPathHopBodyMaxHops hops prints, after its hop rows, the body
 // of each INTERMEDIATE hop (never an endpoint, never one whose text the answer already carries: fold_detail::overlapsServed) inside <bodies of="hops" shown= total= capped=>,
 // each <b> the --expand body element (no callee rows, no file context). A chain past the gate prints no body and the root carries
-// next= (the first middle hop's --expand) unless another continuation already owns next=.
+// next= (the first middle hop's --expand) unless another continuation already owns next=. (2) WRAPPER-FOLLOW: a body the --for fold
+// serves that is a THIN DELEGATOR (thinDelegate: one proven callee, no other call, at most kThinBodyLines statement lines) is followed by
+// its callee's body, <b follow_of=>, at most kWrapperFollowDepth levels.
 // THE BOUND IS A SPEW GUARD, NEVER A COMPLETENESS CUT (owner rule): each body is whole up to kHopBodyCapBytes; a longer one is cut at a
 // line end by packBodies' own truncation, which says so on the element (truncated="1" lines="1-K/T" next= the call serving the rest).
 
+#include "graph.h"
+#include "lexical.h"    // lexicalScanText — the body text the index read
 #include "model.h"
 #include "nextverb.h"   // nextFlag
 #include "sarif.h"      // rootPrefixOf / rootRelativeUri — the --expand selector's path
@@ -32,12 +37,16 @@ namespace rw
 {
 
 // The per-body spew guard (bytes of source text): whole below it, cut at a line end and disclosed above it. Measured over the in-sample
-// --path rows (reports/path-hop-body.md): the bodies these answers need are 0.1-3.4 KB.
+// --path rows and the --for fold follows (reports/path-hop-body.md): the bodies these answers need are 0.4-3.6 KB.
 inline constexpr std::size_t kHopBodyCapBytes = 4000;
 // The hop-count gate: a chain of at most this many hops prints its middle hop's body (kPathHopBodyMaxHops - 1 = one body). Measured
 // (reports/path-hop-body.md, the curve over the in-sample --path rows): 2 hops buys hono-12 its 6 items; 3 hops adds flake8-14
 // (+1.6 KB, already complete), 4 hops fzf-14 and tmux-14 (+13 KB, both already complete) and nothing else; past the gate next= names the body.
 inline constexpr std::size_t kPathHopBodyMaxHops = 2;
+// A thin delegator's body: at most this many statement lines (a line holding more than brackets and separators, not a comment).
+inline constexpr std::size_t kThinBodyLines = 3;
+// How many delegations the fold follows from one served body (fetch -> #dispatch is one; a handle -> fetch -> #dispatch two).
+inline constexpr std::size_t kWrapperFollowDepth = 2;
 
 namespace fold_detail
 {
@@ -64,7 +73,7 @@ inline bool overlapsServed( const IngestResult& ing, NodeId a, std::span<const N
 }
 }   // namespace fold_detail
 
-// The A/B switch (the RIPWIRE_NO_BODY_FOLD precedent): the hop bodies ride unless RIPWIRE_NO_HOP_BODY is set.
+// The A/B switch (the RIPWIRE_NO_BODY_FOLD precedent): both mechanisms ride unless RIPWIRE_NO_HOP_BODY is set.
 inline bool hopBodiesOn()
 {
     return std::getenv( "RIPWIRE_NO_HOP_BODY" ) == nullptr;
@@ -98,6 +107,66 @@ inline std::optional<std::string> renderBodyElement( const IngestResult& ing, No
         return std::nullopt;   // an unreadable span renders an empty envelope: nothing to serve
     }
     return x.substr( 0, open ) + x.substr( close + 1, x.size() - kClose.size() - close - 1 );
+}
+
+// Is `line` a statement line: anything but whitespace and bracket/separator characters, and not a whole-line comment.
+inline bool isStatementLine( std::string_view line ) noexcept
+{
+    const std::size_t a = line.find_first_not_of( " \t\r" );
+    if( a == std::string_view::npos )
+    {
+        return false;
+    }
+    const std::string_view t = line.substr( a );
+    if( t.starts_with( "//" ) || t.starts_with( "#" ) || t.starts_with( "/*" ) || t.starts_with( "*" ) || t.starts_with( "--" ) )
+    {
+        return false;
+    }
+    return t.find_first_not_of( "{}()[];, \t\r" ) != std::string_view::npos;
+}
+
+// THE THIN DELEGATOR: the callee `id` wraps, or kNoNode. Decided only when provably unique (the inverted honesty rule): exactly one
+// resolved out-edge, a proven call (not by name alone, not a link), no ambiguous or unresolved call beside it, a callee with a body, and
+// at most kThinBodyLines statement lines in the body past the signature. Anything else is not a delegator and nothing is followed.
+inline NodeId thinDelegate( const IngestResult& ing, const Graph& g, NodeId id )
+{
+    if( id >= ing.symbols.size() || id + 1 >= g.outOff.size() || g.outOff[id + 1] - g.outOff[id] != 1 )
+    {
+        return kNoNode;
+    }
+    const std::uint32_t e = g.outOff[id];
+    const NodeId        t = g.outTargets[e];
+    if( t == id || t >= ing.symbols.size() || ( e < g.outNameOnly.size() && g.outNameOnly[e] != 0 )
+        || ( id < g.ambOut.size() && g.ambOut[id] != 0 ) || ( id < g.unresolvedOut.size() && g.unresolvedOut[id] != 0 ) )
+    {
+        return kNoNode;
+    }
+    const Symbol& s  = ing.symbols[id];
+    const Symbol& ts = ing.symbols[t];
+    if( s.kind == SymKind::ModuleScope || ts.kind == SymKind::ModuleScope || ts.endByte <= ts.sigStartByte || s.endByte <= s.sigEndByte )
+    {
+        return kNoNode;
+    }
+    std::string        scratch;
+    const std::string* text = lexicalScanText( ing, s.fileId, scratch );
+    if( text == nullptr || s.endByte > text->size() || s.sigEndByte < s.sigStartByte )
+    {
+        return kNoNode;
+    }
+    std::string_view body = std::string_view( *text ).substr( s.sigEndByte, s.endByte - s.sigEndByte );
+    std::size_t      statements = 0;
+    while( !body.empty() )
+    {
+        const std::size_t nl   = body.find( '\n' );
+        const std::string_view line = body.substr( 0, nl );
+        statements += isStatementLine( line ) ? 1u : 0u;
+        if( statements > kThinBodyLines )
+        {
+            return kNoNode;
+        }
+        body = nl == std::string_view::npos ? std::string_view() : body.substr( nl + 1 );
+    }
+    return statements > 0 ? t : kNoNode;
 }
 
 // The --expand selector of one definition, as the answer spells p= (root-relative on a single root), unescaped.
@@ -175,6 +244,21 @@ inline std::string_view pathHopBodiesLegend( bool on ) noexcept
 inline std::string_view pathHopNextLegend( bool on ) noexcept
 {
     return on ? "next=: the chain has more than 2 hops, so no middle hop body prints; the first middle hop's expand. " : "";
+}
+
+// Insert ` attrs` into the first `<b ` open tag of a rendered body element (after its legend comments).
+inline void addBodyAttrs( std::string& bodyXml, std::string_view attrs )
+{
+    const std::size_t at = bodyXml.find( "<b t=\"" );
+    if( at == std::string::npos )
+    {
+        return;
+    }
+    const std::size_t close = bodyXml.find( '>', at );
+    if( close != std::string::npos )
+    {
+        bodyXml.insert( close, attrs );
+    }
 }
 
 }   // namespace rw

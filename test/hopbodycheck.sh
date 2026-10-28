@@ -10,9 +10,12 @@
 #                  over 4000 B is cut at a line end and says so (truncated="1" lines="1-K/T" next= serves the rest). A chain of
 #                  more hops prints no body and its root carries next= (the first middle hop's --expand). Inside a --for answer's
 #                  graph-verb block a middle hop whose text the answer already carries (a served class holding it) prints no copy.
-#   LEGEND         every new reading is present-only: the compact path reading `bodies of=hops` and the full path clause ride
-#                  exactly when the element does.
-#   A/B            RIPWIRE_NO_HOP_BODY=1 is the answer without it.
+#   WRAPPER-FOLLOW a --for fold body that is a THIN DELEGATOR (one proven callee, no other call, at most 3 statement lines) is
+#                  followed by its callee's body <b follow_of="WRAPPER">, at most 2 levels, never a text the answer already
+#                  carries; a by-name edge, a second call, or a fourth statement line is not a delegator.
+#   LEGEND         every new reading is present-only: the compact path reading `bodies of=hops`, the full path clause, the
+#                  fold's follow_of= clause ride exactly when the element/attribute does.
+#   A/B            RIPWIRE_NO_HOP_BODY=1 is the answer without either mechanism.
 #
 # Arms (colour on 5163ffbdb in brackets):
 #   P1 [P] fetch -> dispatch -> compose: one <bodies of="hops"> with dispatch's body, CDATA = its source text; no endpoint body
@@ -25,6 +28,13 @@
 #   P6 [P] legend present-only, compact and full: the reading rides iff the element does; the past-the-gate next= reading in full
 #   P7 [P] MCP path_between prints the CLI's <bodies of="hops"> element byte for byte (P1, P4) and the 3- and 4-hop next=
 #   P8 [G] RIPWIRE_NO_HOP_BODY=1: the path answer is the head answer minus the element, its clause and the 4-hop next=
+#   F1 [P] the 2-level follow: handleRequest -> forwardInput -> runPipeline, each <b follow_of=> right after its wrapper,
+#          CDATA = the source text; the follow_of clause rides
+#   F2 [G] a one-call body of four statement lines (handleTimedRequest) is never followed
+#   F3 [G] a two-call body (listen) is never followed; a delegate inside a served body (fetch -> dispatch in Server) prints no copy
+#   F4 [G] a by-name delegate (worker.crunchInput, via=name) is never followed
+#   F5 [G] each text once: no two <b> of one answer share p= and l=
+#   F6 [G] RIPWIRE_NO_HOP_BODY=1: no follow_of=, no clause, answer == head minus the follow bodies and clause
 #   X1 [G] determinism   X2 [G] xmllint well-formed   X3 [G] no "--" inside a legend comment
 #   I  [optional, RIPWIRE_BASE_BIN=<pre-change binary>] RIPWIRE_NO_HOP_BODY=1 head == the base binary on every question here
 #
@@ -41,12 +51,18 @@ echo "hopbodycheck: BIN=$BIN"
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
 cd "$ROOT"
-WEB="test/hopbodyfix/web"
-[ -d "$WEB/src" ] || { echo "fixture test/hopbodyfix missing"; exit 2; }
+WEB="test/hopbodyfix/web"; FOL="test/hopbodyfix/follow"; LOO="test/hopbodyfix/loose"
+[ -d "$WEB/src" ] && [ -d "$FOL/src" ] && [ -d "$LOO/src" ] || { echo "fixture test/hopbodyfix missing"; exit 2; }
 
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"; mkdir -p "$HOME"
 run(){ local d="$1"; shift; ( cd "$d" || exit 1; "$BIN" "$ROOT/$d" --no-cache "$@" 2>/dev/null ); }
+
+T_FOLLOW="How is a request handled?"
+T_TIMED="How does handling a request work?"
+T_WEB="How does a request flow from fetch to its Response?"
+T_LISTEN="How does the server listen for a request?"
+T_LOOSE="How is a loose request handled?"
 
 run "$WEB" --path=fetch,compose        >"$TMP/p1"
 run "$WEB" --path=stepOne,stepFour     >"$TMP/p2"
@@ -63,6 +79,15 @@ RIPWIRE_NO_HOP_BODY=1 run "$WEB" --path=fetch,compose    >"$TMP/p1.off"
 RIPWIRE_NO_HOP_BODY=1 run "$WEB" --path=stepOne,stepFour >"$TMP/p2.off"
 RIPWIRE_NO_HOP_BODY=1 run "$WEB" --path=stepOne,stepFive >"$TMP/p3.off"
 RIPWIRE_NO_HOP_BODY=1 run "$WEB" --path=bigEntry,bigSink >"$TMP/p4.off"
+run "$FOL" --for="$T_FOLLOW"           >"$TMP/f1"
+run "$FOL" --for="$T_FOLLOW" --legend=full >"$TMP/f1f"
+RIPWIRE_NO_HOP_BODY=1 run "$FOL" --for="$T_FOLLOW" >"$TMP/f1.off"
+run "$FOL" --for="$T_TIMED"            >"$TMP/f2"
+run "$WEB" --for="$T_WEB"              >"$TMP/f3a"
+run "$WEB" --for="$T_LISTEN"           >"$TMP/f3b"
+run "$LOO" --for="$T_LOOSE"            >"$TMP/f4"
+run "$LOO" --callees=handleLooseRequest >"$TMP/f4c"
+
 cat > "$TMP/chk.py" <<'PY'
 import html, re, shlex, subprocess, sys, os
 T, BIN, ROOT = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -90,7 +115,7 @@ def is_source(b, d):
 def paste(nxt, d):
     argv = shlex.split(nxt)
     return subprocess.run([BIN, os.path.join(ROOT, d), "--no-cache"] + argv, cwd=os.path.join(ROOT, d), capture_output=True).stdout.decode("utf-8", "replace")
-WEB = "test/hopbodyfix/web"
+WEB, FOL = "test/hopbodyfix/web", "test/hopbodyfix/follow"
 
 # P1
 p1 = rd("p1"); el = hopel(p1); bs = bodies(el)
@@ -135,8 +160,30 @@ for f in ("p1", "p4"):
     strip = re.sub(r' bodies of=hops: .*?(?= -->|\. (?=[a-z_]+[=:])|$)\.?', '', strip, flags=re.S)
     check(hopel(off) == "" and re.sub(r'<!--.*?-->', '', strip, flags=re.S) == re.sub(r'<!--.*?-->', '', off, flags=re.S), "(P8) %s: RIPWIRE_NO_HOP_BODY=1 == head minus the element (payload)" % f)
 check('next=' not in re.search(r'<path [^>]*>', rd("p3.off")).group(0) and 'next=' not in re.search(r'<path [^>]*>', rd("p2.off")).group(0), "(P8) RIPWIRE_NO_HOP_BODY=1: no past-the-gate next=")
+# F1
+f1 = rd("f1"); bs = bodies(f1); names = [b[0].get("n") for b in bs]
+fo = {b[0].get("n"): b for b in bs if "follow_of" in b[0]}
+check(fo.get("forwardInput", [{}])[0].get("follow_of") == "handleRequest" and fo.get("runPipeline", [{}])[0].get("follow_of") == "forwardInput", "(F1) the 2-level follow: %r" % {k: v[0].get("follow_of") for k, v in fo.items()})
+check("handleRequest" in names and names.index("forwardInput") == names.index("handleRequest") + 1 and names.index("runPipeline") == names.index("forwardInput") + 1 if "forwardInput" in names and "runPipeline" in names and "handleRequest" in names else False, "(F1) each follow right after its wrapper")
+check("forwardInput" in fo and is_source(fo["forwardInput"], FOL) and "runPipeline" in fo and is_source(fo["runPipeline"], FOL) and "segments.length === 0" in fo["runPipeline"][1], "(F1) follow CDATA are the definitions' source text, whole")
+check("follow_of=W" in legend(f1) and "follow_of=W" in legend(rd("f1f")), "(F1) the follow_of clause rides in both legends")
+# F2-F4
+check(not re.search(r'follow_of="handleTimedRequest"', rd("f2")) and re.search(r'<b [^>]*n="handleTimedRequest"', rd("f2")), "(F2) the 4-statement-line wrapper is served and never followed")
+check("follow_of=" not in rd("f3a") and "follow_of=W" not in legend(rd("f3a")), "(F3) fetch's delegate lies inside the served Server body: no copy, no clause")
+check(re.search(r'<b [^>]*n="listen"', rd("f3b")) and 'follow_of="listen"' not in rd("f3b"), "(F3) the two-call listen is never followed")
+check('via="name"' in rd("f4c") and re.search(r'<b [^>]*n="handleLooseRequest"', rd("f4")) and "follow_of=" not in rd("f4"), "(F4) a by-name delegate is never followed")
+# F5
+for f in ("f1", "f2", "f3a", "f3b", "f4", "p1", "p9a", "p9b"):
+    keys = [(b[0].get("p"), b[0].get("l")) for b in bodies(rd(f))]
+    check(len(keys) == len(set(keys)), "(F5) %s: each text once" % f)
+# F6
+off = rd("f1.off")
+check("follow_of" not in off, "(F6) RIPWIRE_NO_HOP_BODY=1: no follow_of= and no clause")
+strip = re.sub(r'<b [^>]*follow_of="[^"]*"[^>]*>.*?</b>', '', f1, flags=re.S)
+mask = lambda t: re.sub(r' est_tokens="\d+"', '', re.sub(r'<!--.*?-->', '', t, flags=re.S))
+check(mask(strip) == mask(off), "(F6) the --for answer minus the follow bodies == the RIPWIRE_NO_HOP_BODY=1 answer (payload, est_tokens masked)")
 # X3
-for f in ("p1", "p1f", "p3f", "p4"):
+for f in ("p1", "p1f", "p3f", "p4", "f1", "f1f"):
     check(all("--" not in c for c in re.findall(r'<!--(.*?)-->', rd(f), re.S)), "(X3) %s: no -- inside a legend comment" % f)
 sys.exit(1 if fails else 0)
 PY
@@ -171,10 +218,10 @@ sys.exit(1 if bad else 0)
 PY
 
 # X1 determinism, X2 well-formed
-run "$WEB" --path=fetch,compose >"$TMP/x1"
-if cmp -s "$TMP/p1" "$TMP/x1"; then echo "  PASS  (X1) deterministic"; else echo "  FAIL  (X1) two runs differ"; fail=1; fi
+run "$WEB" --path=fetch,compose >"$TMP/x1"; run "$FOL" --for="$T_FOLLOW" >"$TMP/x2"
+if cmp -s "$TMP/p1" "$TMP/x1" && cmp -s "$TMP/f1" "$TMP/x2"; then echo "  PASS  (X1) deterministic"; else echo "  FAIL  (X1) two runs differ"; fail=1; fi
 if command -v xmllint >/dev/null 2>&1; then
-    for f in p1 p2 p3 p4 p1f p9a p9b; do
+    for f in p1 p2 p3 p4 p1f f1 f1f p9a p9b; do
         if xmllint --noout "$TMP/$f" 2>/dev/null; then echo "  PASS  (X2) $f well-formed"; else echo "  FAIL  (X2) $f not well-formed"; fail=1; fi
     done
 else
@@ -193,7 +240,8 @@ if [ -n "${RIPWIRE_BASE_BIN:-}" ] && [ -x "${RIPWIRE_BASE_BIN}" ]; then
 $WEB|--path=fetch,compose
 $WEB|--path=stepOne,stepFive
 $WEB|--path=bigEntry,bigSink
-$WEB|--for=Trace the path from gatewayEntry() to finalStage()
+$FOL|--for=$T_FOLLOW
+$WEB|--for=$T_WEB
 ARGV
 else
     echo "  SKIP  (I) RIPWIRE_BASE_BIN unset or not executable — base-binary identity not run here"

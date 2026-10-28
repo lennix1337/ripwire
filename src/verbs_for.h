@@ -578,6 +578,8 @@ struct ForLensHeaderParts
     bool             bodyFoldPresent = false; // body-fold: a compact-route answer in the default regime has fold candidates
                                             // (forfold.h forBodyFoldCandidates), so a <fold> rides and its clause defines it;
                                             // set after construction, cleared with the section
+    bool             foldFollowPresent = false; // WRAPPER-FOLLOW (forfold.h renderFollows): the fold carries a <b follow_of=> (set after
+                                            // the fold renders), so its clause defines it
     bool             memberNamesPresent = false; // member-names (formembers.h): a shown owner row carries mem= (set after the
                                             // <sigs> splice), so its clause defines it
     bool             initSlotsPresent = false;   // FOR-SLOTS (forslots.h): a shown initializer row carries slots= (set after the
@@ -920,6 +922,7 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
     h += ownerHopLegend( p, /*compact=*/true );   // owner-hop: present-only, right after the hops clause
     h += bodySlotLegend( p, /*compact=*/true );   // for-body-slot: present-only, after the owner clause
     h += bodyFoldLegend( p, /*compact=*/true );   // body-fold: present-only, after the slot clause
+    h += presentOnlyClause( p.foldFollowPresent, /*compact=*/true, rw::kForCompactFoldFollowLegend, rw::kForFoldFollowLegend );   // WRAPPER-FOLLOW
     h += presentOnlyClause( p.memberNamesPresent, /*compact=*/true, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend );   // member-names: after the fold clause
     h += peerRowClauses( p, /*compact=*/true );   // FOR-SLOTS + OWNER-CTOR-HOP: present-only, after mem=
     h += presentOnlyClause( p.callerHopPresent, /*compact=*/true, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend );  // mf1-nx: present-only, after the fold clause
@@ -1068,6 +1071,7 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     h.append( ownerHopLegend( p, /*compact=*/false ) );   // owner-hop: present-only, right after the bundle clause
     h.append( bodySlotLegend( p, /*compact=*/false ) );   // for-body-slot: present-only, after the owner clause
     h.append( bodyFoldLegend( p, /*compact=*/false ) );   // body-fold: present-only, after the slot clause
+    h.append( presentOnlyClause( p.foldFollowPresent, /*compact=*/false, rw::kForCompactFoldFollowLegend, rw::kForFoldFollowLegend ) );   // WRAPPER-FOLLOW
     h.append( presentOnlyClause( p.memberNamesPresent, /*compact=*/false, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend ) );   // member-names
     h.append( peerRowClauses( p, /*compact=*/false ) );   // FOR-SLOTS + OWNER-CTOR-HOP
     h.append( presentOnlyClause( p.callerHopPresent, /*compact=*/false, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend ) );  // mf1-nx: present-only, after the fold clause
@@ -4064,7 +4068,12 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             if( sigsPreRendered && !enrich.surfaceOff && !enrich.hopsCutMarker )
             {
-                fold = rw::renderForBodyFold( rw::BodyFoldInputs{ ing, cfg.forTask, slot.served ? slotOwner.id : rw::kNoNode, lensRank, flRootArg, redactPtr, cfg.compress }, foldIds );
+                fold = rw::renderForBodyFold( rw::BodyFoldInputs{ ing, cfg.forTask, slot.served ? slotOwner.id : rw::kNoNode, lensRank, flRootArg, redactPtr, cfg.compress, &g }, foldIds );
+                if( fold.follows > 0 && !fold.xml.empty() )
+                {
+                    headerParts.foldFollowPresent = true;   // WRAPPER-FOLLOW: the clause rides beside the attribute it defines
+                    headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+                }
             }
             if( fold.xml.empty() )
             {

@@ -30,7 +30,7 @@
 // RIPWIRE_NO_BODY_FOLD (any value) turns the fold off — the A/B handle, the RIPWIRE_NO_BODY_SLOT precedent.
 
 #include "commentcoherence.h"   // isCommentStopword — the member slice's question words
-#include "hopbody.h"    // renderBodyElement, spanInside / overlapsServed — the one body render and containment reading
+#include "hopbody.h"    // WRAPPER-FOLLOW: thinDelegate, renderBodyElement — a thin wrapper's callee body
 #include "forowner.h"   // isParsedMemberOf — a class's members BY THE PARSER (the body slot's member reading)
 #include "lexical.h"    // subtokens, isRouteStopword, lexicalScanText — a sliced class's member text, read as the index read it
 #include "model.h"
@@ -105,6 +105,13 @@ inline constexpr std::string_view kForCompactBodyFoldLegend =
     "; fold kind=bodies: b t= n= p= l= top ranked rows' whole bodies, not the answer; served= of total= in budget_bytes=; "
     "slice/skip p= n= l=; slice members= of=: a big class's ctor, question-word members; skip bytes= next=; "
     "a skip makes sigs next= it, sigs_next= the signatures-only re-call";
+// WRAPPER-FOLLOW: present-only beside a <b follow_of=> (BodyFoldRender::follows > 0), after the fold clause. No "--".
+inline constexpr std::string_view kForFoldFollowLegend =
+    "; b follow_of=W: the body of the one proven call W makes, W a thin wrapper served just before it (one callee, at most 3 statement "
+    "lines), followed at most 2 levels; outside budget_bytes=, whole up to 4000 bytes";
+inline constexpr std::string_view kForCompactFoldFollowLegend =
+    "; b follow_of=W: body of the one call thin wrapper W (<=3 lines) makes, <=2 levels, past budget_bytes=, whole to 4000 B";
+static_assert( kHopBodyCapBytes == 4000 && kWrapperFollowDepth == 2 && kThinBodyLines == 3, "the follow clauses spell the bounds: re-word them with the knobs" );
 static_assert( kForCompactBodyFoldLegend.find( "b t= n= p= l=" ) != std::string_view::npos
                    && kForBodyFoldLegend.find( "b t= n= p= l=" ) != std::string_view::npos,
                "both fold clauses define the <b> element the fold carries (FIX1 B2)" );
@@ -118,6 +125,7 @@ struct BodyFoldInputs
     std::string_view        rootArg;
     RedactCounts*           redact;       // no NoteIndex: a ranked row's note rides on its <d> row once, never again in the fold
     bool                    compress;     // --compress (the CLI only)
+    const Graph*            g = nullptr;  // WRAPPER-FOLLOW (hopbody.h thinDelegate): nullptr = no body is followed
 };
 
 struct BodyFoldRender
@@ -128,6 +136,7 @@ struct BodyFoldRender
     std::size_t served      = 0;
     std::size_t total       = 0;
     std::size_t slices = 0;   // classes served as a member slice (each also has its skip row)
+    std::size_t follows = 0;  // WRAPPER-FOLLOW: delegate bodies served after the thin wrapper that calls them (<b follow_of=>)
     std::string firstSkipNext;       // the first skip's next= value, XML-escaped; empty when every candidate was served
     std::vector<NodeId> bodies;      // member-names: every body this answer carries whole (the slot's owner, the fold's, slice members)
     std::vector<NodeId> sliced;      // member-names: the classes served as a member slice
@@ -191,7 +200,7 @@ inline std::string skipRow( const BodyFoldInputs& in, NodeId id, std::string& es
     return x;
 }
 
-// spanInside / overlapsServed (each text once, FIX1 N2) live in hopbody.h, the one containment reading the fold and the
+// spanInside / overlapsServed (each text once, FIX1 N2) live in hopbody.h, the one containment reading the fold, its follows and the
 // path hop bodies share.
 
 // a class's direct members by the parser (isParsedMemberOf), in source order; one nested in another member is inside that
@@ -345,6 +354,44 @@ inline std::optional<std::size_t> refundOfInner( const IngestResult& ing, NodeId
     }
     return refund;
 }
+// WRAPPER-FOLLOW: from a body the answer serves, the delegate bodies a chain of thin wrappers leads to (hopbody.h thinDelegate), at
+// most kWrapperFollowDepth levels, each <b follow_of="WRAPPER"> whole up to kHopBodyCapBytes (else cut and disclosed by packBodies'
+// truncation). A delegate whose text the answer already carries stops the chain (its own follows ride where it is served).
+struct FollowRender
+{
+    std::string xml;
+    std::size_t bytes = 0, count = 0;
+};
+inline FollowRender renderFollows( const BodyFoldInputs& in, NodeId from, std::vector<NodeId>& served )
+{
+    FollowRender out;
+    if( in.g == nullptr || !hopBodiesOn() )
+    {
+        return out;
+    }
+    std::vector<char> esc;
+    NodeId            cur = from;
+    for( std::size_t depth = 0; depth < kWrapperFollowDepth; ++depth )
+    {
+        const NodeId t = thinDelegate( in.ing, *in.g, cur );
+        if( t == kNoNode || overlapsServed( in.ing, t, served, /*orHolds=*/true ) )
+        {
+            break;
+        }
+        std::optional<std::string> b = renderBodyElement( in.ing, t, kHopBodyCapBytes, in.compress, in.redact, in.rootArg, &in.lensRank );
+        if( !b )
+        {
+            break;
+        }
+        addBodyAttrs( *b, " follow_of=\"" + std::string( escapeXml( in.ing.symbols[cur].name, esc ) ) + "\"" );
+        out.bytes += b->size();
+        ++out.count;
+        out.xml += *b;
+        served.push_back( t );
+        cur = t;
+    }
+    return out;
+}
 }   // namespace fold_detail
 
 // THE FOLD'S RENDER: the walk the header comment states. A body that does not fit is never rendered into the answer, and the
@@ -420,16 +467,32 @@ inline BodyFoldRender renderForBodyFold( const BodyFoldInputs& in, const std::ve
         }
     }
     std::string bodies;
+    std::size_t followBytes = 0;
+    const auto  follow = [ & ]( NodeId from )
+    {
+        fold_detail::FollowRender f = fold_detail::renderFollows( in, from, served );
+        bodies += f.xml;
+        followBytes += f.bytes;
+        out.follows += f.count;
+    };
+    if( in.bodied != kNoNode )
+    {
+        follow( in.bodied );   // the slot owner's body is its own element before the fold: its delegate leads the fold
+    }
     for( const fold_detail::FoldPiece& p : pieces )
     {
         bodies += p.xml;
+        if( p.id != kNoNode )
+        {
+            follow( p.id );   // right after the wrapper it explains
+        }
     }
     const std::string open = "<fold kind=\"bodies\" budget_bytes=\"" + std::to_string( kForBodyFoldBudgetBytes ) + "\" served=\""
                            + std::to_string( out.served ) + "\" total=\"" + std::to_string( out.total ) + "\">";
     constexpr std::string_view kClose = "</fold>";
     out.xml         = open + bodies + skips + std::string( kClose );
-    out.bodyTokens  = tokensForEmittedBytes( used, kBytesPerTokenBody );
-    out.markupBytes = out.xml.size() - used;
+    out.bodyTokens  = tokensForEmittedBytes( used + followBytes, kBytesPerTokenBody );
+    out.markupBytes = out.xml.size() - used - followBytes;
     out.bodies      = std::move( served );
     ENSURES( used <= kForBodyFoldBudgetBytes, "the served bodies fit the fold's budget" );
     return out;
