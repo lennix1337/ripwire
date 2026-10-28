@@ -2578,7 +2578,8 @@ inline const std::string& fileNameKey( std::string& key, std::uint32_t id, std::
 // The conservative reading: any name may be bound there by something no static table lists.
 inline bool pythonDynamicNamespace( const HashMap<std::string, char>& rebind, std::string& key, std::uint32_t f )
 {
-    return rebind.contains( fileNameKey( key, f, kPythonDynamicBind ) ) || rebind.contains( fileNameKey( key, f, kPythonDynamicWrite ) );
+    return std::ranges::any_of( std::array{ kPythonDynamicBind, kPythonDynamicWrite },
+                                [ & ]( std::string_view marker ) { return rebind.contains( fileNameKey( key, f, marker ) ); } );
 }
 
 // ── Phase 5: the external-name VETO predicate (docs/EVALS.md "Phase 5", mechanism 1) ───────────────────

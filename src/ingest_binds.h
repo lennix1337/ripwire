@@ -3407,6 +3407,16 @@ inline bool pythonDefIsConditionalAtModule( TSNode n )
     return false;
 }
 
+// the kPythonCondDefPrefix record (`?name`) of a def/class statement `n` that may not run (pythonDefIsConditionalAtModule), at the
+// def's own VarDecl site; nothing for any other statement
+inline void pushPythonCondDefMark( TSNode n, std::string_view name, std::uint32_t fileId, Lang lang, BindSite at, std::vector<RawBind>& binds )
+{
+    if( pythonDefIsConditionalAtModule( n ) )
+    {
+        pushRawBind( fileId, lang, std::string{ kPythonCondDefPrefix }.append( name ), std::string{}, at, LocalBindKind::VarDecl, binds );
+    }
+}
+
 inline void capturePythonRebindShadowDecls( TSNode n, const char* t, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawBind>& binds )
 {
     std::vector<TSNode> targets;   // reused scratch, cleared before each shape below
@@ -3493,11 +3503,7 @@ inline void capturePythonRebindShadowDecls( TSNode n, const char* t, std::uint32
         {
             const std::uint32_t at = ts_node_start_byte( n );   // the def/class node's OWN start — see the doc above
             pushRawBind( fileId, lang, nodeTextOf( nm, src ), std::string{}, BindSite{ at > 0 ? at - 1 : 0, 0u, 0u }, LocalBindKind::VarDecl, binds );
-            if( pythonDefIsConditionalAtModule( n ) )
-            {
-                pushRawBind( fileId, lang, std::string{ kPythonCondDefPrefix }.append( nodeTextOf( nm, src ) ), std::string{},
-                             BindSite{ at > 0 ? at - 1 : 0, 0u, 0u }, LocalBindKind::VarDecl, binds );
-            }
+            pushPythonCondDefMark( n, nodeTextOf( nm, src ), fileId, lang, BindSite{ at > 0 ? at - 1 : 0, 0u, 0u }, binds );
         }
         return;
     }
