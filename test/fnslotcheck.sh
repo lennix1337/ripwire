@@ -92,6 +92,26 @@
 #   H3 [G] a macro casting to ANOTHER type (As_Other → OtherClass) never targets RowClass's store
 #   H4 [P] a macro of another shape (`Get_Klass( this )->writeField`) and H5 [P] a function call root (`row_class_of( this )->…`)
 #          join by the field name only: via="slot-name"
+# FN-SLOT S2 fix round 1 (reviews rv-fn-slot-s2 F-1..F-5, rv-fn-slot-s2-lens L-1; fixture test/fnslotcpp2/, its own root):
+#   V1 [P] a pointer to a VIRTUAL method `&VBase::Act`: every override is a candidate (VDerived::Act, and VDeeper::Act two levels down)
+#          gets called_by="dispatch_v";  V2 [P] a pure virtual's override gets it too;  V3 [P] the pure virtual's bodyless declaration
+#          is never a target (5 targets: the three Act bodies, VDerived::Pure, VBase::Plain);  V4 [P] a method a derived class HIDES:
+#          `&HBase::sh` lists both (a hedge);  V5 [G] `&HDer::sh` names HDer's own only
+#   E1 [P] `&grpc::Server::start` (the header is not indexed) never binds the in-tree mine::Server (qualified spelling); E1b [P] nor
+#          does a bare `&Server::start` under `using grpc::Server;`;  E1c [P] nor under `using namespace grpc;` (a bare Server
+#          outside mine::);  E1d [P] nor `&other::inner::Deep::run` beside the in-tree outer::inner::Deep;  E1e [P] nor `&::Server::stop`
+#          (the global-anchored spelling of a class that sits in mine::)
+#   E2 [G] `&mine::Server::stop`, the bare `&Server::stop` written inside `namespace mine`, an out-of-line `int mine::Server::both()`
+#          writing `&Server::start`, `&::mine::Server::start` stay typed;  E3 [G] nested (`outer::inner::Deep`, the suffix `inner::Deep`),
+#          C++17 nested (`c1::c2::Pair`, `c2::Pair`), an anonymous namespace (`Anon`) and an inline namespace (`v0::Ver`) stay typed
+#   I1 [P] an INHERITED method `&ID::inh` (defined in IB) and I2 [P] a CRTP base method `&ICD::crt` (defined in ICB<ICD>) name the
+#          base's definition;  I3 [G] two bases at one level declaring dup: no target;  I4 [G] a base outside the tree: no target (a floor);
+#          I5 [G] an overloaded name lists every overload (targets= counts definitions);  I6 [G] the derived class's own method stays typed
+#   N24 [G] a C++ METHOD call on a call result `f()->mr_write( … )` beside a function-pointer field of that name is no slot call
+#          (kills the everyFieldCall mutant: the guard that keeps the macro-cast receiver to C)
+#   L1 [P] a nested store the designator climb cannot type (6 deep) hides behind the typed tier: the site says slot_name_also="1" (XML
+#          and --json);  L2 [G] --callers still says via="slot-name" for it;  L3 [G] a typed-only site prints no slot_name_also
+#   F4 [P] --for slot_fields=: the cap of 4 cuts the least informative field, never the one a caller calls through (zzw=3@run_zzw)
 #
 # Usage: bash test/fnslotcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -341,5 +361,70 @@ o="$( run --callees=Klass_display )"
 has   "H4 a macro of another shape joins by the field name" "$o" 'slot=".writeField" via="slot-name"'
 o="$( run --callees=Fn_display )"
 has   "H5 a function call root joins by the field name" "$o" 'slot=".writeField" via="slot-name"'
+FIX="$ROOT/test/fnslotcpp2"
+[ -d "$FIX" ] || { echo "  FAIL  fixture dir missing: $FIX"; exit 2; }
+o="$( run --callers=VDerived::Act )"
+has   "V1 an override of a virtual method is a candidate of &VBase::Act" "$o" 'called_by="dispatch_v" called_at="virt.cc:26" via="slot"'
+o="$( run --callers=VDeeper::Act )"
+has   "V1b a two-level override too" "$o" 'called_by="dispatch_v"'
+o="$( run --callers=VDerived::Pure )"
+has   "V2 a pure virtual's override is the candidate of &VBase::Pure" "$o" 'called_by="dispatch_v"'
+o="$( run --callees=dispatch_v )"
+has   "V3 the candidate set: 3 Act bodies, VDerived::Pure, VBase::Plain" "$o" 'slot="VEnt.fn" via="slot" targets="5" shown="5"'
+hasnt "V3b the pure virtual's bodyless declaration is never a target" "$o" '<t n="VBase.Pure"'
+o="$( run --callees=go_hbase )"
+has   "V4 a hidden non-virtual method: the base's pointer lists both (a hedge)" "$o" '<t n="HDer.sh" p="virt.cc:'
+has   "V4b and the base's own" "$o" '<t n="HBase.sh" p="virt.cc:'
+o="$( run --callees=go_hder )"
+hasnt "V5 the derived class's pointer names its own only" "$o" '<t n="HBase.sh"'
+o="$( run --callers=Server::start )"
+hasnt "E1 an external &grpc::Server::start never binds the in-tree mine::Server" "$o" 'called_by="go_ext"'
+hasnt "E1b nor a bare spelling under using grpc::Server" "$o" 'called_by="go_using"'
+hasnt "E1c nor under using namespace grpc" "$o" 'called_by="go_dir"'
+has   "E2c an out-of-line mine::Server::both writing the bare &Server::start stays typed" "$o" 'called_by="both"'
+has   "E2d the global-anchored ::mine::Server stays typed" "$o" 'called_by="go_ofull"'
+o="$( run --callers=Server::stop )"
+has   "E2 &mine::Server::stop stays typed" "$o" 'called_by="go_mine"'
+has   "E2b a bare &Server::stop written inside namespace mine stays typed" "$o" 'called_by="go_inside"'
+hasnt "E1e &::Server::stop (a global class that does not exist in the tree) binds nothing" "$o" 'called_by="go_gwrong"'
+o="$( run --callers=Deep::run )"
+has   "E3 the full nested spelling stays typed" "$o" 'called_by="go_nfull"'
+has   "E3b a suffix of the nested path stays typed" "$o" 'called_by="go_nsuf"'
+hasnt "E1d a namesake namespace that is not the in-tree one binds nothing" "$o" 'called_by="go_oext"'
+o="$( run --callers=Anon::go )"
+has   "E3c an anonymous namespace is transparent" "$o" 'called_by="go_anon"'
+o="$( run --callers=Pair::f )"
+has   "E3d C++17 nested c1::c2::Pair" "$o" 'called_by="go_pfull"'
+has   "E3e and the suffix c2::Pair" "$o" 'called_by="go_psuf"'
+o="$( run --callers=Ver::vf )"
+has   "E3f an inline namespace is transparent" "$o" 'called_by="go_inl"'
+o="$( run --callers=IB::inh )"
+has   "I1 an inherited method names the base's definition" "$o" 'called_by="go_id"'
+o="$( run --callers=ICB::crt )"
+has   "I2 a CRTP base method names the base's definition" "$o" 'called_by="go_icd"'
+o="$( run --callers=IM1::dup )"
+hasnt "I3 two bases at one level: no target (IM1)" "$o" 'called_by='
+o="$( run --callers=IM2::dup )"
+hasnt "I3b (IM2)" "$o" 'called_by='
+o="$( run --callees=go_ie )"
+hasnt "I4 a base outside the tree: no target (a floor)" "$o" '<vs '
+o="$( run --callees=go_io )"
+has   "I5 an overloaded name lists every overload" "$o" 'slot="IOT.f" via="slot" targets="2" shown="2"'
+o="$( run --callees=go_id2 )"
+has   "I6 the derived class's own method stays typed" "$o" '<t n="ID.other"'
+o="$( run --callers=ops_mr_write )"
+hasnt "N24 f()->m() on a call result is no slot call (C++)" "$o" 'called_by="mr_paint"'
+o="$( run --callees=mr_paint )"
+hasnt "N24b and its callees list no slot" "$o" '<vs '
+o="$( run --callees=deep_use )"
+has   "L1 the typed tier discloses the name-tier store it hides" "$o" 'slot="L5_.cb" via="slot" slot_name_also="1" targets="1" shown="1"'
+o="$( run --callees=deep_use --json )"
+has   "L1j the --json twin carries it" "$o" '"slot_name_also":1'
+o="$( run --callers=deepfn )"
+has   "L2 --callers still says the name tier" "$o" 'called_by="deep_use"'
+o="$( run --callees=go_mine )"
+hasnt "L3 a typed-only site prints no slot_name_also" "$o" 'slot_name_also'
+o="$( run '--for=how does run_zzw call the Cls zzw slot' )"
+has   "F4 the cap keeps the field a caller calls through" "$( row "$o" Cls_ fields.c )" 'slot_fields="aaa=1,bbb=1,ccc=1,zzw=3@run_zzw" slot_fields_more="1"'
 if [ "$fail" -eq 0 ]; then echo "fnslotcheck: PASS"; else echo "fnslotcheck: FAIL"; fi
 exit "$fail"

@@ -663,6 +663,34 @@ inline constexpr char kValueRefSlotTagMark = '\x02';
 // resolves (a function returning a pointer, a macro of another shape) is an unknown type: the name tier.
 inline constexpr std::string_view kVrSlotMacroCastMark = "()";
 inline constexpr char kValueRefSlotBodyRel = '{';
+// FN-SLOT S2 fix 1 (F-2): a body fact's composeRel is kValueRefSlotBodyRel followed by the SCOPE PATH of the class (its enclosing named
+// namespaces and classes, outermost first, "::"-joined; an anonymous or inline namespace is transparent; "" = the global scope).
+// A C++ `&Cls::m` Value row's memberVia says where the pointer was written, so the join can tell the in-tree class from an external
+// namesake: the written QUALIFIER (`grpc` in `&grpc::Server::start`, a leading "::" kept; `using ns::Cls;` supplies it for a bare
+// `Cls`), the SITE (the named namespaces and classes enclosing the pointer, plus the scope an out-of-line definition's declarator
+// writes) and the `using namespace` DIRECTIVES in the file (',' joined), the three joined by kVrMemberScopeSep.
+inline constexpr char kVrMemberScopeSep = '\x1f';
+struct VrMemberScope
+{
+    std::string_view qualifier;
+    std::string_view site;
+    std::string_view directives;
+};
+inline VrMemberScope vrMemberScopeOf( std::string_view via ) noexcept
+{
+    VrMemberScope out;
+    const std::size_t a = via.find( kVrMemberScopeSep );
+    if( a == std::string_view::npos )
+    {
+        out.qualifier = via;
+        return out;
+    }
+    const std::size_t b = via.find( kVrMemberScopeSep, a + 1 );
+    out.qualifier       = via.substr( 0, a );
+    out.site            = via.substr( a + 1, b == std::string_view::npos ? std::string_view::npos : b - a - 1 );
+    out.directives      = b == std::string_view::npos ? std::string_view() : via.substr( b + 1 );
+    return out;
+}
 
 // Essential-complexity ev_why= reason vocabulary (the essential-complexity design note, §5.1). PUBLIC the
 // moment it ships (test/attrvocabcheck.sh's standing posture; test/essentialcxcheck.sh pins the spellings):

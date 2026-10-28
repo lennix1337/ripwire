@@ -16,6 +16,7 @@
 #include <functional>
 #include <iterator>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -813,6 +814,17 @@ public:
     }
     // fix1 F-1: how an argument row's bare callee resolves to its definitions (the registrars, ParamSlots) — before build().
     void resolveCalleesBy( std::function<std::vector<NodeId>( const Reference& )> ownersOf ) { m_ownersOf = std::move( ownersOf ); }
+    // FN-SLOT S2 fix 1: the scope path (enclosing named namespaces and classes, "::"-joined, "" = global) a class named `name` is
+    // defined in; nullopt when no body fact names it, or two files define it in different scopes.
+    std::optional<std::string_view> bodyScope( std::string_view name ) const
+    {
+        const auto it = m_bodyScope.find( std::string( name ) );
+        if( it == m_bodyScope.end() || it->second == kConflict )
+        {
+            return std::nullopt;
+        }
+        return std::string_view( it->second ).substr( 1 );
+    }
     // After every take: keys the slot values (`values`, ascending, with their resolved `targets`) and the calls by field.
     void build( const IngestResult& ing, std::span<const std::uint32_t> values, std::span<const std::vector<NodeId>> targets )
     {
@@ -928,10 +940,11 @@ private:
     void addFact( const Reference& r )
     {
         const std::string to = canonType( r.memberCtor, r.fileId );
-        if( r.composeRel.size() == 1 && r.composeRel[0] == kValueRefSlotBodyRel )
+        if( !r.composeRel.empty() && r.composeRel[0] == kValueRefSlotBodyRel )
         {
             // a struct body (`to` is its digest): the same tag or name with a DIFFERENT body in another file is no one type
             noteFact( m_body, r.recvVar, to );
+            noteFact( m_bodyScope, r.recvVar, "." + r.composeRel.substr( 1 ) );   // FN-SLOT S2 fix 1: where it is defined ("." = the global scope)
             return;
         }
         if( r.composeRel.empty() )
@@ -1044,6 +1057,7 @@ private:
     HashMap<std::string, std::string>                m_alias;          // typedef name → struct type (kConflict: files disagree)
     HashMap<std::string, std::string>                m_aliasInFile;    // "fileId#name" → struct type, the file's own typedef
     HashMap<std::string, std::string>                m_body;           // struct type → its body's digest (kConflict: files differ)
+    HashMap<std::string, std::string>                m_bodyScope;      // class name → "." + its scope path (kConflict: files differ)
     slot_join::ParamSlots                            m_params;         // IX1-V2: registrars' parameters stored into field slots
     slot_join::TypeKeys                              m_keys;           // fix1 F-2 / part 2: Go and Rust type keys
     std::function<std::vector<NodeId>( const Reference& )> m_ownersOf;  // fix1 F-1: a bare callee's definitions
@@ -1054,6 +1068,31 @@ private:
     HashMap<std::string, std::vector<std::uint32_t>> m_valuesByField;  // field → positions in m_values
     HashMap<std::string, std::vector<std::uint32_t>> m_callsByField;   // field → positions in m_callEnds
 };
+
+// class name → the base names it is written to extend (the inherit references, derived → base), name-keyed; one copy for the
+// value index's member-pointer candidates (structsToo: `struct D : B`) and PatternIndex's class family (classes only).
+inline HashMap<std::string, std::vector<std::string>> inheritEdges( const IngestResult& ing, bool structsToo )
+{
+    HashMap<std::string, std::vector<std::string>> out;
+    for( const Reference& r : ing.references )
+    {
+        if( !( r.isInherit || r.role == RefRole::Extends ) || r.fromSymbol >= ing.symbols.size() )
+        {
+            continue;
+        }
+        const Symbol& from = ing.symbols[ r.fromSymbol ];
+        if( from.kind != SymKind::Class && !( structsToo && from.kind == SymKind::Struct ) )
+        {
+            continue;
+        }
+        std::vector<std::string>& b = out[ from.name ];
+        if( std::ranges::find( b, r.calleeName ) == b.end() )
+        {
+            b.push_back( r.calleeName );
+        }
+    }
+    return out;
+}
 
 // The index every verb queries. Built from one IngestResult in O(refs + symbols); no graph needed.
 class ValueRefIndex
@@ -1632,7 +1671,7 @@ private:
         }
         if( fam == VrLangFamily::C )
         {
-            return memberOf( owner, fns );
+            return memberOf( owner, fns, module );
         }
         std::vector<NodeId> out;
         for( const NodeId id : fns )
@@ -1646,25 +1685,156 @@ private:
         }
         return out;
     }
-    // FN-SLOT S2 (C++ `&Cls::m`): class `owner`'s method among `fns` — its definitions with a body (an out-of-line definition, or
-    // `#ifdef` / per-platform twins of it), else its bodyless declarations. A symbol's scope is the innermost class name only (no
-    // namespace), so when the repo defines TWO classes of that name the owner is not proven: no target (a floor, never a guess).
-    std::vector<NodeId> memberOf( std::string_view owner, std::span<const NodeId> fns ) const
+    // FN-SLOT S2 (C++ `&Cls::m`): the methods a pointer to `owner`'s member `m` (`fns` = the functions named m) MAY run, as a
+    // candidate SET: the definitions with a body of the declaring class (owner itself, else — F-3 — the nearest base that
+    // defines m) and of every class derived from owner (F-1: a virtual m dispatches on the dynamic type; a non-virtual one an
+    // override merely hides is a hedge, never a pin); else the declaring class's bodyless declarations, but a class with an
+    // override never pins its own bodyless (possibly pure virtual) declaration. A symbol's scope is the innermost class name
+    // only (no namespace), so when the repo defines TWO classes of that name, or `via` (where the pointer was written, model.h
+    // VrMemberScope) says the class is not the in-tree one (F-2: `&grpc::Server::start` beside an in-tree `mine::Server`), the
+    // owner is not proven: no target (a floor, never a guess).
+    std::vector<NodeId> memberOf( std::string_view owner, std::span<const NodeId> fns, std::string_view via ) const
     {
-        if( classDefsNamed( owner ) > 1 )
+        if( classDefsNamed( owner ) > 1 || !ownerInScope( owner, vrMemberScopeOf( via ) ) )
         {
             return {};
         }
-        std::vector<NodeId> bodies, decls;
-        for( const NodeId id : fns )
+        const auto methodsOf = [ & ]( const std::vector<std::string>& classes ) -> std::vector<NodeId>
+        {
+            std::vector<NodeId> out;
+            for( const NodeId id : fns )
+            {
+                const Symbol& s = m_ing.symbols[id];
+                if( s.kind == SymKind::Method && valueRefFamily( s.lang ) == VrLangFamily::C && std::ranges::find( classes, s.scope ) != classes.end() )
+                {
+                    out.push_back( id );
+                }
+            }
+            return out;
+        };
+        const std::string declaring = declaringClass( std::string( owner ), methodsOf );
+        if( declaring.empty() )
+        {
+            return {};
+        }
+        std::vector<std::string> classes = derivedFrom( std::string( owner ) );
+        classes.push_back( declaring );
+        std::vector<NodeId> bodies, declOwn, declOver;
+        for( const NodeId id : methodsOf( classes ) )
         {
             const Symbol& s = m_ing.symbols[id];
-            if( s.kind == SymKind::Method && valueRefFamily( s.lang ) == VrLangFamily::C && s.scope == owner )
+            ( s.sigEndByte < s.endByte ? bodies : ( s.scope == declaring ? declOwn : declOver ) ).push_back( id );
+        }
+        return !bodies.empty() ? bodies : ( declOver.empty() ? declOwn : declOver );
+    }
+    // The class whose member `m` a pointer to `owner`'s m names: owner when it declares one, else the one nearest base that
+    // does ("" when none, an ambiguous base level, or a base name two classes share). `methodsOf( {class} )` is that class's m.
+    template <class MethodsOf>
+    std::string declaringClass( const std::string& owner, const MethodsOf& methodsOf ) const
+    {
+        buildHierarchy();
+        std::vector<std::string> level { owner };
+        for( int depth = 0; depth < 8 && !level.empty(); ++depth )
+        {
+            std::vector<std::string> holders, next;
+            for( const std::string& c : level )
             {
-                ( s.sigEndByte < s.endByte ? bodies : decls ).push_back( id );
+                if( !methodsOf( std::vector<std::string>{ c } ).empty() )
+                {
+                    holders.push_back( c );
+                }
+                if( const auto it = m_basesOf.find( c ); it != m_basesOf.end() )
+                {
+                    for( const std::string& b : it->second )
+                    {
+                        if( std::ranges::find( next, b ) == next.end() )
+                        {
+                            next.push_back( b );
+                        }
+                    }
+                }
+            }
+            if( holders.size() == 1 )
+            {
+                return classDefsNamed( holders[0] ) > 1 ? std::string() : holders[0];
+            }
+            if( !holders.empty() )
+            {
+                return {};   // two bases at one level declare m: which one `&Cls::m` names is not proven
+            }
+            level = std::move( next );
+        }
+        return {};
+    }
+    // Every class transitively derived from `owner` (by the written base names), excluding it; capped (a runaway guard).
+    std::vector<std::string> derivedFrom( const std::string& owner ) const
+    {
+        buildHierarchy();
+        std::vector<std::string> out;
+        std::vector<std::string> todo { owner };
+        while( !todo.empty() && out.size() < 4096 )
+        {
+            const std::string c = std::move( todo.back() );
+            todo.pop_back();
+            if( const auto it = m_derivedOf.find( c ); it != m_derivedOf.end() )
+            {
+                for( const std::string& d : it->second )
+                {
+                    if( d != owner && std::ranges::find( out, d ) == out.end() )
+                    {
+                        out.push_back( d );
+                        todo.push_back( d );
+                    }
+                }
             }
         }
-        return bodies.empty() ? decls : bodies;
+        return out;
+    }
+    // class name → its written bases, and base → its derived classes (name-keyed, built on first use like m_classDefs: the first
+    // use is always inside the constructor, which resolves every member-pointer row before any query).
+    void buildHierarchy() const
+    {
+        if( m_hierarchyBuilt )
+        {
+            return;
+        }
+        m_hierarchyBuilt = true;
+        m_basesOf        = inheritEdges( m_ing, /*structsToo=*/true );
+        for( const auto& [ derived, bases ] : m_basesOf )
+        {
+            for( const std::string& b : bases )
+            {
+                m_derivedOf[ b ].push_back( derived );
+            }
+        }
+    }
+    // F-2: is the in-tree class `owner` the one a `&[qualifier::]owner::m` written at `at` names? The scope path the class is
+    // defined in is read against the written qualifier (a suffix of it, or exactly it after a leading `::`); a bare owner is the
+    // class when it is global, defined around the pointer, or reached by a `using namespace` / `using` of the file.
+    bool ownerInScope( std::string_view owner, const VrMemberScope& at ) const
+    {
+        if( classDefsNamed( owner ) == 0 )
+        {
+            return at.qualifier.empty();   // no body names the class (its header is not indexed): the scope is unproven, only a bare spelling stays
+        }
+        const std::string_view path = m_slots.bodyScope( owner ).value_or( std::string_view() );   // a body without a fact: read as global
+        if( !at.qualifier.empty() )
+        {
+            const bool anchored = at.qualifier.starts_with( "::" );
+            const std::string_view q = anchored ? at.qualifier.substr( 2 ) : at.qualifier;
+            return anchored ? path == q : scopePathEndsWith( path, q );
+        }
+        return path.empty() || scopePathStartsWith( at.site, path )
+            || std::ranges::any_of( std::views::split( at.directives, ',' ), [ & ]( auto d ) { return scopePathEndsWith( path, std::string_view( d.begin(), d.end() ) ); } );
+    }
+    // `path` is `tail` or ends with it on a "::" boundary / `head` is `path` or leads it on one.
+    static bool scopePathEndsWith( std::string_view path, std::string_view tail ) noexcept
+    {
+        return !tail.empty() && ( path == tail || ( path.size() > tail.size() && path.ends_with( tail ) && path[ path.size() - tail.size() - 1 ] == ':' ) );
+    }
+    static bool scopePathStartsWith( std::string_view path, std::string_view head ) noexcept
+    {
+        return head.empty() || path == head || ( path.size() > head.size() && path.starts_with( head ) && path[ head.size() ] == ':' );
     }
     // How many C-family class / struct definitions (a body) the repo has named `name` (counted once, on first use).
     std::size_t classDefsNamed( std::string_view name ) const
@@ -1855,6 +2025,9 @@ private:
     const IngestResult&                                  m_ing;
     HashMap<std::string, std::vector<NodeId>>            m_fnByName;
     mutable HashMap<std::string, std::size_t>            m_classDefs;   // FN-SLOT S2: C-family class / struct name → definitions (classDefsNamed)
+    mutable HashMap<std::string, std::vector<std::string>> m_basesOf;     // FN-SLOT S2 fix 1: class → written bases (buildHierarchy)
+    mutable HashMap<std::string, std::vector<std::string>> m_derivedOf;    //   base → derived classes
+    mutable bool                                         m_hierarchyBuilt = false;
     mutable bool                                         m_classDefsBuilt = false;
     HashMap<std::string, std::vector<NodeId>>            m_fnByOwner;   // part 2: "family#Owner::name" → a path language's owned functions
     slot_join::RustPaths                                 m_paths;       // part 2 fix 1: where a Rust path reaches, when a path language is indexed
@@ -2029,17 +2202,7 @@ private:
             return;
         }
         m_basesBuilt = true;
-        for( const Reference& r : m_ing.references )
-        {
-            if( ( r.isInherit || r.role == RefRole::Extends ) && r.fromSymbol < m_ing.symbols.size() && m_ing.symbols[ r.fromSymbol ].kind == SymKind::Class )
-            {
-                std::vector<std::string>& b = m_basesOf[ m_ing.symbols[ r.fromSymbol ].name ];
-                if( std::ranges::find( b, r.calleeName ) == b.end() )
-                {
-                    b.push_back( r.calleeName );
-                }
-            }
-        }
+        m_basesOf    = inheritEdges( m_ing, /*structsToo=*/false );
     }
 
     const IngestResult&                                    m_ing;
@@ -2079,6 +2242,7 @@ struct SlotSiteRow
     bool                typed = false;   // the targets come from same-type slots (via="slot"), else name only (via="slot-name")
     std::vector<NodeId> targets;         // distinct functions, by name then path
     bool                anyDesignated = false;   // a target was stored by a designated `.f = fn` (the next= literal finds it)
+    std::uint32_t       nameAlso = 0;            // L-1: name-tier functions (a store whose struct type is unread) the same-type tier hides
 };
 
 struct ValueRefRows
@@ -2287,10 +2451,12 @@ inline SlotSiteRow slotSiteOf( const IngestResult& ing, const ValueRefIndex& idx
     site.ref   = call;
     site.slot  = idx.slots().nameOf( call );
     site.typed = std::ranges::any_of( hits, &SlotIndex::Hit::typed );
+    std::vector<NodeId> hidden;   // L-1: the name tier a typed site does not list
     for( const SlotIndex::Hit& h : hits )
     {
         if( site.typed && !h.typed )
         {
+            std::ranges::copy( idx.targetsOf( h.ref ), std::back_inserter( hidden ) );
             continue;
         }
         std::ranges::copy( idx.targetsOf( h.ref ), std::back_inserter( site.targets ) );
@@ -2307,6 +2473,9 @@ inline SlotSiteRow slotSiteOf( const IngestResult& ing, const ValueRefIndex& idx
         return ing.files[sa.fileId] != ing.files[sb.fileId] ? ing.files[sa.fileId] < ing.files[sb.fileId] : a < b;
     } );
     site.targets.erase( std::ranges::unique( site.targets ).begin(), site.targets.end() );
+    std::ranges::sort( hidden );
+    hidden.erase( std::ranges::unique( hidden ).begin(), hidden.end() );
+    site.nameAlso = static_cast<std::uint32_t>( std::ranges::count_if( hidden, [ & ]( NodeId f ) { return std::ranges::find( site.targets, f ) == site.targets.end(); } ) );
     return site;
 }
 // The calls through a struct field made in `fns` that reach at least one function; a site the container join already

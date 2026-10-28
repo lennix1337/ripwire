@@ -524,6 +524,115 @@ struct VrAnc
     bool          opensScope = false;
 };
 
+// ── FN-SLOT S2 fix 1: where a C++ class is defined and a `&Cls::m` is written (model.h VrMemberScope) ───────────────────────
+// One scope segment as a qualifier writes it: a template-id `W<int>` is W.
+inline std::string_view vrScopeSegment( TSNode seg, std::string_view src ) noexcept
+{
+    if( !ts_node_is_null( seg ) && kindIs( ts_node_type( seg ), "template_type" ) )
+    {
+        seg = fieldChild( seg, NodeField::Name );
+    }
+    return ts_node_is_null( seg ) ? std::string_view() : nodeTextOf( seg, src );
+}
+inline void vrAppendScope( std::string& path, std::string_view seg )
+{
+    if( !seg.empty() )
+    {
+        path += path.empty() ? "" : "::";
+        path += seg;
+    }
+}
+// `inline namespace v1 { … }`: the keyword is the namespace_definition's first, anonymous child. Qualifiers need not write it.
+inline bool vrInlineNamespace( TSNode ns, std::string_view src ) noexcept
+{
+    const TSNode first = ts_node_child( ns, 0 );
+    return !ts_node_is_null( first ) && !ts_node_is_named( first ) && nodeTextOf( first, src ) == "inline";
+}
+// The scope an out-of-line definition's declarator writes (`int a::C::f() { … }` is inside a::C), appended to `path`.
+inline void vrDeclaratorScope( TSNode fn, std::string_view src, std::string& path )
+{
+    TSNode d = fieldChild( fn, NodeField::Declarator );
+    for( int guard = 0; guard < 8 && !ts_node_is_null( d ) && !kindIs( ts_node_type( d ), "qualified_identifier" ); ++guard )
+    {
+        d = fieldChild( d, NodeField::Declarator );   // pointer / reference / function declarator
+    }
+    for( int guard = 0; guard < 8 && !ts_node_is_null( d ) && kindIs( ts_node_type( d ), "qualified_identifier" ); ++guard )
+    {
+        vrAppendScope( path, vrScopeSegment( fieldChild( d, NodeField::Scope ), src ) );
+        d = fieldChild( d, NodeField::Name );
+    }
+}
+// The named namespaces and classes enclosing anc[0..end) outermost first, "::"-joined (an anonymous or inline namespace is
+// transparent), then the scope of an out-of-line function definition among them.
+inline std::string vrEnclosingScopePath( std::span<const VrAnc> anc, std::size_t end, std::string_view src )
+{
+    std::string path;
+    for( const VrAnc& a : anc.first( end ) )
+    {
+        if( kindIs( a.kind, "namespace_definition" ) )
+        {
+            if( !vrInlineNamespace( a.node, src ) )
+            {
+                const TSNode nm = fieldChild( a.node, NodeField::Name );
+                vrAppendScope( path, ts_node_is_null( nm ) ? std::string_view() : nodeTextOf( nm, src ) );
+            }
+        }
+        else if( kindIs( a.kind, "class_specifier" ) || kindIs( a.kind, "struct_specifier" ) || kindIs( a.kind, "union_specifier" ) )
+        {
+            vrAppendScope( path, vrScopeSegment( fieldChild( a.node, NodeField::Name ), src ) );
+        }
+        else if( kindIs( a.kind, "function_definition" ) )
+        {
+            vrDeclaratorScope( a.node, src, path );
+        }
+    }
+    return path;
+}
+// This file's `using ns::Cls;` declarations and `using namespace ns;` directives so far (anywhere in the file: a floor in the
+// declining direction only — a qualifier that is not the class's own scope declines, never binds).
+struct VrUsings
+{
+    std::vector<std::pair<std::string, std::string>> declared;     // (Cls, the qualifier `ns` written before it)
+    std::vector<std::string>                         directives;   // `ns` of each `using namespace ns;`
+
+    // `n` is a using_declaration: `using namespace ns;` (the anonymous `namespace` token is its second child) or `using ns::Cls;`.
+    void note( TSNode n, std::string_view src )
+    {
+        const TSNode target = ts_node_named_child( n, 0 );
+        if( ts_node_is_null( target ) )
+        {
+            return;
+        }
+        const TSNode           second = ts_node_child( n, 1 );
+        const std::string_view full   = nodeTextOf( target, src );
+        if( !ts_node_is_named( second ) && nodeTextOf( second, src ) == "namespace" )
+        {
+            directives.emplace_back( full );
+            return;
+        }
+        if( const std::size_t cut = full.rfind( "::" ); cut != std::string_view::npos )
+        {
+            declared.emplace_back( std::string( full.substr( cut + 2 ) ), std::string( full.substr( 0, cut ) ) );
+        }
+    }
+    // The qualifier a `using` of class `owner` writes ("" when none).
+    std::string_view qualifierOf( std::string_view owner ) const noexcept
+    {
+        const auto it = std::ranges::find( declared, owner, &std::pair<std::string, std::string>::first );
+        return it == declared.end() ? std::string_view() : std::string_view( it->second );
+    }
+    std::string directivesJoined() const
+    {
+        std::string out;
+        for( const std::string& d : directives )
+        {
+            out += out.empty() ? "" : ",";
+            out += d;
+        }
+        return out;
+    }
+};
+
 class ValueRefWalk
 {
 public:
@@ -1198,6 +1307,10 @@ private:
             noteSlotTypes( n, a.kind );   // IX-1: the declared struct types, beside the names (inert without a slot row)
         }
         noteStructBody( n, a.kind );      // IX-1: a struct body's field order and facts (m_anc.back() is the parent)
+        if( m_slot != nullptr && m_slot->memberPointers && kindIs( a.kind, "using_declaration" ) )
+        {
+            m_usings.note( n, m_src );   // FN-SLOT S2 fix 1: where a bare `&Cls::m` may name an external class
+        }
         if( m_fwdArmed )
         {
             noteForwardProof( n, a.kind );
@@ -1740,7 +1853,7 @@ private:
 
     // The classified value `name` at anc[i] (effective position anc[j]): a container it fills is marked fed (its scope's, or
     // the file's), then its Value row. `owner` non-empty: a method value of that receiver type (methodValueAt).
-    void landValue( std::size_t i, std::size_t j, std::string_view name, Slot& s, bool fileShadow, std::string_view owner )
+    void landValue( std::size_t i, std::size_t j, std::string_view name, Slot& s, bool fileShadow, std::string_view owner, std::string via = {} )
     {
         if( !s.container.empty() && ( s.scope == 'f' || s.scope == 'l' ) )
         {
@@ -1757,7 +1870,7 @@ private:
             }
         }
 
-        emitValueRef( i, j, name, s, fileShadow, owner );
+        emitValueRef( i, j, name, s, fileShadow, owner, std::move( via ) );
     }
 
     // A node a method value may be written as: Go `b.opPlan` (methodValueAt), C++ `&Cls::m` (memberPointerValueAt).
@@ -1835,22 +1948,29 @@ private:
         {
             return;
         }
-        TSNode scope = child( m_anc[i].node, m_fScope );
-        TSNode name  = child( m_anc[i].node, m_fName );
-        for( int guard = 0; guard < 8 && !ts_node_is_null( name ) && kindIs( ts_node_type( name ), "qualified_identifier" ); ++guard )
+        // the written chain `[::]a::b::Cls::m`: every scope segment, the class last
+        std::vector<std::string_view> segs;
+        TSNode                        scope = child( m_anc[i].node, m_fScope );
+        TSNode                        name  = child( m_anc[i].node, m_fName );
+        const bool                    anchored = ts_node_is_null( scope );
+        for( int guard = 0; guard < 8; ++guard )
         {
+            if( !ts_node_is_null( scope ) )
+            {
+                segs.push_back( vrScopeSegment( scope, m_src ) );
+            }
+            if( ts_node_is_null( name ) || !kindIs( ts_node_type( name ), "qualified_identifier" ) )
+            {
+                break;
+            }
             scope = child( name, m_fScope );
             name  = child( name, m_fName );
         }
-        if( ts_node_is_null( scope ) || ts_node_is_null( name ) || !kindIs( ts_node_type( name ), "identifier" ) )
-        {
-            return;
-        }
-        const std::string_view owner = kindIs( ts_node_type( scope ), "template_type" ) ? text( child( scope, m_fName ) ) : text( scope );
-        if( owner.empty() )
+        if( segs.empty() || segs.back().empty() || ts_node_is_null( name ) || !kindIs( ts_node_type( name ), "identifier" ) )
         {
             return;   // `&::f`: the global namespace, no class
         }
+        const std::string_view owner = segs.back();
         std::size_t j = i;
         while( j > 1 && transparent( j ) )
         {
@@ -1861,7 +1981,23 @@ private:
         {
             return;
         }
-        landValue( i, j, text( name ), s, false, owner );
+        landValue( i, j, text( name ), s, false, owner, memberScopeOf( segs, anchored ) );
+    }
+
+    // model.h VrMemberScope of a `&[::]a::Cls::m` written in segs (the class last): the qualifier, the enclosing scope, the directives.
+    std::string memberScopeOf( const std::vector<std::string_view>& segs, bool anchored ) const
+    {
+        std::string qualifier = anchored ? "::" : "";
+        for( std::size_t k = 0; k + 1 < segs.size(); ++k )
+        {
+            qualifier += k == 0 ? "" : "::";
+            qualifier += segs[k];
+        }
+        if( segs.size() == 1 && !anchored )
+        {
+            qualifier = std::string( m_usings.qualifierOf( segs.back() ) );   // `using ns::Cls;` then a bare `&Cls::m`
+        }
+        return qualifier + kVrMemberScopeSep + vrEnclosingScopePath( m_anc, m_anc.size() - 1, m_src ) + kVrMemberScopeSep + m_usings.directivesJoined();
     }
 
     // IX1-V2: a PARAMETER (`impl`, position k of the function `fnName` declared at scope d) stored into a field slot
@@ -1907,7 +2043,7 @@ private:
     }
 
     // The Value row of identifier anc[i] (effective position anc[j]) landing in slot `s`.
-    void emitValueRef( std::size_t i, std::size_t j, std::string_view name, Slot& s, bool fileShadow, std::string_view owner )
+    void emitValueRef( std::size_t i, std::size_t j, std::string_view name, Slot& s, bool fileShadow, std::string_view owner, std::string via )
     {
         RawRef r;
         r.fileId        = m_fileId;
@@ -1924,6 +2060,7 @@ private:
         r.argCountKnown = s.isArg;
         valueSlot( j, r );   // IX-1: a struct-field slot's type and field (inert without a slot row)
         r.memberRoot = std::string( owner );   // IX1-V2: a method value's receiver type (methodValueAt), "" otherwise
+        r.memberVia  = std::move( via );       // FN-SLOT S2: C++ `&Cls::m` — where it was written (model.h VrMemberScope), "" otherwise
         m_out.push_back( std::move( r ) );
     }
 
@@ -2510,7 +2647,7 @@ private:
         }
         if( owner.front() != '@' )   // an anonymous struct's "@LINE" key is its own file's already
         {
-            emitSlotFact( n, owner, std::string_view( &kValueRefSlotBodyRel, 1 ), vrBodyDigest( text( body ) ) );
+            emitSlotFact( n, owner, kValueRefSlotBodyRel + vrEnclosingScopePath( m_anc, m_anc.size(), m_src ), vrBodyDigest( text( body ) ) );
         }
         VrStructFields sf;
         sf.key = owner;
@@ -3360,6 +3497,7 @@ private:
     std::vector<VrStructFields>    m_structs;           // IX-1: this file's struct bodies so far
     std::vector<std::pair<std::string, std::string_view>> m_callableFields;   // IX-1: (struct, function-pointer field) this file declares
     VrAliases                                             m_aliases;          // IX-1: this file's typedef / using alias → struct type key
+    VrUsings                                              m_usings;           // FN-SLOT S2 fix 1: this file's `using` declarations and directives so far (C++)
     VrScalarTypedefs                                      m_scalarTypedefs;   // IX-1: this file's typedefs of scalar types
     std::uint32_t                  m_fileId;
     std::string_view               m_src;

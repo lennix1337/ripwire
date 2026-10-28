@@ -360,7 +360,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "through",           "through=: the written callee this function may call it through", false, "vr" },
     // IX-1 slot-type join (src/valuerefs.h slotJoinLegend): present-only; a struct-field slot and the calls through that field.
     { "called_at",         "vr called_at= via=slot|slot-name: called_by='s calls through that struct field, file:line in the same order; slot = same declared struct type, slot-name = field name only (a type unknown); MAY call, not a proven call, in no count", false, "vr" },
-    { "slot_name_also",    "slot_name_also=K: K name-only callers hidden behind the same-type ones", false, "vr" },
+    { "slot_name_also",    "slot_name_also=K: K name-only callers (vr) or functions (vs) hidden behind the same-type ones", true },
     { "cands",             "vr cands=K: the first called_by call's slot holds K distinct functions, this one among them (which runs is decided at run time)", false, "vr" },
     // HOP1 (src/backhops.h kImpactRingLegend): --impact's hedged slot ring, present-only
     { "reaches_hedged",    "reaches_hedged=N: N functions MAY reach of= through a hedged hop: one or two calls through a struct field or container (3 field calls within 16 callers), plus their proven callers past narrow hops; never in reaches= or any count" },
