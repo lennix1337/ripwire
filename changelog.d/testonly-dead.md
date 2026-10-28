@@ -8,8 +8,8 @@ leading-underscore name or module/package (PEP 8's internal-interface convention
 the name in a non-test code file, outside its own signature, keeps a function off the list, so an aliased
 import or a module-level call never leaves a used function on it.
 
-Kept off the list: a def a setup.cfg or pyproject.toml entry point names, a def a package glob-imports
-(`from ._impl import *`), a def a notebook cell spells, and any `conftest.py` def (pytest's own test file).
+Kept off the list: a def that a `setup.cfg` or `pyproject.toml` entry point names, a def that a package glob-imports
+(`from ._impl import *`), a def that a notebook cell spells, and any `conftest.py` def (pytest's own test file).
 
 Known floors (a candidate, not proof; the default legend names them):
 
