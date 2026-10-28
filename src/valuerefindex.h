@@ -341,17 +341,18 @@ private:
         const std::size_t c      = t.rfind( "::" );
         std::string_view  leaf   = c == std::string_view::npos ? t : t.substr( c + 2 );
         std::string       module = c == std::string_view::npos ? prefix : CallResultTypes::joinModule( prefix, t.substr( 0, c ) );
+        std::string       own;   // the `self` module's name, copied BEFORE `module` is reassigned (a view into it would dangle)
         if( leaf == "self" )
         {
             const std::size_t up = module.rfind( "::" );   // `a::b::{self}` binds module b
-            leaf   = std::string_view( module ).substr( up == std::string::npos ? 0 : up + 2 );
-            module = up == std::string::npos ? std::string() : module.substr( 0, up );
+            own                  = module.substr( up == std::string::npos ? 0 : up + 2 );
+            module               = up == std::string::npos ? std::string() : module.substr( 0, up );
             if( alias.empty() )
             {
-                const std::string own( leaf );
                 cb( std::string_view( own ), module, false );
                 return;
             }
+            leaf = own;
         }
         if( leaf.empty() || leaf == "*" )
         {
