@@ -28,6 +28,7 @@
 #include "model.h"
 #include "resolve.h"            // trimWs
 #include "infra/namesplit.h"   // isIdentChar
+#include "infra/sortutil.h"    // svLess — the explicit byte order for string searches (portablebuildcheck #6)
 #include "valuerefindex.h"      // ClassFamilies — owner class and written-base family
 
 #include <algorithm>
@@ -100,6 +101,9 @@ inline std::vector<std::uint32_t> mergedSiteLists( std::vector<std::uint32_t> si
 class HandlerRules
 {
 public:
+    // The rule is a Python construct: the Python value-ref family is the one language it reads.
+    static bool isPython( Lang l ) noexcept { return valueRefFamily( l ) == ValueRefFamily::Py; }
+
     explicit HandlerRules( const IngestResult& ing ) : m_ing( ing ), m_classes( ing ) {}
 
     // Built on first use; a tree with no Python __init_subclass__ write pays one reference scan.
@@ -128,7 +132,7 @@ public:
         }
         for( const HandlerPostSite& s : m_sites )
         {
-            if( m_ing.references[ s.ref ].fromSymbol != d && std::ranges::binary_search( s.names, std::string_view( m_ing.symbols[d].name ) ) )
+            if( m_ing.references[ s.ref ].fromSymbol != d && std::ranges::binary_search( s.names, std::string_view( m_ing.symbols[d].name ), sortutil::svLess ) )
             {
                 out.push_back( s.ref );
             }
@@ -251,7 +255,7 @@ private:
             }
             for( const Symbol& f : m_ing.symbols )
             {
-                if( f.name == r.calleeName && f.lang == Lang::Python && f.kind == SymKind::Function )
+                if( f.name == r.calleeName && isPython( f.lang ) && f.kind == SymKind::Function )
                 {
                     const std::string_view body = span( f );
                     if( body.find( "[a-z][A-Z]" ) != std::string_view::npos && body.find( ".lower()" ) != std::string_view::npos )
@@ -405,7 +409,7 @@ private:
     {
         for( const Symbol& w : m_ing.symbols )
         {
-            if( w.lang != Lang::Python || w.name != "__init_subclass__" || ( w.kind != SymKind::Function && w.kind != SymKind::Method ) )
+            if( !isPython( w.lang ) || w.name != "__init_subclass__" || ( w.kind != SymKind::Function && w.kind != SymKind::Method ) )
             {
                 continue;
             }
@@ -429,12 +433,12 @@ private:
         for( const Symbol& s : m_ing.symbols )
         {
             const bool fn = s.kind == SymKind::Function || s.kind == SymKind::Method;
-            if( s.lang == Lang::Python && fn && m_classes.ownerOf( s.id ) != kNoNode )
+            if( isPython( s.lang ) && fn && m_classes.ownerOf( s.id ) != kNoNode )
             {
                 m_inClass[ s.id ] = 1;
                 m_methodsByName[ std::string_view( s.name ) ].push_back( s.id );
             }
-            else if( s.lang == Lang::Python && s.kind == SymKind::Class && !handlerNameOf( s.id ).empty() )
+            else if( isPython( s.lang ) && s.kind == SymKind::Class && !handlerNameOf( s.id ).empty() )
             {
                 m_messagesByName[ std::string_view( s.name ) ].push_back( s.id );
             }
@@ -455,7 +459,7 @@ private:
         m_fnsOfFile.assign( m_ing.files.size(), {} );
         for( const Symbol& s : m_ing.symbols )
         {
-            if( s.lang == Lang::Python && ( s.kind == SymKind::Function || s.kind == SymKind::Method ) )
+            if( isPython( s.lang ) && ( s.kind == SymKind::Function || s.kind == SymKind::Method ) )
             {
                 m_fnsOfFile[ s.fileId ].push_back( s.id );
             }
@@ -526,7 +530,7 @@ private:
         for( std::uint32_t i = 0; i < m_ing.references.size(); ++i )
         {
             const Reference& r = m_ing.references[i];
-            if( r.role != RefRole::Call || r.lang != Lang::Python || r.fromSymbol >= m_ing.symbols.size() || !posters.contains( std::string_view( r.calleeName ) ) )
+            if( r.role != RefRole::Call || !isPython( r.lang ) || r.fromSymbol >= m_ing.symbols.size() || !posters.contains( std::string_view( r.calleeName ) ) )
             {
                 continue;
             }
@@ -536,7 +540,7 @@ private:
             {
                 site.names.push_back( handlerNameOf( c ) );
             }
-            std::ranges::sort( site.names );
+            std::ranges::sort( site.names, sortutil::svLess );
             site.names.erase( std::ranges::unique( site.names ).begin(), site.names.end() );
             if( !site.names.empty() )
             {

@@ -1618,11 +1618,11 @@ inline PathHandlerRule pathHandlerRule( const IngestResult& ing, const NameKeyHo
     {
         return out;
     }
-    std::ranges::sort( hit );
+    std::ranges::sort( hit, sortutil::svLess );
     hit.erase( std::ranges::unique( hit ).begin(), hit.end() );
     for( const NodeId d : dstDefs )
     {
-        if( std::ranges::binary_search( hit, ing.symbols[d].name ) && hr.classes().ownerOf( d ) != kNoNode )
+        if( std::ranges::binary_search( hit, std::string_view( ing.symbols[d].name ), sortutil::svLess ) && hr.classes().ownerOf( d ) != kNoNode )
         {
             ++out.defs;
             out.listed.push_back( d );
