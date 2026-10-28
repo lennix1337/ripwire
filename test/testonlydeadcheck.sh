@@ -109,7 +109,7 @@ chk "A10 second-page run" "$F" --dead-code --limit=1 --offset=1 && P2="$CHK" || 
 if printf '%s' "$P2" | grep -q '<to n="'; then no "A10 <to> rows repeated past the first page"; else ok "A10 <to> rows ride the first page only"; fi
 
 # ── fix round 1 fixtures (tree G) ──────────────────────────────────────────────────────────────────────────────────────────
-G="$TMP/gx"; mkdir -p "$G/pkg" "$G/pkg/pkg3" "$G/pkg/sub" "$G/tests" "$G/src" "$G/web/src" "$G/web/test" "$G/notebooks" "$G/rs"
+G="$TMP/gx"; mkdir -p "$G/pkg" "$G/pkg/pkg3" "$G/pkg/pkg4" "$G/pkg/sub" "$G/tests" "$G/src" "$G/web/src" "$G/web/test" "$G/notebooks" "$G/rs"
 # A12/A13: the candidate's own test-ness, and the dunder modules
 cat > "$G/tests/_helpers.py" <<'P'
 def _fixture_value():
@@ -160,6 +160,20 @@ static int c_dead_zero(int x)
     return x + 7;
 }
 C
+# A14b (CR 4396503844): `static` inside [ ] qualifies the array PARAMETER, it is no storage class: this function is external
+cat > "$G/src/arrparam.c" <<'C'
+int c_ext_arr(int v[static 1])
+{
+    return v[0];
+}
+C
+cat > "$G/tests/test_arrparam.c" <<'C'
+int run_arr_test(void)
+{
+    int a[1] = { 1 };
+    return c_ext_arr(a);
+}
+C
 # A15: entry points
 cat > "$G/pkg/_cli.py" <<'P'
 def cli_entry():
@@ -185,6 +199,14 @@ P
 cat > "$G/pkg/pkg3/_impl.py" <<'P'
 def compute(x):
     return x + 1
+P
+# A16b (CR 4396503848): a glob import with a run of spaces before `import` still names its module (`_impl2`, not `_impl2 `)
+cat > "$G/pkg/pkg4/__init__.py" <<'P'
+from ._impl2  import *
+P
+cat > "$G/pkg/pkg4/_impl2.py" <<'P'
+def compute2(x):
+    return x + 4
 P
 cat > "$G/pkg/pkg3/_solo.py" <<'P'
 def solo_compute(x):
@@ -228,6 +250,7 @@ from pkg._cli2 import cli_entry2
 from pkg.pkg3._impl import compute
 from pkg.pkg3._solo import solo_compute
 from pkg.pkg3._allx import all_compute
+from pkg.pkg4._impl2 import compute2
 from pkg._tools import nb_helper, nb_unused
 
 def test_g():
@@ -235,7 +258,7 @@ def test_g():
     assert api(1) == 1 and entry() == 0
     assert serve("x") == "x" and render() == "static"
     assert cli_entry() == 0 and cli_entry2() == 0
-    assert compute(1) == 2 and solo_compute(1) == 3 and all_compute(1) == 4
+    assert compute(1) == 2 and solo_compute(1) == 3 and all_compute(1) == 4 and compute2(1) == 5
     assert nb_helper(1) == 1 and nb_unused(1) == 1
 P
 chk "A12-A18 tree G" "$G" --dead-code && GOUT="$CHK" || GOUT=""
@@ -246,12 +269,35 @@ if gto api || gto entry; then no "A13 a dunder-module public def was listed (api
 if gto serve || gto render || gto pickMode; then no "A14 a Python static= parameter / 'static' string / TS 'static' literal counted as linkage for <to>"; else ok "A14 <to>: static is not a keyword outside C/C++/ObjC"; fi
 if gd serve_zero || gd pickModeZero || gd leak_zero; then no "A14 a Python parameter / TS literal / Rust 'static counted as linkage for <d>"; else ok "A14 <d>: static is not a keyword outside C/C++/ObjC"; fi
 if gd c_dead_zero; then ok "A14 near miss: a C static zero-caller function is still a <d> row"; else no "A14 near miss: c_dead_zero lost its <d> row"; fi
+if gto c_ext_arr; then no "A14b a C function with a static ARRAY-parameter bound (external linkage) was listed as test-only"; else ok "A14b int f(int v[static 1]) is external: not a <to> row"; fi
+if gto compute2; then no "A16b a def a double-space glob import (from ._impl2  import *) re-exports was listed"; else ok "A16b a glob import with extra spaces before import still names its module"; fi
 if gto cli_entry || gto cli_entry2; then no "A15 a setup.cfg / pyproject entry-point target was listed (cli_entry/cli_entry2)"; else ok "A15 a manifest entry-point target is live"; fi
 if gto compute || gto all_compute; then no "A16 a package glob / __all__ re-exported def was listed (compute/all_compute)"; else ok "A16 a glob / __all__ re-exported def is live"; fi
 if gto solo_compute; then ok "A16 near miss: a private module no package re-exports is still listed"; else no "A16 near miss: solo_compute lost its row (glob match too wide)"; fi
 if gto _make_db || gto _make_sub_db; then no "A17 a conftest.py def was listed"; else ok "A17 conftest.py defs are test code, not <to> rows"; fi
 if gto nb_helper; then no "A18 a def a notebook cell uses was listed"; else ok "A18 a notebook use keeps it off"; fi
 if gto nb_unused; then ok "A18 near miss: a def no notebook names is still listed"; else no "A18 near miss: nb_unused lost its row"; fi
+# A20 (CR 4396503875): a library file the index lists but vetting cannot read vets NOTHING, so no test-only row is claimed and stderr says so.
+# The unreadable file is a cached one (the warm run lists it from the cache without opening it); it spells the candidate in a string only.
+H="$TMP/hx"; mkdir -p "$H/src" "$H/tests"
+printf 'static int h_only_tested(int x)\n{\n    return x + 1;\n}\n' > "$H/src/core.c"
+printf 'int run_h_test(void)\n{\n    return h_only_tested(1);\n}\n' > "$H/tests/test_core.c"
+printf 'const char *nm = "h_only_tested";\nint user_of(int x)\n{\n    return x * 2;\n}\n' > "$H/src/user.c"
+HC="$TMP/h.cache"
+if chk "A20 readable run (cold, caches)" "$H" --dead-code --cache="$HC"; then
+    if printf '%s' "$CHK" | grep -q '<to n="h_only_tested"'; then no "A20 premise: a string spelling in a library file did not keep the row off"; else ok "A20 premise: the library file's spelling keeps h_only_tested off while readable"; fi
+fi
+chmod 000 "$H/src/user.c"
+if [ "$( id -u )" != 0 ] && ! cat "$H/src/user.c" >/dev/null 2>&1; then
+    HERR="$TMP/h.err"
+    HOUT="$( cd "$H" && "$BIN" "$H" --cache="$HC" --dead-code 2>"$HERR" )"; hrc=$?
+    if [ "$hrc" = 0 ] && printf '%s' "$HOUT" | grep -q '<dead-code' && ! printf '%s' "$HOUT" | grep -q '<to n="h_only_tested"' && grep -q 'cannot read src/user.c' "$HERR"
+    then ok "A20 an unreadable library file: no test-only claim, and stderr names the file"
+    else no "A20 unreadable library file: rc=$hrc, <to> row or stderr line wrong ($( grep -c . "$HERR" ) stderr lines)"; fi
+else
+    echo "  SKIP  A20 cannot make a file unreadable here (root or no chmod)"
+fi
+chmod 644 "$H/src/user.c"
 # A19: the compact legend (the default) names the floor classes, present-only with the rows
 if printf '%s' "$OUT" | grep -q 'test-only=N' && printf '%s' "$OUT" | grep -q 'run time'; then ok "A19 the compact clause names the floor classes"; else no "A19 the compact test-only clause does not name the floor classes"; fi
 if command -v xmllint >/dev/null 2>&1; then

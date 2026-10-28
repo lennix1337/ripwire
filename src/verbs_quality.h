@@ -2679,9 +2679,10 @@ inline bool spelledOutsideOwnSignature( const rw::IngestResult& ing, std::string
 }
 
 // D1: the text a library file contributes to the name vetting, or nullopt when it contributes none: a test file, a prose file
-// (markdown, .txt: a mention there is documentation, not a use) or an unreadable one. A notebook is CODE in a JSON container,
-// so its code and markdown cells are read as text (docparse::extractIpynb) — a def only a notebook calls is in use.
-inline std::optional<std::string> libraryFileText( const rw::IngestResult& ing, std::uint32_t fileId )
+// (markdown, .txt: a mention there is documentation, not a use) or an unreadable one (`unreadable` set: CR 4396503875, a failed
+// read is not an exclusion). A notebook is CODE in a JSON container, so its code and markdown cells are read as text
+// (docparse::extractIpynb) — a def only a notebook calls is in use.
+inline std::optional<std::string> libraryFileText( const rw::IngestResult& ing, std::uint32_t fileId, bool& unreadable )
 {
     using namespace rw;
     const std::string_view rel = rootRelPath( ing, fileId );
@@ -2691,6 +2692,7 @@ inline std::optional<std::string> libraryFileText( const rw::IngestResult& ing, 
         return std::nullopt;
     }
     std::optional<std::string> bytes = docparse::detail::readWholeFile( diskPath( ing, fileId ) );
+    unreadable = !bytes;
     if( bytes && ext == ".ipynb" )
     {
         return docparse::extractIpynb( *bytes );
@@ -2713,11 +2715,18 @@ inline void dropTestOnlySpelledInLibrary( const rw::IngestResult& ing, std::vect
     names.erase( std::ranges::unique( names ).begin(), names.end() );
     std::vector<std::string_view> spelled;
     std::vector<std::string>      globbed;   // module tails a library file glob-imports (owned: the file text is gone after its turn)
+    std::size_t                   unread = 0;   // library files the index lists that this vetting could not read
     for( std::uint32_t fileId = 0; fileId < ing.files.size(); ++fileId )
     {
-        const std::optional<std::string> text = libraryFileText( ing, fileId );
+        bool                             unreadable = false;
+        const std::optional<std::string> text       = libraryFileText( ing, fileId, unreadable );
         if( !text )
         {
+            if( unreadable )
+            {   // CR 4396503875: a file whose uses are unknown vets nothing, so no test-only claim is made on its behalf
+                ++unread;
+                rw::emitTo( stderr, "ripwire: --dead-code: cannot read {} — its uses of the test-only candidates are unknown\n", rootRelPath( ing, fileId ) );
+            }
             continue;
         }
         for( std::string_view name : names )
@@ -2731,6 +2740,12 @@ inline void dropTestOnlySpelledInLibrary( const rw::IngestResult& ing, std::vect
         {
             globbed.emplace_back( tail );
         }
+    }
+    if( unread > 0 )
+    {
+        rw::emitTo( stderr, "ripwire: --dead-code: {} library file(s) could not be read, so no test-only row is listed (a row fewer, never a use missed)\n", unread );
+        testOnly.clear();
+        return;
     }
     std::ranges::sort( spelled, sortutil::svLess );
     std::ranges::sort( globbed, sortutil::svLess );

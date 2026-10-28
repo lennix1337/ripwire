@@ -10095,6 +10095,17 @@ inline bool offsetInComment( std::string_view source, std::size_t spanBegin, std
     return open != std::string_view::npos && span.find( "*/", open + 2 ) == std::string_view::npos;
 }
 
+// CR 4396503844: C99 `int api(int values[static 1])` — `static` inside [ ] qualifies the array parameter, it is no storage class.
+inline bool insideSquareBrackets( std::string_view source, std::size_t begin, std::size_t position ) noexcept
+{
+    int depth = 0;
+    for( std::size_t at = begin; at < position; ++at )
+    {
+        depth += source[ at ] == '[' ? 1 : source[ at ] == ']' && depth > 0 ? -1 : 0;
+    }
+    return depth > 0;
+}
+
 inline bool sourceHasStaticToken( std::string_view source, std::size_t sigStartByte, std::size_t sigEndByte ) noexcept
 {
     const std::size_t begin = std::min( sigStartByte, source.size() );
@@ -10110,7 +10121,7 @@ inline bool sourceHasStaticToken( std::string_view source, std::size_t sigStartB
         const auto isIdentifier = []( char c ) noexcept { return std::isalnum( static_cast<unsigned char>( c ) ) || c == '_'; };
         const bool leftBoundary  = position == begin || !isIdentifier( source[ position - 1 ] );
         const bool rightBoundary = position + token.size() == end || !isIdentifier( source[ position + token.size() ] );
-        if( leftBoundary && rightBoundary && !offsetInComment( source, begin, position ) )
+        if( leftBoundary && rightBoundary && !offsetInComment( source, begin, position ) && !insideSquareBrackets( source, begin, position ) )
         {
             return true;
         }
@@ -10282,12 +10293,18 @@ inline std::vector<std::string_view> pythonGlobImportTails( std::string_view tex
         std::string_view  line = text.substr( at, eol - at );
         at                     = eol + 1;
         line.remove_prefix( std::min( line.find_first_not_of( " \t" ), line.size() ) );
-        const std::size_t imp = line.find( " import " );
-        if( !line.starts_with( "from " ) || imp == std::string_view::npos )
+        // CR 4396503848: any run of spaces or tabs may stand around `import` (`from ._impl  import *`)
+        std::size_t imp = line.find( "import" );
+        while( imp != std::string_view::npos && !( imp > 0 && ( line[ imp - 1 ] == ' ' || line[ imp - 1 ] == '\t' )
+                                                   && imp + 6 < line.size() && ( line[ imp + 6 ] == ' ' || line[ imp + 6 ] == '\t' ) ) )
+        {
+            imp = line.find( "import", imp + 1 );
+        }
+        if( !( line.starts_with( "from " ) || line.starts_with( "from\t" ) ) || imp == std::string_view::npos )
         {
             continue;
         }
-        std::string_view after = line.substr( imp + 8 );
+        std::string_view after = line.substr( imp + 7 );
         after.remove_prefix( std::min( after.find_first_not_of( " \t" ), after.size() ) );
         if( !after.starts_with( '*' ) )
         {
@@ -10295,6 +10312,7 @@ inline std::vector<std::string_view> pythonGlobImportTails( std::string_view tex
         }
         std::string_view module = line.substr( 5, imp - 5 );
         module.remove_prefix( std::min( module.find_first_not_of( " \t" ), module.size() ) );
+        module.remove_suffix( module.size() - std::min( module.find_last_not_of( " \t" ) + 1, module.size() ) );
         const std::size_t dot = module.rfind( '.' );
         const std::string_view tail = dot == std::string_view::npos ? module : module.substr( dot + 1 );
         if( !tail.empty() )
