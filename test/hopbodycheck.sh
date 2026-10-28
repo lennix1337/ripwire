@@ -114,7 +114,7 @@ run "$LOO" --callees=handleLooseRequest >"$TMP/f4c"
 
 # FIX1 fixtures (the route ones run from a copy outside test/: a reader under a test path is not a handler_rule reader)
 HB="test/hopbodyfix"
-cp -R "$HB/route" "$HB/routecap" "$HB/routename" "$HB/routebig" "$HB/routededupe" "$HB/routeslot" "$TMP/"
+cp -R "$HB/route" "$HB/routecap" "$HB/routeslot" "$TMP/"
 run "$HB/byname" --path=startJ,sinkJ >"$TMP/h1"
 run "$HB/byname" --path=startJ,sinkJ --legend=full >"$TMP/h1f"
 run "$HB/declined" --for="how does relayWorkItem relay a work item" >"$TMP/h2a"
@@ -139,6 +139,21 @@ rrun route '--path=post_message,on_*' --legend=full >"$TMP/r1f"
 rrun routecap '--path=post_message,on_*' >"$TMP/r2"
 rrun route '--path=press,on_event' >"$TMP/r3"
 rrun route --for="Trace the path from post_message() to on_event()" >"$TMP/r5"
+# the R6-R8 fixtures are the route fixture with one edit each (so no committed clone): R6 a by-name call (two same-named routers), R7 four bodies
+# over 4000 B, R8 the reader _on_message is also reached as a bridge row (the loop calls it by way of _dispatch_message)
+python3 - "$TMP" <<'PY'
+import os, shutil, sys
+T = sys.argv[1]; src = open(os.path.join(T, "route", "pump.py")).read().split("\n")
+def make(name, lines):
+    shutil.copytree(os.path.join(T, "route"), os.path.join(T, name)); open(os.path.join(T, name, "pump.py"), "w").write("\n".join(lines))
+by = [l.replace("self._dispatch_message(message)", "self.router.dispatch_message(message)") for l in src]
+make("routename", by + ["", "", "class RouterA:", "    def dispatch_message(self, message):", "        self.pump.on_event(message)", "", "", "class RouterB:", "    def dispatch_message(self, message):", "        return message", ""])
+ded = list(src); ded[26:26] = ["        name = message.handler_name", "        getattr(self, name)(message)"]
+make("routededupe", ded)
+big = list(src)
+for at in (33, 25, 20, 12): big[at:at] = ["        x%d = len(str(message)) + %d" % (i, i) for i in range(160)]
+make("routebig", big)
+PY
 rrun routename '--path=post_message,on_*' >"$TMP/r6"
 rrun routebig '--path=post_message,on_*' >"$TMP/r7"
 rrun routededupe '--path=post_message,on_*' >"$TMP/r8"
