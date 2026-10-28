@@ -35,6 +35,13 @@
 #   R4 [G] every first-hop caller a test path: none   R5 [G] the same head, no error word: none   R6 [G] the narrow funnel at r>3: none
 #   R7 [G] prefix identity vs RIPWIRE_NO_CALLER_HOP=1 (both legends)   R8 [P] est_tokens prices it
 #   R9 [G] --json / --signatures-only / --token-budget=3000: byte-identical to the hop-off answer   R10 [P] first-hop rows = --callers rows
+#   R11 [P] fix round 1 (F4): each error word of the language-neutral vocabulary (panicked, Traceback, raises, throws, segfault, crashed,
+#       failing, ... and an error TYPE as one identifier: DependencyCycleError, dependency_cycle_error, ValueError) fires the hop
+#   R12 [G] WHOLE WORD: failover, throwaway, terror, ErrorKind, raiser, crashpad, failsafe, errorless carry none (kills a substring match)
+#   R13 [P] an explanation question (How does ... / Explain ... / Describe ...) carries none; [G] a where-question with a message-bearing row does
+#   R14 [P] F5: the seed is the narrow funnel whose own body holds a string literal with >= 2 task words (rankword: lookup_word r=3, not
+#       command_not_found_hook r=1); R15 [P] a question with no message-bearing narrow funnel carries none (a statement keeps R3's fallback)
+#   R16 [P] F2: a seed whose only first-hop caller is a by-name match (Go interface, Python duck typing) carries none (rankgo, rankpy)
 #   X1 [G] determinism  X2 [G] xmllint well-formed  X3 [G] no "--" inside a legend comment
 #
 # Usage:  bash test/forcallerhopcheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/forcallerhopcheck.sh
@@ -319,6 +326,60 @@ verb = {key(r) for r in re.findall(r'<s [^>]*/>', cal) if ' n="' in r and ' p="'
 sys.exit(0 if first and all(k in verb for k in first) else 1)
 PY
 verdict $? "(R10) every first-hop row of the ranked hop is --callers=verify_dag's own row" "(R10) a ranked first-hop row differs from --callers=verify_dag"
+
+# ── R11-R16: UPWARD-2HOP fix round 1 (rv-upward-2hop F1-F3, F5; the error-task matcher F4) ──────────────────────────────────────
+# R11-R13 pin the task matcher: a WHOLE WORD of the language-neutral error vocabulary (or an error TYPE written as one identifier),
+# not a substring, and not an EXPLANATION question. Each task rides the same fixture whose r=1 narrow funnel is verify_dag, so a
+# missing hop is the matcher's verdict, never the route's (the premise is re-checked per task).
+rk_hop(){   # $1 task -> prints "R" when verify_dag is r=1 on a ranked route, then "H" when the ranked hop rode
+    run "$FR" --for="$1" >"$TMP/rk"
+    grep -q 'route="subtoken+body' "$TMP/rk" && grep -q '<d [^>]*n="verify_dag"[^>]*r="1"' "$TMP/rk" && printf R
+    grep -q '<callers by="rank" of="verify_dag"' "$TMP/rk" && printf H
+    return 0
+}
+for w in panicked panic Traceback raises raise throws throw segfault crashed crash failing failed fail exception errors DependencyCycleError dependency_cycle_error ValueError IOException; do
+    got="$( rk_hop "dependency cycle $w" )"
+    [ "$got" = RH ] && ok "(R11) [P] the task word '$w' is an error word: the ranked hop rides" || no "(R11) '$w' did not fire the ranked hop (got [$got], want RH)"
+done
+for w in failover throwaway terror ErrorKind raiser crashpad failsafe errorless; do
+    got="$( rk_hop "dependency cycle $w" )"
+    [ "$got" = R ] && ok "(R12) [G] '$w' is not a whole error word: no ranked hop (kills a substring match)" || no "(R12) '$w' fired the ranked hop or left the premise (got [$got], want R)"
+done
+for q in "How does the dependency cycle error work?" "Explain the dependency cycle error" "Describe how a dependency cycle error is raised"; do
+    got="$( rk_hop "$q" )"
+    [ "$got" = R ] && ok "(R13) [P] an explanation question gets no ranked hop: $q" || no "(R13) an explanation question fired (or left the premise): $q (got [$got], want R)"
+done
+got="$( rk_hop "Where is the dependency cycle error raised?" )"
+[ "$got" = RH ] && ok "(R13b) [G] a where-question whose r=1 row holds the message still rides" || no "(R13b) the where-question lost its hop (got [$got], want RH)"
+
+# R14 F5: the seed is the narrow funnel whose OWN body holds a string literal with >= 2 task words (lookup_word: "command %d not
+# found"), not the r=1 funnel that merely carries the words in its name (command_not_found_hook). Statement and question alike.
+FW="test/forcallerhopfix/rankword"
+for q in "command not found error" "Where is the command not found error raised?"; do
+    run "$FW" --for="$q" >"$TMP/r14"
+    if grep -q '<d [^>]*n="command_not_found_hook"[^>]*r="1"' "$TMP/r14" && grep -q '<d [^>]*n="lookup_word"[^>]*r="3"' "$TMP/r14"; then
+        grep -q '<callers by="rank" of="lookup_word" ' "$TMP/r14"
+        verdict $? "(R14) [P] the message-bearing r=3 row (lookup_word) is the seed over the r=1 row without one: $q" "(R14) the seed is not lookup_word for [$q]: [$( hop "$TMP/r14" | cut -c1-90 )]"
+    else
+        no "(R14pre) the rankword fixture no longer ranks command_not_found_hook r=1 and lookup_word r=3 for [$q]"
+    fi
+done
+# R15 F5: with NO message-bearing row, a question gets no element (the fallback is for statements); the statement keeps today's seed (R3).
+run "$FR" --for="manifest syntax error?" >"$TMP/r15"
+if [ -s "$TMP/r15" ] && grep -q '<d [^>]*n="load_one"[^>]*r="2"' "$TMP/r15" && ! grep -q '<callers ' "$TMP/r15"; then ok "(R15) [P] a question with no message-bearing narrow funnel: no ranked hop"; else no "(R15) a question fell back to the first narrow funnel (or the fixture moved)"; fi
+
+# R16 F2: a seed whose only first-hop caller is a by-name match (a Go interface method, a Python duck-typed call) is skipped: its d=2
+# rows would print unhedged under an unproven receiver. The callers verb prints that caller via="name" (premise).
+for q in "rankgo:duplicate key error:memStore::Put" "rankpy:bad header error:HeaderParser::parse_header"; do
+    d="${q%%:*}"; rest="${q#*:}"; t="${rest%%:*}"; of="${rest#*:}"
+    run "test/forcallerhopfix/$d" --for="$t" >"$TMP/r16"
+    run "test/forcallerhopfix/$d" --callers="$of" >"$TMP/r16c"
+    if [ -s "$TMP/r16" ] && grep -q 'route="subtoken+body' "$TMP/r16" && grep -q ' via="name"' "$TMP/r16c"; then
+        ! grep -q '<callers ' "$TMP/r16"; verdict $? "(R16) [P] $d: a seed whose only caller is by name alone carries no ranked hop" "(R16) $d: a ranked hop rode on a by-name-only caller"
+    else
+        no "(R16pre) $d: the fixture no longer routes ranked with a via=name caller"
+    fi
+done
 
 # ── X ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 python3 - "$TMP/p1" "$TMP/p4f" "$TMP/r1" "$TMP/r1f" <<'PY'

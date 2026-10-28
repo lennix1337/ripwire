@@ -26,8 +26,10 @@
 // --json, --signatures-only, --detail=N and every other route carry none (byte-identical to before). MCP for is not changed.
 // RIPWIRE_NO_CALLER_HOP (any value) turns it off — the A/B handle, the RIPWIRE_NO_BODY_FOLD precedent.
 
+#include "clones.h"          // scanCodeTokens / CodeScanOptions — the ranked seed reads a body's string literals
 #include "callhierarchy.h"   // oneHopCallerRows — the callers verb's rows; rowCallSites / callSitesAttrXml via editcheck.h
 #include "defattrib.h"       // attributeOneHopAnswer — via="name" on a row, as the callers verb decides it
+#include "docparse.h"        // detail::readWholeFile — the ranked seed reads the candidate's file
 #include "filter.h"          // pathTierOf — the ranked seed's noise gate (every first-hop caller a test or bench path)
 #include "graph.h"           // viaNameAttr
 #include "infra/namesplit.h"   // isIdentChar — the ranked seed's task-word fold
@@ -43,9 +45,11 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdlib>
+#include <iterator>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace rw
@@ -147,29 +151,196 @@ inline std::vector<NodeId> forCallerHopTargets( const IngestResult& ing, const G
 // (ORCH reports/upward-2hop.md Stage 0): cockroach-01 execStmtInAbortedState (r=3) -> execStmt, ninja-06 VerifyDAG (r=2) ->
 // RecomputeNodeDirty -> RecomputeDirty; on the 60 S1 --for questions the same seed without the error gate fired on 35 rows, mostly
 // on a narrow-funnel row the question was not about (noise), so the task gate is part of the rule, not a tuning.
-// The seed is the FIRST of the rows <sigs> emitted at r=1..kForRankedHopHeadRows that is ONE function by the callers verb's own
+// The seed is one of the rows <sigs> emitted at r=1..kForRankedHopHeadRows that is ONE function by the callers verb's own
 // resolution (forCallerHopTargets, the same exact-or-no-row rule) with 1..kForRankedHopMaxCallers 1-hop caller rows; the element is
-// renderForCallerHop's, marked by="rank". NOISE GATE: no element when every first-hop caller is a test or bench path (the chain
-// already ends there).
+// renderForCallerHop's, marked by="rank". NOISE GATES: no element when every first-hop caller is a test or bench path (the chain
+// already ends there), or when every first-hop caller was matched by name alone (a Go interface method, a duck-typed Python call:
+// the second hop would inherit an unproven receiver unhedged). WHICH eligible row: the first whose own body holds a string literal
+// with >= 2 of the task's words (the function that raises the message, fix-1 F5); with none, the first eligible row, for a
+// statement only — a question ("Where is X raised?") with no message-bearing row gets no element.
 inline constexpr std::size_t kForRankedHopHeadRows  = 3;   // r=1..3: the emitted head the seed is read from
 inline constexpr std::size_t kForRankedHopMaxCallers = 3;  // the narrow-funnel bar: a wider fan-in is the callers verb's page, not a chain
+// The ranked legends below state both bars as text ("r=1..3", "1 to 3 callers", "1-3 callers"): a constant edited alone would
+// leave the clause stale with no gate noticing, so the text and the constants are tied here (edit both, or neither).
+static_assert( kForRankedHopHeadRows == 3 && kForRankedHopMaxCallers == 3,
+               "kForRankedCallerHopLegend / kForCompactRankedCallerHopLegend state r=1..3 and 1 to 3 callers — edit the clauses with the constants" );
 
-// The task names an error: a whole word error(s) / exception(s) / panic(s) / fail(s|ed|ure|ures) / crash(es), ASCII case-folded.
-inline bool forRankedCallerHopTask( std::string_view task )
+// The task names an error or a failure, in any language's vocabulary, as a WHOLE WORD (ASCII case-folded; "failover" is not "fail",
+// "terror" is not an error): error(s)/errored, exception(s), panic(s)/panicked, Traceback, raise(s)/raised, throw(s)/threw/thrown,
+// segfault, crash(es)/crashed, fail(s)/failed/failing/failure(s) — or an error TYPE written as one identifier whose last subtoken
+// is error/exception (DependencyCycleError, dependency_cycle_error, ValueError, IOException). The words are lowercased AFTER the
+// identifier split, so a CamelCase tail is not lost. Not on an EXPLANATION question ("How does X turn an error into a response?"):
+// that asks for a mechanism, not for who reaches one error (measured: koa-12, starlette-12). Inflections the table does not list
+// (`errored out`, `Err`, `returns nil`) are a floor, in the safe direction: no element.
+inline constexpr std::string_view kForErrorWords[] = {
+    "error", "errors", "errored", "exception", "exceptions", "panic", "panics", "panicked", "traceback", "raise", "raises", "raised",
+    "throw", "throws", "threw", "thrown", "segfault", "segfaults", "crash", "crashes", "crashed", "fail", "fails", "failed", "failing",
+    "failure", "failures" };
+
+// The task's ident-run words in order, case kept (camel tails are the error-type test's input): every non-identifier byte is a space.
+inline std::vector<std::string> forTaskIdentWords( std::string_view task )
 {
-    static constexpr std::string_view kWords[] = { "error", "errors", "exception", "exceptions", "panic", "panics", "fail",
-                                                   "fails", "failed", "failure", "failures", "crash", "crashes" };
     std::string folded( task );
     for( char& c : folded )
     {
-        c = !namesplit::isIdentChar( c ) ? ' ' : ( c >= 'A' && c <= 'Z' ) ? char( c - 'A' + 'a' ) : c;
+        c = namesplit::isIdentChar( c ) ? c : ' ';
     }
-    const std::vector<std::string_view> words = splitRouteWords( folded );
-    return std::ranges::any_of( words, []( std::string_view w ) { return std::ranges::find( kWords, w ) != std::end( kWords ); } );
+    std::vector<std::string> out;
+    for( const std::string_view w : splitRouteWords( folded ) )
+    {
+        out.emplace_back( w );
+    }
+    return out;
 }
 
-inline std::vector<NodeId> forRankedCallerHopTargets( const IngestResult& ing, const Graph& g, std::span<const NodeId> rankedHead )
+inline std::string forLowerAscii( std::string_view w )
 {
+    std::string out( w );
+    for( char& c : out )
+    {
+        c = ( c >= 'A' && c <= 'Z' ) ? char( c - 'A' + 'a' ) : c;
+    }
+    return out;
+}
+
+// "How does …", "Explain …", "Describe …": a question about a mechanism (the first word, case-folded).
+inline bool forTaskExplains( std::string_view task )
+{
+    const std::vector<std::string> w = forTaskIdentWords( task );
+    if( w.empty() )
+    {
+        return false;
+    }
+    const std::string first = forLowerAscii( w.front() );
+    return first == "how" || first == "explain" || first == "describe";
+}
+
+// Any question: a `?`, or a question-opening first word. The seed fallback (no message-bearing row) is for statements only.
+inline bool forTaskIsQuestion( std::string_view task )
+{
+    if( task.find( '?' ) != std::string_view::npos )
+    {
+        return true;
+    }
+    const std::vector<std::string> w = forTaskIdentWords( task );
+    if( w.empty() )
+    {
+        return false;
+    }
+    const std::string first = forLowerAscii( w.front() );
+    static constexpr std::string_view kOpeners[] = { "how", "what", "why", "where", "which", "when", "who", "explain", "describe", "does", "do", "is", "are", "can" };
+    return std::ranges::find( kOpeners, std::string_view( first ) ) != std::end( kOpeners );
+}
+
+inline bool forRankedCallerHopTask( std::string_view task )
+{
+    if( forTaskExplains( task ) )
+    {
+        return false;
+    }
+    std::vector<std::string> parts;
+    for( const std::string& w : forTaskIdentWords( task ) )
+    {
+        const std::string lower = forLowerAscii( w );
+        if( std::ranges::find( kForErrorWords, std::string_view( lower ) ) != std::end( kForErrorWords ) )
+        {
+            return true;
+        }
+        parts.clear();
+        subtokens( w, parts );   // DependencyCycleError / dependency_cycle_error -> [dependency, cycle, error]
+        if( parts.size() >= 2 && ( parts.back() == "error" || parts.back() == "exception" ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// UPWARD-2HOP F5 — THE MESSAGE-ANCHORED SEED. The task's content words: the lowercased subtokens of its identifier runs, two bytes
+// or more, no route stopword, no plain English function word, not error/errors (every task here has one). Distinct.
+inline std::vector<std::string> forTaskContentWords( std::string_view task )
+{
+    static constexpr std::string_view kPlain[] = { "and", "or", "be", "it", "as", "at", "by", "from", "that", "this", "was", "has", "have",
+                                                   "into", "when", "why", "who", "can", "error", "errors" };
+    std::vector<std::string> out;
+    std::vector<std::string> parts;
+    for( const std::string& w : forTaskIdentWords( task ) )
+    {
+        parts.clear();
+        subtokens( w, parts );
+        for( std::string& p : parts )
+        {
+            if( !isRouteStopword( p ) && std::ranges::find( kPlain, std::string_view( p ) ) == std::end( kPlain )
+                && std::ranges::find( out, p ) == out.end() )
+            {
+                out.push_back( std::move( p ) );
+            }
+        }
+    }
+    return out;
+}
+
+inline constexpr std::size_t kForRankedMessageWords = 2;   // task content words ONE string literal of the seed's own body must hold
+
+// Does [sigStartByte, endByte) of `s` in `src` hold ONE string literal with >= kForRankedMessageWords distinct task content words?
+// Read with THE one code scanner (clones.h scanCodeTokens: comments dropped, per-language quote rules); a backtick raw string is not
+// read (a floor: such a seed falls to the statement-only fallback).
+inline bool forBodyHoldsTaskMessage( const std::string& src, const Symbol& s, const std::vector<std::string>& words )
+{
+    bool                     found = false;
+    std::vector<std::string> parts;
+    std::vector<char>        hit;
+    scanCodeTokens( src, s.sigStartByte, s.endByte,
+                    CodeScanOptions{ .stripHashComments = usesHashLineComments( s.lang ), .munchMultiByteOperators = false,
+                                     .singleQuoteStrings = usesSingleQuoteStrings( s.lang ), .slashComments = s.lang != Lang::Python,
+                                     .tripleQuoteStrings = s.lang == Lang::Python },
+                    [ & ]( std::string_view token, CodeTokenKind kind )
+                    {
+                        if( found || kind != CodeTokenKind::String )
+                        {
+                            return;
+                        }
+                        hit.assign( words.size(), 0 );
+                        std::size_t distinct = 0;
+                        std::size_t at       = 0;
+                        while( at < token.size() && !found )
+                        {
+                            while( at < token.size() && !namesplit::isIdentChar( token[at] ) )
+                            {
+                                ++at;
+                            }
+                            const std::size_t begin = at;
+                            while( at < token.size() && namesplit::isIdentChar( token[at] ) )
+                            {
+                                ++at;
+                            }
+                            parts.clear();
+                            subtokens( token.substr( begin, at - begin ), parts );
+                            for( const std::string& p : parts )
+                            {
+                                const auto it = std::ranges::find( words, p );
+                                if( it != words.end() && hit[ std::size_t( it - words.begin() ) ] == 0 )
+                                {
+                                    hit[ std::size_t( it - words.begin() ) ] = 1;
+                                    found = found || ++distinct >= kForRankedMessageWords;
+                                }
+                            }
+                        }
+                    } );
+    return found;
+}
+
+// The seed: the first of the rows <sigs> emitted at r=1..kForRankedHopHeadRows that is ONE function by the callers verb's own
+// resolution (forCallerHopTargets) with 1..kForRankedHopMaxCallers first-hop rows, not every one a test or bench path, and not
+// every one matched by name alone (F2: the d=2 rows would inherit an unproven receiver — a Go interface method, a duck-typed
+// Python call) — and, among those, PREFERRING the first whose own body holds a string literal with >= 2 task words (F5: the
+// function that raises the message). With none, today's first eligible row, but only for a statement, never a question.
+inline std::vector<NodeId> forRankedCallerHopTargets( const IngestResult& ing, const Graph& g, std::span<const NodeId> rankedHead,
+                                                      std::string_view task )
+{
+    const std::vector<std::string> words = forTaskContentWords( task );
+    std::vector<NodeId>            fallback;
+    std::vector<std::pair<std::uint32_t, std::string>> files;   // at most kForRankedHopHeadRows files read, once each
     for( std::size_t i = 0; i < rankedHead.size() && i < kForRankedHopHeadRows; ++i )
     {
         const NodeId id = rankedHead[i];
@@ -194,9 +365,40 @@ inline std::vector<NodeId> forRankedCallerHopTargets( const IngestResult& ing, c
         {
             continue;
         }
-        return targets;
+        const OneHopAttribution attr = attributeOneHopAnswer( ing, g, targets, first, /*towardMatches=*/true );
+        bool                    allByName = true;
+        for( std::size_t k = 0; k < first.size() && allByName; ++k )
+        {
+            allByName = attr.nameOnly( k );
+        }
+        if( allByName )
+        {
+            continue;
+        }
+        if( fallback.empty() )
+        {
+            fallback = targets;
+        }
+        if( words.size() < kForRankedMessageWords )
+        {
+            continue;
+        }
+        for( const NodeId t : targets )
+        {
+            const Symbol& s = ing.symbols[t];
+            auto          f = std::ranges::find( files, s.fileId, &std::pair<std::uint32_t, std::string>::first );
+            if( f == files.end() )
+            {
+                files.emplace_back( s.fileId, docparse::detail::readWholeFile( diskPath( ing, s.fileId ) ).value_or( std::string() ) );
+                f = std::prev( files.end() );
+            }
+            if( forBodyHoldsTaskMessage( f->second, s, words ) )
+            {
+                return targets;
+            }
+        }
     }
-    return {};
+    return forTaskIsQuestion( task ) ? std::vector<NodeId>{} : fallback;
 }
 
 // The hop's legend clauses, present-only beside the element: the full dialect's and the compact dialect's. No "--": they ride
@@ -212,14 +414,14 @@ inline constexpr std::string_view kForCompactCallerHopLegend =
 
 // UPWARD-2HOP: the ranked seed's clauses (by="rank" on the element). Self-contained — the named-route clause never rides with them.
 inline constexpr std::string_view kForRankedCallerHopLegend =
-    "; callers by=rank of=: the task names an error, not a function, so of= is the first r=1..3 row that is one function with 1 to "
-    "3 callers (found by rank, a lead to check), and the chain above it follows: s t= n= sc= p=file:line rows are its 1-hop callers "
+    "; callers by=rank of=: the task names an error, not a function, so of= is an r=1..3 row that is one function with 1 to "
+    "3 callers (the first whose body holds the task's words in one string, else the first; found by rank, a lead to check), and the chain above it follows: s t= n= sc= p=file:line rows are its 1-hop callers "
     "(n=Owner.name with no sc= on a member whose owner the index defines; sites_at= their calls of it as file:line, sites_total= when "
     "that list was cut; via=name: matched by name alone, the receiver unproven), shown= of total=; then d=2 rows, callers of the "
     "shown callers by rank, d2_shown= of d2=; capped=1 when either hop was cut; counts are floors (resolved calls only); next= lists "
     "the whole caller radius";
 inline constexpr std::string_view kForCompactRankedCallerHopLegend =
-    "; callers by=rank of=: an error task's first r=1..3 row that is one function with 1-3 callers (a lead by rank): its callers, s t= n= "
+    "; callers by=rank of=: an error task's r=1..3 row that is one function with 1-3 callers (the first with the task's words in a body string, else the first; a lead by rank): its callers, s t= n= "
     "sc= p=file:line (n=Owner.name folds sc= on a member; sites_at= its call sites, sites_total= if cut; via=name by name only), "
     "shown= of total=; d=2 rows: their callers, d2_shown= of d2=; capped=1 if cut; floors; next= the radius";
 

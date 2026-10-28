@@ -2587,7 +2587,7 @@ inline rw::CallerHopRender rankedCallerHop( const RankedHopPosture& p, const rw:
     {
         return held;
     }
-    const std::vector<rw::NodeId> ids = rw::forRankedCallerHopTargets( ing, g, shownSigIds );
+    const std::vector<rw::NodeId> ids = rw::forRankedCallerHopTargets( ing, g, shownSigIds, cfg.forTask );
     return ids.empty() ? held : rw::renderForCallerHop( ing, g, ids, rootArg, /*ranked=*/true );
 }
 
