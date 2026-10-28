@@ -832,6 +832,10 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "hedged", "pair/alt from_p= to_p= hops= hedged=: one reaching pair, fewest hedged hops first (0 = all proven), then fewest hops; hedged=/hops= count the whole chain (a joins= tail too), its via=/prov=split/anchor=missing rows (a bridge: crossings plus via=name), above 0 NOT proven and to_p= a candidate, not a proven binding", true, {}, MapHeaderRead::No, {}, "path" },
     { "joins", "pair joins=J: from its last row the chain is pair J's, rows not repeated", true, "pair", MapHeaderRead::No, {}, "path" },
     { "bridge", "pair bridge=1: a hedged bridge, NOT a path", true, "pair", MapHeaderRead::No, {}, "path" },
+    // P1 PATH-ORDER (src/pathpairs.h kPathPairQwordLegend / kPathTestTwinLegend), present only when they print
+    { "qword", "pair/alt qword=WORD: its from= owner (else, when no pair has one, its to= owner) equals a word of the path argument (FROM,TO as typed) (by name, not resolved); printed first within its proof class", true, {}, MapHeaderRead::No, {}, "path" },
+    { "from_test", "from_test=1: the bound from= definition is in a test or fixture path while one of that selector outside them exists; not re-picked; next= (only when one reaches the other end) runs the nearest, and alt=/pairs_unlisted= then continue as alt_next=/unlisted_next=", false, "path", MapHeaderRead::No, {}, "path" },   // to_test= is independent of from_test= (a to_test-only answer exists): its own row, not an "also defines"
+    { "to_test", "to_test=1: the bound to= definition is in a test or fixture path while one of that selector outside them exists; not re-picked; next= (only when one reaches the other end) runs the nearest, and alt=/pairs_unlisted= then continue as alt_next=/unlisted_next=", false, "path", MapHeaderRead::No, {}, "path" },
     // PATH-GAP (src/pathgaps.h kPathGapsLegend), present only on a reachable=0 answer whose search met a gap. Each says what it does NOT
     // mean in the same breath (checklist 3): not proof of no path, a row is never a hop, and which calls are not counted.
     { "searched", "searched=N: reachable=0, but the search from from= (N symbols over resolved call edges) is INCOMPLETE: not proof of no path", false, "path", MapHeaderRead::No, {}, "path" },
@@ -1014,6 +1018,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "reads_at", "reads_at=: the first three of those sites, file:line, tier/path/line order; the root next= is then the uses verb", true, "enc", MapHeaderRead::No, {}, "grep" },
     { "vals", "vals=: up to three function values the carrier stores, slot=fn@line of its one resolved def (path:line elsewhere; no @ if several)", true, "enc", MapHeaderRead::No, {}, "grep" },
     { "vals_total", "vals_total=N: every stored function value, when more than vals= shows", true, "enc", MapHeaderRead::No, {}, "grep" },
+    { "p", "p= beside vals=: the carrier's one definition, file:line; a path-less vals= @line is in that file", true, "enc", MapHeaderRead::No, {}, "grep" },
     { "reads_skipped", "reads_skipped=memory_stop|hard_limit: the memory guard stopped the index that counts the top carrier's reads; no reads= on any row", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "reads_next", "reads_next=: the uses verb on the top hit's carrier, the call that lists the reads reads_skipped= left out", false, "grep", MapHeaderRead::No, {}, "grep" },
     // count-floor + CALLSITE-LINE on safe-delete (src/verbs_navigate.h runSafeDelete): root markers beside the counts they qualify.

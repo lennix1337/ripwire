@@ -361,7 +361,12 @@ constexpr std::uint32_t kCacheVersion = 44;           // 44: train 37b — rust-
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 235;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 239;          // bump on any grammar/.scm/extraction change
+                                                      // 239 = 2026-10-27 (train 39: lane receiver-fixes, placeholder 237 / rich 238): TS `#private` field declarations and
+                                                      //   `this.#f = …` record MemberType; Python `self.f: T` / `T | None` / `Optional[ T ]` annotations and `mod.X( … )`
+                                                      //   constructors type fields and locals (a RecvType / MemberType with its qualifier), and `x = mod.X( … )` no longer
+                                                      //   writes the base Type tombstone. Strictly above train 38's 235 (rich 236) and every lane placeholder (237/238). Rich file
+                                                      //   tag 240. No record format changed: kCacheVersion stays 44.
                                                       // 235 = 2026-10-27 (train 38: lane queue-hop, placeholder 228 / rich 229): a Python queue call (put/put_nowait/get/get_nowait)
                                                       //   carrying keyword arguments records them on its call reference's composeRel (model.h pyKwTag), so QueueHops reads
                                                       //   `put( v, timeout=1 )` as one item. Strictly above train 37b's 233 (rich 234). Rich file tag 236. No record format

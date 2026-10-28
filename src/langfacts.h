@@ -213,6 +213,11 @@ struct LangFacts
     /// TypeScript, JavaScript: an object literal's members are indexed with no owner (an unnamed container), so the written-spelling
     /// tier treats such a member as a candidate whose object name is unknown (graph.h resolveAllByWrittenSpelling).
     bool objectLiteralMembers = false;
+
+    /// The keyword a method names its own instance by, as a receiver chain's ROOT spells it (lane receiver-fixes: a `this.f.m()` /
+    /// `self.f.m()` field receiver, receiverevidence.h foreignFieldOwner / dispatchReceiverOf). `this` unless the language says
+    /// otherwise; elsewhere the same text is an ordinary name (a JS `const self = …`, a Python local `this`) that proves nothing.
+    std::string_view instanceReceiver = "this";
 };
 
 /// java.lang.Object's public methods an interface may redeclare abstract (LangFacts::samIgnoredMembers).
@@ -222,12 +227,14 @@ inline constexpr std::array<std::string_view, 3> kJavaObjectMethods = { "equals"
 inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true, .memberSeparator = "::",
       .transitiveIncludes = true, .writtenModule = WrittenModuleRule::SourceChain },
-    { .lang = Lang::Python, .frameworkEntryHooks = true, .closureReceiverDispatch = true, .baseImportEvidence = BaseImportEvidence::PythonImport },
+    { .lang = Lang::Python, .frameworkEntryHooks = true, .closureReceiverDispatch = true, .baseImportEvidence = BaseImportEvidence::PythonImport,
+      .instanceReceiver = "self" },
     { .lang = Lang::TypeScript, .overloadSignatures = true, .structuralTyping = true, .importBoundConstruction = true, .baseImportEvidence = BaseImportEvidence::JsImport,
       .writtenBindingUndecided = true, .namespaceBodies = true, .objectLiteralMembers = true },
     { .lang = Lang::Go, .structuralTyping = true, .writtenModule = WrittenModuleRule::PackageDir },
-    { .lang = Lang::Rust, .contractSignaturesUnindexed = true, .traitImplBlocks = true, .constructorMethod = "new", .memberSeparator = "::", .baseImportEvidence = BaseImportEvidence::RustUse },
-    { .lang = Lang::Swift, .writtenModule = WrittenModuleRule::DirsOnly },
+    { .lang = Lang::Rust, .contractSignaturesUnindexed = true, .traitImplBlocks = true, .constructorMethod = "new", .memberSeparator = "::", .baseImportEvidence = BaseImportEvidence::RustUse,
+      .instanceReceiver = "self" },
+    { .lang = Lang::Swift, .writtenModule = WrittenModuleRule::DirsOnly, .instanceReceiver = "self" },
     { .lang = Lang::ObjC, .noNestedNamedFunctions = true, .transitiveIncludes = true },
     { .lang = Lang::Markdown, .linkSections = true },
     { .lang = Lang::JavaScript, .structuralTyping = true, .importBoundConstruction = true, .baseImportEvidence = BaseImportEvidence::JsImport,
@@ -236,7 +243,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Java, .samLambdas = true, .samIgnoredMembers = kJavaObjectMethods, .anonymousImplementors = true, .baseImportEvidence = BaseImportEvidence::JvmImport,
       .writtenModule = WrittenModuleRule::DirsOnly },
     { .lang = Lang::Ruby, .classObjectLookup = true, .mixinAncestry = true, .keepsUnshapedSubscript = true, .constantPathReceiver = true,
-      .memberSeparator = "#", .writtenModule = WrittenModuleRule::ConstantPath },
+      .memberSeparator = "#", .writtenModule = WrittenModuleRule::ConstantPath, .instanceReceiver = "self" },
     { .lang = Lang::Unknown },
     { .lang = Lang::Json },
     { .lang = Lang::CSharp, .overloadsWithoutArity = true, .writtenModule = WrittenModuleRule::DirsOnly },
