@@ -83,6 +83,8 @@ inline RawRef rawRefAt( TSNode at, std::uint32_t fileId, Lang lang, RefRole role
 // inside a function the reference is not in. Those leave the reference without a local binding — never a wrong one.
 inline constexpr std::uint32_t kBaseBindNone    = 0;            // no enclosing scope declares the name
 inline constexpr std::uint32_t kBaseBindUnknown = 0xFFFFFFFFu;  // a scope was too large to scan: nothing proven either way
+inline constexpr std::uint32_t kBaseBindTemplateParam = 0xFFFFFFFEu;   // fn-slot S2 fix 2: the written base is a TEMPLATE PARAMETER of the deriving class (`template <class B> struct M : B`): it names no declaration
+inline bool                    baseNamesTemplateParameter( TSNode self, std::string_view base, std::string_view src );   // ingest_names.h
 // kBaseScopeScanCap bounds the two SCANS only: the unindexed lookupInScope fallback and the reopened-namespace sibling scan
 // (a runaway guard: past it those two bind nothing and the edge stays name-only). The indexed path (lookupInScopeIndexed,
 // the one captureTagsFacts installs) reads the scope's table and has no cap: a 32,000-class module scope binds every base.
@@ -516,7 +518,8 @@ inline void emitBaseRef( TSNode typeNode, std::uint32_t fileId, Lang lang, std::
     {
         bool                                absolute = false;
         const std::vector<std::string_view> segs     = baseSegments( text, absolute );
-        r.baseBind = localBaseBinding( typeNode, self, segs, absolute, src );
+        r.baseBind = !absolute && segs.size() == 1 && baseNamesTemplateParameter( self, text, src ) ? kBaseBindTemplateParam
+                                                                                                    : localBaseBinding( typeNode, self, segs, absolute, src );
         if( segs.size() > 1 )
         {
             const std::size_t last = text.rfind( segs.back() );

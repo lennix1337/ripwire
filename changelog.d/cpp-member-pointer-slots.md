@@ -15,10 +15,10 @@ ninja's `ToolFunc` does), table entries inside an `#ifdef` within the initialize
 declared outside the tree (the store is dropped, and the slot lists the targets it does have). A pointer to a virtual method is a
 candidate SET: the declaring class's definition and every override in a class derived from the pointer's class (a non-virtual
 method a derived class hides is listed too: a hedge, never a pin), and a pure virtual's bodyless declaration is never a target when
-an override has one. An inherited or CRTP-base method (`&D::inh` defined in a base) names the nearest base's definition (two bases
+an override has one (with no in-tree override, the pure declaration is the target). A template's dependent base written as a template parameter (`template <class B> struct M : B`) names no in-tree class, even one called `B`. An inherited or CRTP-base method (`&D::inh` defined in a base) names the nearest base's definition (two bases
 at one level: none). An overloaded name lists every overload, so `targets=` counts definitions, not stored values. A qualified
 spelling must match the namespace the in-tree class sits in (`&grpc::Server::start` is no `mine::Server`; neither is a bare
-`&Server::start` under `using grpc::Server;` or `using namespace grpc;` written outside `mine`). A call site whose typed
+`&Server::start` under `using grpc::Server;` or `using namespace grpc;` written outside `mine`; a bare `&Server::start` written INSIDE `namespace grpc { … }`, where an external `grpc::Server` hides an in-tree GLOBAL `Server`, still binds the global class: a floor). A call site whose typed
 tier hides name-only stores says `slot_name_also=K` on its `<vs>`, and `--for` `slot_fields=` keeps the fields a caller calls
 through when its cap of 4 cuts.
 Nothing here is a proven call: count= and reaches= never move.

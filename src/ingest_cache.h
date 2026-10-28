@@ -361,7 +361,9 @@ constexpr std::uint32_t kCacheVersion = 44;           // 44: train 37b — rust-
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 259;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 260;          // bump on any grammar/.scm/extraction change
+                                                      // 260 = 2026-10-28 (lane fn-slot-s2 fix round 2, placeholder: the train renumbers): a C++ base that is a template parameter of the deriving class
+                                                      //   (`template <class B> struct M : B`) carries baseBind 0xFFFFFFFE; no record format changed.
                                                       // 259 = 2026-10-28 (lane fn-slot-s2 fix round 1, placeholder: the train renumbers; 258 was 257's rich tag): a C++ `&Cls::m`
                                                       //   value ref records where it was written (memberVia: qualifier / enclosing scope / `using namespace`), and a class body fact
                                                       //   its scope path (composeRel after the '{'); no record format changed.

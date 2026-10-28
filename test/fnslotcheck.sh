@@ -102,6 +102,10 @@
 #          does a bare `&Server::start` under `using grpc::Server;`;  E1c [P] nor under `using namespace grpc;` (a bare Server
 #          outside mine::);  E1d [P] nor `&other::inner::Deep::run` beside the in-tree outer::inner::Deep;  E1e [P] nor `&::Server::stop`
 #          (the global-anchored spelling of a class that sits in mine::)
+#   E1f [P] a namesake namespace that only ENDS with the qualifier's text (`&grpc::GServer::gstart` beside the in-tree mygrpc::GServer)
+#          binds nothing (the :: boundary of the suffix match; fix round 2, rv-fss2-delta D-2)
+#   I7 [P] a dependent base that is a template PARAMETER named like an in-tree class (`template <class DBase> struct Mixin : DBase`):
+#          `&Mixin<DReal>::dfoo` names no DBase::dfoo (fix round 2, rv-fss2-delta D-1)
 #   E4 [P] the in-tree class is GLOBAL (GSrv) and `using ext::GSrv;` makes the bare spelling the external one;  E4b [G] the same bare
 #          spelling without the using stays typed;  E5 [G] `using namespace mine;` makes a bare `&Server::both` outside mine typed
 #   E2 [G] `&mine::Server::stop`, the bare `&Server::stop` written inside `namespace mine`, an out-of-line `int mine::Server::both()`
@@ -398,6 +402,14 @@ o="$( run --callers=Server::stop )"
 has   "E2 &mine::Server::stop stays typed" "$o" 'called_by="go_mine"'
 has   "E2b a bare &Server::stop written inside namespace mine stays typed" "$o" 'called_by="go_inside"'
 hasnt "E1e &::Server::stop (a global class that does not exist in the tree) binds nothing" "$o" 'called_by="go_gwrong"'
+o="$( run --callers=GServer::gstart )"
+hasnt "E1f a namesake namespace that only ends with the qualifier's text on no :: boundary binds nothing" "$o" 'called_by="go_bnd"'
+has   "E1f-b the in-tree spelling mygrpc::GServer stays typed" "$o" 'called_by="go_bok"'
+o="$( run --callers=DBase::dfoo )"
+hasnt "I7 a dependent base that is a template parameter named like an in-tree class is no DBase" "$o" 'called_by="dispatch_dep"'
+has   "I7-b a plain pointer to the in-tree DBase::dfoo stays typed" "$o" 'called_by="go_dbok"'
+o="$( run --callees=dispatch_dep )"
+hasnt "I7b nor does the callee list pin DBase::dfoo" "$o" '<t n="DBase.dfoo"'
 o="$( run --callers=Deep::run )"
 has   "E3 the full nested spelling stays typed" "$o" 'called_by="go_nfull"'
 has   "E3b a suffix of the nested path stays typed" "$o" 'called_by="go_nsuf"'

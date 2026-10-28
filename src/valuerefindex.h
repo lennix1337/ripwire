@@ -1081,7 +1081,7 @@ inline HashMap<std::string, std::vector<std::string>> inheritEdges( const Ingest
             continue;
         }
         const Symbol& from = ing.symbols[ r.fromSymbol ];
-        if( from.kind != SymKind::Class && !( structsToo && from.kind == SymKind::Struct ) )
+        if( ( from.kind != SymKind::Class && !( structsToo && from.kind == SymKind::Struct ) ) || r.baseBind == 0xFFFFFFFEu )   // 0xFFFFFFFE: a template parameter, no class
         {
             continue;
         }
