@@ -2512,11 +2512,18 @@ std::optional<int> runDefs( const MainDispatch& d )
         rw::refuseFlagValue( "--defs", "up to 16 symbol names, A[,B…]", cfg.defsSpec, "--defs=parseArgs,rankGraph" );
         return 1;
     }
+    if( names.size() > 1 && cfg.pageOffset > 0 )
+    {
+        rw::refuseFlagValue( "--offset", "a page of ONE --defs name (several names each print their first page)", std::to_string( cfg.pageOffset ), "--defs=parseArgs --offset=16" );
+        return 1;
+    }
+    // the page: kDefRowsCap rows unless --limit names another size; --offset pages one name only
+    const std::size_t      pageRows = cfg.pageLimit > 0 ? std::size_t( cfg.pageLimit ) : kDefRowsCap;
     std::vector<DefLookup> looks;
     looks.reserve( names.size() );
     for( const std::string_view n : names )
     {
-        looks.push_back( lookupDefs( ing, d.g, n, names.size() == 1 ? std::size_t( std::max( cfg.pageOffset, 0 ) ) : 0, kDefRowsCap ) );
+        looks.push_back( lookupDefs( ing, d.g, n, names.size() == 1 ? std::size_t( std::max( cfg.pageOffset, 0 ) ) : 0, pageRows ) );
     }
     if( names.size() == 1 && looks[0].matches.empty() && looks[0].dataDefs == 0 )
     {
@@ -2533,7 +2540,7 @@ std::optional<int> runDefs( const MainDispatch& d )
     for( const DefLookup& L : looks )
     {
         const std::size_t begin = std::min( offset, L.defs() );
-        const std::size_t end   = std::min( begin + kDefRowsCap, L.defs() );
+        const std::size_t end   = std::min( begin + pageRows, L.defs() );
         if( cfg.json )
         {
             body += std::string( body.empty() ? "" : "," ) + "{\"q\":\"" + jsonStr( L.spec ) + "\",\"defs\":" + std::to_string( L.defs() );
@@ -2565,7 +2572,7 @@ std::optional<int> runDefs( const MainDispatch& d )
                              : " shown=\"" + std::to_string( end - begin ) + "\" offset=\"" + std::to_string( begin ) + "\"";
             if( end < L.defs() )
             {
-                next = nextFlag( "--defs=", L.spec ) + " --offset=" + std::to_string( end );
+                next = nextFlag( "--defs=", L.spec ) + " --offset=" + std::to_string( end ) + ( cfg.pageLimit > 0 ? " --limit=" + std::to_string( cfg.pageLimit ) : std::string() );
             }
         }
         if( cfg.json )

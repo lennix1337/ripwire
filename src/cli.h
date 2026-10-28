@@ -3872,7 +3872,7 @@ inline void validatePlanLanes( Config& c ) noexcept
 // first PROSE member — it has no XML root, so it spells the same shown=/total=/capped= facts in its section
 // headers (situ.h) and test/pagingsweepcheck.sh (L) reads it as prose rather than parsing a root element.
 constexpr const char* kPagingHonoringVerbs =
-    "--lint --hotspots --callers --callees --tree --deps --cochange --owners --clones --doc-drift "
+    "--lint --hotspots --callers --callees --defs --tree --deps --cochange --owners --clones --doc-drift "
     "--communities --community --whereis --grep/--regex --match --pattern --impact --uses --exercises "
     "--seams --zoom --external-surface --dead-code --mentions --graph-query --stray-content --test-gate "
     "--biggest-first --ensemble --quality-panel --context-ratio --nonlocal-state --comment-coherence "
@@ -3889,6 +3889,7 @@ inline bool honorsPaging( const Config& c ) noexcept
         || c.readability || c.ensemble || c.qualityPanel || c.contextRatio || c.nonlocalState || c.commentCoherence
         || c.namingConsistency || !c.safeDeleteSym.empty() || c.prContext   // P4 (L7): the changed-file window
         || !c.editCheckSym.empty()    // 2026-09-10: --edit-check windows its UNFLAGGED caller rows (editcheck.h)
+        || !c.defsSpec.empty()        // lane/defs-lookup: --defs pages one name's definition rows (16 by default)
         || c.darkFlags                // 2026-09-10 (C1 F-07): --flags' per-gate <read> sites, and --flip's six listings
         || c.situ || !c.situFiles.empty()    // 2026-09-10 (C1 F-10): --situ sections [1] and [3] (section [2] is the answer)
         // --in=DIR is deliberately NOT a member, and was: it is a MODIFIER of the default map, not a verb, and
