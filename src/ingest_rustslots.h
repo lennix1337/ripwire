@@ -28,7 +28,10 @@
 // SHADOWING: an identifier bound anywhere in the enclosing function — a parameter, a `let`, closure, `for`, `match` or
 // `if let` pattern — is never a function value (the whole function is one scope here: a conservative floor). An identifier
 // that starts upper-case is a constant, a unit struct or a variant (`map( Some )`), never a function: no row.
-// FLOORS: closures and method-call arguments are no rows; a macro body is opaque; nodes deeper than kVrMaxDepth are not
+// FLOORS: closures and method-call arguments are no rows, nor `let g = f`, an array element or a returned function (Rust
+// value references are path-call arguments and field stores only: --safe-delete / --dead-code may miss the rest); a function
+// of an inline `mod m { … }` is a module member (`t="method" sc="m"`), so a value or registrar there resolves to nothing
+// (valuerefindex.h isClassMember); a macro body is opaque; nodes deeper than kVrMaxDepth are not
 // visited — disclosed by the file's depth-cut record, as the general walk does.
 
 namespace rw
