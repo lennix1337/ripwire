@@ -71,6 +71,8 @@
 #   X2 [P] a bare `Gw { … }` in a file that `use`s the defining crate by name AND has an out-of-tree glob: the same hedge (L-2 tier 2)
 #   X3 [G] a local `Gm` shadows the glob (tier 0: typed);  X4 [G] no glob: the crate namesake stays typed;  X5 [G] an in-tree glob
 #          (`use crate::hk::*`) and X6 [G] a glob led by an in-tree crate (`use ga::*`) are not out-of-tree: typed
+#   X7 [G] a glob led by a `mod` the file declares, X8 [G] `use super::*`, X9 [G] `use self::Kind::*` are in-tree: typed;
+#   X10 [G] tier 2 without a glob (`use ga::Gother` only) stays typed
 #
 # Usage: bash test/fnslotcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -272,5 +274,13 @@ o="$( run --callers=intree_glob_t )"
 has   "X5 an in-tree glob is no out-of-tree glob: typed" "$o" 'into="Gh.hcb" called_by="fire_gh" called_at="crates/gx/src/hk.rs:2" via="slot"'
 o="$( run --callers=crate_glob_t )"
 has   "X6 a glob led by an in-tree crate: typed" "$o" 'into="Gw.wcb" called_by="fire_ga" called_at="crates/ga/src/lib.rs:2" via="slot"'
+o="$( run --callers=mod_glob_t )"
+has   "X7 a glob led by a mod the file declares: typed" "$o" 'into="Gh.hcb" called_by="fire_gh" called_at="crates/gx/src/hk.rs:2" via="slot"'
+o="$( run --callers=super_glob_t )"
+has   "X8 use super::*: typed" "$o" 'into="Gh.hcb" called_by="fire_gh" called_at="crates/gx/src/hk.rs:2" via="slot"'
+o="$( run --callers=self_glob_t )"
+has   "X9 use self::Kind::*: typed" "$o" 'into="Gh.hcb" called_by="fire_gh" called_at="crates/gx/src/hk.rs:2" via="slot"'
+o="$( run --callers=used_crate_t )"
+has   "X10 tier 2 without a glob stays typed" "$o" 'into="Gw.wcb" called_by="fire_ga" called_at="crates/ga/src/lib.rs:2" via="slot"'
 if [ "$fail" -eq 0 ]; then echo "fnslotcheck: PASS"; else echo "fnslotcheck: FAIL"; fi
 exit "$fail"
