@@ -1067,6 +1067,31 @@ public:
 
     const SlotIndex& slots() const noexcept { return m_slots; }   // IX-1: the struct-field slot join
 
+    // The files that the JS/TS/Python imports of file `fileId` binding `name` resolve to, in import order (none: no such import, or
+    // a package outside the tree). The import's module is resolved by the call graph's own Step-A (resolve.h resolvePreciseInclude:
+    // a relative JS/TS specifier against the importer, a Python module relative-to-file then root, then the whole-component suffix
+    // for an absolute Python spec). A bare package specifier resolves to no file: no row — a stem match across directories bound
+    // `import { test } from "./a"` to every a.js. resolveName and the class-base check of handlerrule.h read this one rule.
+    std::vector<std::uint32_t> importedFilesBinding( std::uint32_t fileId, std::string_view name ) const
+    {
+        std::vector<std::uint32_t> out;
+        const auto                 imp = m_importsByFile.find( fileId );
+        if( imp == m_importsByFile.end() )
+        {
+            return out;
+        }
+        for( const Binding* b : imp->second )
+        {
+            const bool named = b->kind == LocalBindKind::JsImport ? ( b->var == name && b->importedName == name )
+                                                                 : ( b->var == name && b->importedName.empty() );
+            if( const std::uint32_t moduleFile = named ? importedModuleFile( *b ) : kNoFile; moduleFile != kNoFile )
+            {
+                out.push_back( moduleFile );
+            }
+        }
+        return out;
+    }
+
     // Value references (indices into ing.references) whose resolved target is any of `defs`, in served order.
     std::vector<std::uint32_t> valueRefsTo( std::span<const NodeId> defs ) const
     {
@@ -1774,24 +1799,8 @@ private:
             case VrLangFamily::Js:
             case VrLangFamily::Py:
             {
-                const auto imp = m_importsByFile.find( r.fileId );
-                if( imp == m_importsByFile.end() )
+                for( const std::uint32_t moduleFile : importedFilesBinding( r.fileId, name ) )
                 {
-                    break;
-                }
-                for( const Binding* b : imp->second )
-                {
-                    const bool named = b->kind == LocalBindKind::JsImport ? ( b->var == name && b->importedName == name )
-                                                                         : ( b->var == name && b->importedName.empty() );
-                    if( !named )
-                    {
-                        continue;
-                    }
-                    // The import's module, resolved by the call graph's own Step-A (resolve.h resolvePreciseInclude: a
-                    // relative JS/TS specifier against the importer, a Python module relative-to-file then root, then the
-                    // whole-component suffix for an absolute Python spec). A bare package specifier resolves to no file:
-                    // no row — a stem match across directories bound `import { test } from "./a"` to every a.js.
-                    const std::uint32_t moduleFile = importedModuleFile( *b );
                     for( const NodeId id : other )
                     {
                         if( m_ing.symbols[id].fileId == moduleFile )
@@ -1870,6 +1879,16 @@ public:
             return true;
         }
         return isAncestor( member, site ) || isAncestor( site, member );
+    }
+    // Calls `visit( base )` for each class definition the written base names of class `c` bind to, in reference order.
+    template <class Visit>
+    void eachBase( NodeId c, Visit&& visit ) const
+    {
+        buildBases();
+        if( const auto it = m_basesOf.find( c ); it != m_basesOf.end() )
+        {
+            std::ranges::for_each( it->second, visit );
+        }
     }
 
 private:

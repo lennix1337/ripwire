@@ -2212,7 +2212,7 @@ inline std::vector<std::string_view> splitRouteWords( std::string_view query )
     return words;
 }
 
-// FOR-ROUTE-DECLINED (src/verbs_for.h appendSubjectGraphVerb): a --for task that is SPELLED as a graph question —
+// FOR-ROUTE-DECLINED (src/verbs_for.h appendSubjectGraphVerbBlock): a --for task that is SPELLED as a graph question —
 // `path from A to B`, `callers of X`, `common callers of A and B` — gets the --path / --callers / --connect verb
 // appended to its ordinary answer. This is the subject-only half: no index, no gold, the words of the task alone.
 // Each span is cut at its first qualifier word (for/with/via/in/on/when/using/during/at/near); a slot's candidates

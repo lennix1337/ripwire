@@ -515,6 +515,17 @@ Discloses: `capped`, `syms_capped`
 | `kHandoffSymbolsPerCodeFile` | `50` | OUTPUT | — |
 | `kHandoffSymbolsPerDocFile` | `12` | OUTPUT | — |
 
+### `src/hopbody.h`
+
+Discloses: `capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kHopBodyCapBytes` | `4000` | — | — |
+| `kPathHopBodyMaxHops` | `2` | — | — |
+| `kWrapperFollowDepth` | `2` | — | — |
+| `kWrapperFollowMax` | `3` | — | — |
+
 ### `src/infra/blanktext.h`
 
 Discloses: **none**
@@ -876,9 +887,13 @@ Discloses: `gap_syms_capped`, `rows_capped`
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kBridgeMaxHops` | `8` | — | a longer chain is no answer a reader would follow: none is printed |
+| `kHandlerRuleListMax` | `16` | — | the bridge's own width limit: at most this many defs are listed as <h> |
+| `kHandlerRuleShown` | `3` | — | <hm> rows: the widest posted classes first |
 | `kNearSinkDepth` | `2` | — | proven caller hops back from to= (1 = a direct caller) |
 | `kNearSinkRows` | `4` | — | <ns> rows printed; rows= counts them all, rows_capped="1" says so |
 | `kPathGapRows` | `3` | — | <gap> rows printed; gap_syms= counts them all, gap_syms_capped="1" says so |
+| `kRouteBodyMax` | `4` | — | spew guard: bodies per answer; past it capped="1" next= the first unshown |
+| `kRouteBodyMaxHops` | `2` | — | bridge rows 0..2 (from= and the next two), never the to= row |
 
 ### `src/pathpairs.h`
 

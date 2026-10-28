@@ -578,6 +578,8 @@ struct ForLensHeaderParts
     bool             bodyFoldPresent = false; // body-fold: a compact-route answer in the default regime has fold candidates
                                             // (forfold.h forBodyFoldCandidates), so a <fold> rides and its clause defines it;
                                             // set after construction, cleared with the section
+    bool             foldFollowPresent = false; // WRAPPER-FOLLOW (forfold.h renderFollows): the fold carries a <b follow_of=> (set after
+                                            // the fold renders), so its clause defines it
     bool             memberNamesPresent = false; // member-names (formembers.h): a shown owner row carries mem= (set after the
                                             // <sigs> splice), so its clause defines it
     bool             initSlotsPresent = false;   // FOR-SLOTS (forslots.h): a shown initializer row carries slots= (set after the
@@ -805,9 +807,11 @@ inline std::string_view hopsCallsNextLegend( const ForLensHeaderParts& p, bool c
     return presentOnlyClause( p.hopsCallsNextPresent, compact, kForCompactHopsCallsNextClause, kForHopsCallsNextClause );
 }
 // body-fold: the fold's clause in this dialect, present-only (bodyFoldPresent), right after the slot clause
-inline std::string_view bodyFoldLegend( const ForLensHeaderParts& p, bool compact ) noexcept
+// WRAPPER-FOLLOW: the follow_of= clause rides right after it, present-only (foldFollowPresent)
+inline std::string bodyFoldLegend( const ForLensHeaderParts& p, bool compact )
 {
-    return presentOnlyClause( p.bodyFoldPresent, compact, rw::kForCompactBodyFoldLegend, rw::kForBodyFoldLegend );
+    return std::string( presentOnlyClause( p.bodyFoldPresent, compact, rw::kForCompactBodyFoldLegend, rw::kForBodyFoldLegend ) )
+         + std::string( presentOnlyClause( p.foldFollowPresent, compact, rw::kForCompactFoldFollowLegend, rw::kForFoldFollowLegend ) );
 }
 inline constexpr std::string_view kForCompactLegendTail =
     "; t p= file outside sigs (weaker), t sym= its top symbols (a pointer, not the answer), r= rank (gap = trimmed)";
@@ -2652,6 +2656,7 @@ struct ForLensPassMode
 };
 // the verb sections (verbs_navigate.h) come later in this translation unit; the --for block calls their CLI entry points
 std::optional<int> runPath( const MainDispatch& d );
+std::optional<int> runPathServed( const MainDispatch& d, std::span<const rw::NodeId> served, bool inForBlock );
 std::optional<int> runCallHierarchy( const MainDispatch& d );
 std::optional<int> runConnect( const MainDispatch& d );
 
@@ -2659,7 +2664,7 @@ std::optional<int> runConnect( const MainDispatch& d );
 // gets that verb's DEFAULT answer inside <graph_verb endpoints="subject">, just before </ctx>, on the graph this run built
 // (no re-index). Every byte before it is the ordinary answer; nothing resolves → nothing is printed. XML only (the
 // --json / columnar dialects keep their single document; the verb is one call away there).
-inline void appendSubjectGraphVerb( const MainDispatch& d )
+inline void appendSubjectGraphVerbBlock( const MainDispatch& d, std::span<const rw::NodeId> served )
 {
     const rw::Config& cfg = d.cfg;
     if( cfg.json || cfg.columnar || cfg.candidates || d.multiRoot )
@@ -2694,7 +2699,7 @@ inline void appendSubjectGraphVerb( const MainDispatch& d )
     {
         switch( args->form )
         {
-            case rw::GraphSubjectForm::Path: (void)runPath( sd ); break;
+            case rw::GraphSubjectForm::Path: (void)runPathServed( sd, served, /*inForBlock=*/true ); break;
             case rw::GraphSubjectForm::Callers: (void)runCallHierarchy( sd ); break;
             case rw::GraphSubjectForm::Common: (void)runConnect( sd ); break;
         }
@@ -2711,7 +2716,7 @@ inline void appendSubjectGraphVerb( const MainDispatch& d )
         if( sub.legend == "compact" )
         {
             DISCLOSE( Diagnostics::answerUnchanged, "the full legend is a correct superset of the compact one: only the cost grows",
-                      "appendSubjectGraphVerb: no capture buffer — the graph verb's FULL legend is emitted" );
+                      "appendSubjectGraphVerbBlock: no capture buffer — the graph verb's FULL legend is emitted" );
         }
         if( args->form == rw::GraphSubjectForm::Path )   // CR 4396503866: the open tag cannot read the rows, so a by-name hop into a test file goes unmarked
         {
@@ -4071,7 +4076,12 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             if( sigsPreRendered && !enrich.surfaceOff && !enrich.hopsCutMarker )
             {
-                fold = rw::renderForBodyFold( rw::BodyFoldInputs{ ing, cfg.forTask, slot.served ? slotOwner.id : rw::kNoNode, lensRank, flRootArg, redactPtr, cfg.compress }, foldIds );
+                fold = rw::renderForBodyFold( rw::BodyFoldInputs{ ing, cfg.forTask, slot.served ? slotOwner.id : rw::kNoNode, lensRank, flRootArg, redactPtr, cfg.compress, &g }, foldIds );
+                if( fold.follows > 0 && !fold.xml.empty() )
+                {
+                    headerParts.foldFollowPresent = true;   // WRAPPER-FOLLOW: the clause rides beside the attribute it defines
+                    headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+                }
             }
             if( fold.xml.empty() )
             {
@@ -4413,7 +4423,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             rw::emitChargedSection( stdout, graphSection, [ & ]{ packGraphBlock( stdout, ing, lensRank, g.outOff, g.outTargets ); } );
         }
-        appendSubjectGraphVerb( d );   // FOR-ROUTE-DECLINED: "" unless the task is spelled as a graph question that resolves
+        appendSubjectGraphVerbBlock( d, servedAnswerBodies().bodies );   // FOR-ROUTE-DECLINED: "" unless the task is spelled as a graph question that resolves; the bodies this answer carries print no second copy in its path hop bodies
 
         rw::emitRaw( stdout, "</ctx>" );
         reportRedactions( stderr, redactCounts );
