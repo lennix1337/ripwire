@@ -28,7 +28,7 @@
 #   (D3) `path.match( /x/ )` (path: string), (D4) an un-annotated local, (D5) `this.name.match( re )` (name: string): not crossed.
 #   (D6) entity identity: a second class named App typing router as a Map makes the parameter shape undecided (not crossed),
 #        while `this.router` inside the first App stays crossed (owner by definition, not by name).
-#   (D7) a typed receiver over 17 candidates is no way in (near_sink stays external).
+#   (D7) a typed receiver over 17 candidates is no bridge crossing, but near_sink names the declined call (why=declined:N), never external (r1-followup).
 #   (D8) near_sink counts exactly the crossed sites (why="declined:2").
 #   (N1) to= with a slot hop: the root next= is --callers on to=; (N2) a to= with none keeps --expand; (N3) both legend forms.
 #   (I1) --impact ring: reaches="0" reaches_hedged="3" (composed hops: the third field hop), two <rh> rows; (I2) a ring member already in reaches= is not counted;
@@ -351,8 +351,9 @@ check( "(D6) a second class App typing router as a Map (not an in-tree class) le
        tsbridge( ts2, "viaParam" ) == "" and path( ts2, "viaParam", "routers/a.ts:match" ) != "" )
 check( "(D6) this.router inside the first App stays crossed (owner by definition, not by name)", 'via="declined" cands="2"' in tsbridge( ts2, "dispatch" ), repr( tsbridge( ts2, "dispatch" ) ) )
 tw = path( tmp + "/wide", "dispatch", "routers/r1.ts:match" )
-check( "(D7) a typed receiver over 17 candidates is no way in (near_sink why=external, no bridge)",
-       tw != "" and bridge( tw ) == "" and 'why="external"' in body( tw ) and "declined" not in ( re.search( r'<near_sink .*?</near_sink>', body( tw ) ) or re.match( "", "" ) ).group( 0 ), repr( body( tw )[-400:] ) )
+nsw = re.search( r'<near_sink .*?</near_sink>', body( tw ) )
+check( "(D7) a typed receiver over 17 candidates is no bridge crossing, and its near_sink row names the declined call (why=declined:1 in=dispatch), not external",
+       tw != "" and bridge( tw ) == "" and nsw is not None and 'why="declined:1"' in nsw.group( 0 ) and 'in="dispatch"' in nsw.group( 0 ) and 'why="external"' not in nsw.group( 0 ), repr( body( tw )[-400:] ) )
 td = path( ts, "onString", "routers/a.ts:match" )
 check( "(D8) near_sink counts exactly the two crossed sites (why=declined:2)", 'why="declined:2"' in body( td ), repr( re.findall( r'<ns [^>]*>', body( td ) ) ) )
 
