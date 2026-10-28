@@ -366,13 +366,29 @@ else
 fi
 
 # (B6) MCP: a soft stop answers with the envelope disclosure, and every answer from that partial index keeps it
+#      WHICH files survive crawl:30 is the filesystem's readdir order (recursive_directory_iterator, no sort before the
+#      stop): APFS keeps a/f02.c, ext4's hashed order can keep it or not (a simulation over random orders keeps it
+#      ~37 % of the time). find_symbol of a name outside the kept files is a JSON-RPC ERROR, which has no
+#      result._memory_stop at all (CI 40671724898 and #458 runs: B6b "_memory_stop=''" on ubuntu only). So the
+#      per-answer assertions below use verbs whose answer is a RESULT on ANY partial index (grep, an empty match is
+#      still an envelope), and the find_symbol probe is asserted only on the shape it actually returned.
 printf '%s\n' \
     "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$FX\",\"pattern\":\"a_01\"}}}" \
-    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"$FX\",\"symbol\":\"a_02\"}}}" \
+    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$FX\",\"pattern\":\"a_02\"}}}" \
+    "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"$FX\",\"symbol\":\"a_02\"}}}" \
     | RIPWIRE_TEST_MEMGUARD=crawl:30 mcp_call "$TMP" --max-memory=64M >"$TMP/b6.out"
 ms2="$( mcp_field "$TMP/b6.out" 2 _memory_stop )"; ms3="$( mcp_field "$TMP/b6.out" 3 _memory_stop )"
 case "$ms2" in *"memory guard"*crawl*64M*) ok "(B6) MCP grep under a crawl stop carries _memory_stop";; *) no "(B6) id=2 _memory_stop='${ms2:0:200}' resp: $( head -c 300 "$TMP/b6.out" )";; esac
-case "$ms3" in *"memory guard"*) ok "(B6b) the next answer from the same partial index still carries it";; *) no "(B6b) id=3 _memory_stop='${ms3:0:200}'";; esac
+case "$ms3" in *"memory guard"*) ok "(B6b) the next answer from the same partial index still carries it";; *) no "(B6b) id=3 _memory_stop='${ms3:0:200}' resp: $( grep '"id":3' "$TMP/b6.out" | head -c 300 )";; esac
+# (B6b2) a third verb on the same index: when the symbol is inside the kept files the answer is a result and must carry
+#        the disclosure; when it is outside them the answer is a not-found ERROR, whose shape (no envelope) is not what
+#        this arm pins — said on a NOTE line, not a PASS, so a reader sees which shape ran
+if [ -n "$( mcp_field "$TMP/b6.out" 4 error )" ]; then
+    printf '  NOTE  (B6b2) find_symbol a_02 fell outside the kept files here (readdir order): a not-found error, no envelope to check\n'
+else
+    ms4="$( mcp_field "$TMP/b6.out" 4 _memory_stop )"
+    case "$ms4" in *"memory guard"*) ok "(B6b2) find_symbol from the same partial index still carries it";; *) no "(B6b2) id=4 _memory_stop='${ms4:0:200}'";; esac
+fi
 printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$FX\",\"pattern\":\"a_01\"}}}" \
     | mcp_call "$TMP" >"$TMP/b6c.out"
 if grep -q '_memory_stop' "$TMP/b6c.out"; then
