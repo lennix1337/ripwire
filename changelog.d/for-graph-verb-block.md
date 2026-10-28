@@ -9,5 +9,5 @@ that the verb's own resolver finds runs; no plain word is an endpoint except `ma
 "spawning ripgrep") never fires. The block's legend says the endpoints are a name match read from prose. Everything before the
 block is byte-identical to the answer without it, and nothing is appended when no combination resolves or the task is not one
 of the three forms. The verb runs with its default caps and next= paging, so the block is the bare call's own bytes (CLI:
-byte-identical, compact legend included). Measured on the LARGE-DEV rows: 7 rows move a tier (5 to complete), 13 of 15 missing
+byte-identical, compact legend included). Measured on a set of large-repository tasks: 7 rows move a tier (5 to complete), 13 of 15 missing
 chain items recovered, none lost; the parser fires on 0 of 258 non-graph subjects. Gate: `test/forroutecheck.sh`.
