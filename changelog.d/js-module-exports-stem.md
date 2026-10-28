@@ -6,4 +6,5 @@
 (`module.exports = function onlyNamed() {}`), and `module.exports.NAME = fn` is unchanged. Side effect, measured on koa: test helpers
 written this way (`test-helpers/context.js`) are now named like the local that requires them, so their callers bind by name
 (unresolved calls 210 → 50). Not fixed: a call through a different local name (`const isStream = require('./is-stream.js')`)
-still has no edge, so koa-11's rubric item for `lib/is-stream.js` is not yet credited. Gate: `test/jsdefnamingcheck.sh` (3).
+still has no edge, so koa-11's rubric item for `lib/is-stream.js` is not yet credited. The test is the spelling, like `exports.NAME = fn` before it: a file that declares its own `module` (`const module = {}`) and assigns
+`module.exports = fn` is read as CommonJS too (a floor, carried). Gate: `test/jsdefnamingcheck.sh` (3).
