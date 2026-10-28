@@ -275,14 +275,19 @@ public:
 private:
     enum class Use : std::uint8_t { None, Path, Opaque };
     static bool upperLead( std::string_view s ) noexcept { return !s.empty() && s[0] >= 'A' && s[0] <= 'Z'; }
+    // resolve.h trimWs, newlines included (a `use` brace group spans lines)
     static std::string_view trimmed( std::string_view s ) noexcept
     {
-        while( !s.empty() && ( s.front() == ' ' || s.front() == '\n' || s.front() == '\t' || s.front() == '\r' ) ) { s.remove_prefix( 1 ); }
-        while( !s.empty() && ( s.back() == ' ' || s.back() == '\n' || s.back() == '\t' || s.back() == '\r' ) ) { s.remove_suffix( 1 ); }
+        for( std::size_t was = s.size() + 1; was != s.size(); )
+        {
+            was = s.size();
+            s   = trimWs( s );
+            s   = s.starts_with( '\n' ) ? s.substr( 1 ) : s;
+            s   = s.ends_with( '\n' ) ? s.substr( 0, s.size() - 1 ) : s;
+        }
         return s;
     }
     static std::string_view firstSegment( std::string_view p ) noexcept { return p.substr( 0, std::min( p.find( "::" ), p.size() ) ); }
-    static std::string joined( std::string_view a, std::string_view b ) { return a.empty() ? std::string( b ) : std::string( a ) + "::" + std::string( b ); }
     // A crate's name as a path spells it: its directory's last component, `-` as `_` (`crates/nu-engine` → nu_engine).
     static std::string crateName( std::string_view crate )
     {
@@ -311,7 +316,7 @@ private:
             {
                 head.remove_suffix( 2 );
             }
-            const std::string      p    = head.empty() ? prefix : joined( prefix, head );
+            const std::string      p    = head.empty() ? prefix : CallResultTypes::joinModule( prefix, head );
             const std::string_view body = t.substr( br + 1, close - br - 1 );
             int                    lvl  = 0;
             std::size_t            from = 0;
@@ -335,7 +340,7 @@ private:
         }
         const std::size_t c      = t.rfind( "::" );
         std::string_view  leaf   = c == std::string_view::npos ? t : t.substr( c + 2 );
-        std::string       module = c == std::string_view::npos ? prefix : joined( prefix, t.substr( 0, c ) );
+        std::string       module = c == std::string_view::npos ? prefix : CallResultTypes::joinModule( prefix, t.substr( 0, c ) );
         if( leaf == "self" )
         {
             const std::size_t up = module.rfind( "::" );   // `a::b::{self}` binds module b
@@ -463,7 +468,7 @@ private:
             {
                 if( m_crates[f] == it->second )
                 {
-                    return fileAt( r.fileId, "crate::" + joined( rest, name ), f );   // that crate's root anchors it
+                    return fileAt( r.fileId, "crate::" + CallResultTypes::joinModule( rest, name ), f );   // that crate's root anchors it
                 }
             }
             return At{ Reach::None };
@@ -475,7 +480,7 @@ private:
         std::string via;
         if( depth == 0 && useOf( r.fileId, seg, via ) == Use::Path )
         {
-            return moduleReach( r, joined( via, module ), name, 1 );
+            return moduleReach( r, CallResultTypes::joinModule( via, module ), name, 1 );
         }
         return At{ Reach::None };
     }
@@ -490,7 +495,7 @@ private:
         const bool modFile = stem == "mod" || stem == "lib" || stem == "main";
         if( anchor == "crate" )
         {
-            return rest.empty() ? At{ Reach::CrateRoot, false, kNoFile, m_crates[ r.fileId ] } : fileAt( r.fileId, "crate::" + joined( rest, name ), r.fileId );
+            return rest.empty() ? At{ Reach::CrateRoot, false, kNoFile, m_crates[ r.fileId ] } : fileAt( r.fileId, "crate::" + CallResultTypes::joinModule( rest, name ), r.fileId );
         }
         if( r.fromSymbol < ing.symbols.size() )
         {
@@ -506,18 +511,18 @@ private:
             {
                 return At{ Reach::File, false, r.fileId };
             }
-            return fileAt( r.fileId, modFile ? "self::" + joined( rest, name ) : "self::" + joined( joined( stem, rest ), name ), r.fileId );
+            return fileAt( r.fileId, modFile ? "self::" + CallResultTypes::joinModule( rest, name ) : "self::" + CallResultTypes::joinModule( CallResultTypes::joinModule( stem, rest ), name ), r.fileId );
         }
         if( modFile )   // super of a mod.rs: its directory's parent module (a crate root has none)
         {
-            return stem != "mod" || rest.empty() ? At{ Reach::None } : fileAt( r.fileId, "super::" + joined( rest, name ), r.fileId );
+            return stem != "mod" || rest.empty() ? At{ Reach::None } : fileAt( r.fileId, "super::" + CallResultTypes::joinModule( rest, name ), r.fileId );
         }
         if( rest.empty() )   // `super::x` in d/s.rs: x in module d (d.rs or d/mod.rs)
         {
             const std::string_view up = dir.substr( dir.rfind( '/' ) == std::string_view::npos ? 0 : dir.rfind( '/' ) + 1 );
-            return up.empty() ? At{ Reach::None } : fileAt( r.fileId, "super::" + joined( up, name ), r.fileId );
+            return up.empty() ? At{ Reach::None } : fileAt( r.fileId, "super::" + CallResultTypes::joinModule( up, name ), r.fileId );
         }
-        return fileAt( r.fileId, "self::" + joined( rest, name ), r.fileId );   // super::a::x in d/s.rs: d/a…
+        return fileAt( r.fileId, "self::" + CallResultTypes::joinModule( rest, name ), r.fileId );   // super::a::x in d/s.rs: d/a…
     }
 
     const IngestResult*                          m_ing = nullptr;

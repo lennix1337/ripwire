@@ -297,11 +297,6 @@ private:
         forEachNamedChild( n, c.cur, [ & ]( TSNode ch ) { bindIn( ch, out, depth + 1 ); return true; } );
     }
 
-    static std::string_view lastSegment( std::string_view path ) noexcept
-    {
-        const std::size_t at = path.rfind( "::" );
-        return at == std::string_view::npos ? path : path.substr( at + 2 );
-    }
     // `Box::new` / `Rc::new` / `Arc::new` (any module path before the type): a wrapper that hands its one argument on (the value, not a registrar).
     bool wrapperCallee( TSNode fn ) const noexcept
     {
@@ -309,7 +304,7 @@ private:
         {
             return false;
         }
-        const std::string_view path = lastSegment( text( field( fn, "path" ) ) );   // `std::sync::Arc` as `Arc`
+        const std::string_view path = scopeLastSegment( text( field( fn, "path" ) ) );   // `std::sync::Arc` as `Arc`
         return path == "Box" || path == "Rc" || path == "Arc";
     }
     // A value as written, through `( v )`, `Box::new( v )`, `Rc::new( v )`, `Arc::new( v )`.
@@ -551,7 +546,7 @@ private:
     static std::string shownType( std::string_view ty )
     {
         const std::size_t at = ty.rfind( "::" );
-        return at == std::string_view::npos || upperLead( lastSegment( ty.substr( 0, at ) ) ) ? std::string( ty ) : std::string( ty.substr( at + 2 ) );
+        return at == std::string_view::npos || upperLead( scopeLastSegment( ty.substr( 0, at ) ) ) ? std::string( ty ) : std::string( ty.substr( at + 2 ) );
     }
     // `x.f = v`: a store into field f (typed for `self.f` inside an impl, else the name tier).
     void assignAt( TSNode as )
