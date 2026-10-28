@@ -535,8 +535,11 @@ fi
 #        beside the ingest; a memory-guard refusal used to join that walk's future before exiting, so the exit code waited for
 #        the end of the log. With a git shim whose `log --name-only` (the walk's own stream; its sha-list probe and every other
 #        git call reach the real git) streams one line every 0.1 s for 6 s, the refusal must return well before the stream ends:
-#        the walker stops at its next line and the join ends there (<= 4 s against the 6 s stream: measured 2 s plain and under
-#        ASan on a loaded 10-core host; the pre-fix binary took 17-25 s). Fresh TMPDIR, so no cached stream from an earlier arm
+#        the walker stops at its next line and the join ends there (measured 2 s plain and under ASan on a loaded 10-core host;
+#        the pre-fix binary took 17-25 s). The verdict is NOT a wall-clock bound: a fixed 4 s failed at 5 s on a host at load
+#        average 13-19, where the shim's own 60 spawned sleeps stretch the 6 s stream too. A join can only end when the stream
+#        does, so the shim writes log-done after its last line and the refusal must have returned without it (the abandoned
+#        walker gets SIGPIPE at its next echo and exits before reaching it); the elapsed seconds stay in the message. Fresh TMPDIR, so no cached stream from an earlier arm
 #        stands in for the walk; the shim records that it served the walk.
 SHIM="$TMP/shim"; mkdir -p "$SHIM" "$TMP/b21tmp"
 REALGIT="$( command -v git )"
@@ -547,6 +550,7 @@ for a in "\$@"; do
         : > "$SHIM/log-served"
         i=0
         while [ \$i -lt 60 ]; do echo "shim-line \$i" || exit 0; sleep 0.1; i=\$((i+1)); done
+        : > "$SHIM/log-done"
         exit 0
     fi
 done
@@ -558,10 +562,10 @@ PATH="$SHIM:$PATH" TMPDIR="$TMP/b21tmp" run_trip crawl:30 "$FXG" --no-cache --fo
 el=$(( $( date +%s ) - t0 ))
 if [ ! -e "$SHIM/log-served" ]; then
     no "(B21) premise: the shim never served a git log --name-only — the history walk did not run against it (rc=$rc)"
-elif [ "$rc" = 5 ] && grep -q '^ripwire: .*cannot answer from a partial index' "$TMP/b21.err" && [ "$el" -le 4 ]; then
+elif [ "$rc" = 5 ] && grep -q '^ripwire: .*cannot answer from a partial index' "$TMP/b21.err" && [ ! -e "$SHIM/log-done" ]; then
     ok "(B21) --for over a crawl stop refuses in ${el}s while the shim's log still streams: the walk is abandoned, not joined"
 else
-    no "(B21) rc=$rc elapsed=${el}s (the shim's log streams for 6 s; a join waits it out) stderr: $( grep '^ripwire:' "$TMP/b21.err" | head -c 200 )"
+    no "(B21) rc=$rc elapsed=${el}s stream-finished-before-return=$( [ -e "$SHIM/log-done" ] && echo yes || echo no ) (the shim's log streams for 6 s; a join waits it out) stderr: $( grep '^ripwire:' "$TMP/b21.err" | head -c 200 )"
 fi
 # (B16) --query --format=candidates is a report verb, so it refuses a partial index like the rest (pinned: its
 #       <candidates> root has no header to carry the cut)
