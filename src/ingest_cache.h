@@ -363,7 +363,7 @@ constexpr std::uint32_t kCacheVersion = 46;           // 46: train 40 — lane j
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 251;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 255;          // bump on any grammar/.scm/extraction change
                                                       // 251 = 2026-10-27 (train 40: lanes js-def-naming (placeholder 238; JS `module.exports = <anonymous fn>` named
                                                       //   by its file stem, module-scope `NAME = { … }` binding names), string-keyed (241; Pattern qualifier "t" at a
                                                       //   hasattr test / JS-TS subscript store) and fn-slot (247; Go function-valued slot records)). Strictly above

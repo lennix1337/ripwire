@@ -2040,7 +2040,9 @@ inline CallDisposition javaCandidateRefused( Graph& g, const Reference& r, bool 
 //                 one call site. A function-LOCAL reassignment is a narrower fact (only THAT function's
 //                 calls are unsafe) and is carried the existing way instead — a `LocalBindKind::VarDecl`
 //                 Binding attributed to that function, read by `ExternalVeto::hasLocal` exactly like a
-//                 parameter shadow already was.
+//                 parameter shadow already was. Two pseudo-names ride the same table: kPythonDynamicBind /
+//                 kPythonDynamicWrite (the file's dynamic namespace markers) and "?name" (kPythonCondDefPrefix:
+//                 a module-scope def/class of name inside an `if`/`try`/`with`/loop).
 //   freeName    — C-family: the NAME of every scope-less (free) symbol or macro, declaration or definition,
 //                 anywhere in the corpus, restricted to names in the C-family table. A bare C++ call can
 //                 reach a free function given some declaration (an angle include is not path-resolvable, so
@@ -2193,12 +2195,17 @@ inline bool isPythonSourcePath( std::string_view path ) noexcept
     return ext == ".py" || ext == ".pyi";
 }
 
-// the pseudo-name a file's DYNAMIC module-namespace writes are filed under in pythonModuleRebind ("<fileId>#__getattr__"): a module
-// `def __getattr__` (an ordinary top-level def, so buildPythonModuleRebindVetoes already records it) and, added by
-// markPythonDynamicBinds, a `globals()` or `setattr(...)` call anywhere in the file (`globals()['a'] = x`, `setattr(sys.modules[__name__], ...)`):
-// writes no static table can see. The file then binds ANY name it could be asked for; pythonFileBindsOnlyByImport and pythonPackageMayBind
-// read it as unknown. `sys.modules[__name__].a = x` is not a call and stays a floor.
-inline constexpr std::string_view kPythonDynamicBind = "__getattr__";
+// the two DYNAMIC module-namespace markers in pythonModuleRebind. kPythonDynamicBind ("<fileId>#__getattr__"): a module `def __getattr__`
+// (an ordinary top-level def, so buildPythonModuleRebindVetoes already records it; PEP 562: consulted only for a name the module does
+// NOT bind). kPythonDynamicWrite ("<fileId>#(globals)", a spelling no identifier has), added by markPythonDynamicBinds: a `globals()`
+// or `setattr(...)` call anywhere in the file (`globals()['a'] = x`, `setattr(sys.modules[__name__], ...)`), a write no static table
+// can see, so the file may rebind ANY name. pythonFileBindsOnlyByImport and pythonPackageMayBind read either as unknown
+// (pythonDynamicNamespace); pythonRenamedImportPin lets `__getattr__` withhold only a name that may be unbound (kPythonCondDefPrefix).
+// KNOWN FLOOR (not detected, not markers): zero-argument `vars()[...] =` / `locals()[...] =` at module scope, `exec('a = x')`,
+// `sys.modules[__name__].__dict__[...] =` and `sys.modules[__name__].a = x` also rebind a module name; a pin in a file that uses one
+// of them can be wrong (the same old floor the base has in files without a `__getattr__`). Extending the marker is a carded change.
+inline constexpr std::string_view kPythonDynamicBind  = "__getattr__";
+inline constexpr std::string_view kPythonDynamicWrite = "(globals)";
 
 inline HashMap<std::string, char> markPythonDynamicBinds( const IngestResult& ing, HashMap<std::string, char> pythonModuleRebind )
 {
@@ -2208,7 +2215,7 @@ inline HashMap<std::string, char> markPythonDynamicBinds( const IngestResult& in
         if( r.role == RefRole::Call && ( r.calleeName == "globals" || r.calleeName == "setattr" ) && r.fileId < ing.files.size()
             && isPythonSourcePath( rootRelPath( ing, r.fileId ) ) )
         {
-            key.clear();  Narrower::appendUint( key, r.fileId );  key.push_back( '#' );  key.append( kPythonDynamicBind );
+            key.clear();  Narrower::appendUint( key, r.fileId );  key.push_back( '#' );  key.append( kPythonDynamicWrite );
             pythonModuleRebind.try_emplace( key, '\0' );
         }
     }
@@ -2567,6 +2574,14 @@ inline const std::string& fileNameKey( std::string& key, std::uint32_t id, std::
     Narrower::appendUint( key, id );
     key.append( 1, '#' ).append( name );
     return key;
+}
+
+// does Python file `f` carry either dynamic module-namespace marker (a module `__getattr__`, or a `globals()` / `setattr(...)` write)?
+// The conservative reading: any name may be bound there by something no static table lists.
+inline bool pythonDynamicNamespace( const HashMap<std::string, char>& rebind, std::string& key, std::uint32_t f )
+{
+    return std::ranges::any_of( std::array{ kPythonDynamicBind, kPythonDynamicWrite },
+                                [ & ]( std::string_view marker ) { return rebind.contains( fileNameKey( key, f, marker ) ); } );
 }
 
 // ── Phase 5: the external-name VETO predicate (docs/EVALS.md "Phase 5", mechanism 1) ───────────────────
@@ -7401,7 +7416,7 @@ inline bool pythonStarMayBind( const ExternalVetoTables& v, std::uint32_t f, std
 // default-withhold test a re-export chain applies at EVERY hop: exactly one module-scope binding, a member import with no rename
 // (`import a as name` and `from m import x as name` bind something else); no later rebinding of any form (an assignment, augmented
 // assignment, for/with/except target, walrus, def or class of the name, a `global` anywhere: pythonModuleRebind), no star import that could
-// bind it, and no dynamic write (kPythonDynamicBind). Anything else, and anything unknown (no nameBinds row), is false: the chain stops
+// bind it, and no dynamic namespace marker (pythonDynamicNamespace). Anything else, and anything unknown (no nameBinds row), is false: the chain stops
 // there, so the row is withheld, never shown and never a bridge.
 inline bool pythonFileBindsOnlyByImport( const ExternalVetoTables& v, std::uint32_t f, std::string_view name )
 {
@@ -7413,7 +7428,7 @@ inline bool pythonFileBindsOnlyByImport( const ExternalVetoTables& v, std::uint3
     std::string key;
     return std::ranges::count_if( *binds, []( const PythonNameBind& b ) { return b.scope == kNoNode; } ) == 1
         && std::ranges::any_of( *binds, []( const PythonNameBind& b ) { return b.scope == kNoNode && b.isImport && !b.moduleForm && b.member.empty(); } )
-        && !v.pythonModuleRebind.contains( fileNameKey( key, f, name ) ) && !v.pythonModuleRebind.contains( fileNameKey( key, f, kPythonDynamicBind ) )
+        && !v.pythonModuleRebind.contains( fileNameKey( key, f, name ) ) && !pythonDynamicNamespace( v.pythonModuleRebind, key, f )
         && !pythonStarMayBind( v, f, name );
 }
 
@@ -7498,7 +7513,7 @@ inline bool pythonPackageMayBind( const ExternalVetoTables& v, std::uint32_t pkg
     {
         return true;
     }
-    return v.pythonModuleRebind.contains( fileNameKey( key, pkg, name ) ) || v.pythonModuleRebind.contains( fileNameKey( key, pkg, kPythonDynamicBind ) )
+    return v.pythonModuleRebind.contains( fileNameKey( key, pkg, name ) ) || pythonDynamicNamespace( v.pythonModuleRebind, key, pkg )
         || pythonStarMayBind( v, pkg, name );
 }
 
@@ -7653,7 +7668,7 @@ inline PythonRenamedImports buildPythonRenamedImports( const IngestResult& ing )
 // PY-IMPORT-ALIAS-CALL: the ONE definition a bare Python call `y()` reaches through `from m import x as y`, else kNoNode. Decided only
 // when y's renamed import is its one binding where the call runs: no local or parameter of y in the caller or any def enclosing it
 // (localNameSet, which also holds a def-scoped import of y), no module-scope rebinding (`y = …`, `def y`, a `global y`, a dynamic
-// namespace write: pythonModuleRebind), and no star import in the file (it may bind y after the rename); and only when m resolves to ONE
+// namespace write: pythonModuleRebind; the caller file's own `__getattr__` is never consulted for a name it binds), and no star import in the file (it may bind y after the rename); and only when m resolves to ONE
 // indexed file (memberImportFile) whose module scope binds x ONLY by that one function or class (pythonEndpointBindsOnlyByClass). A package that
 // re-exports x defines none there: no decision, the call falls to the unchanged ladder (a floor, not a guess). A comprehension target or lambda parameter
 // named y that covers the call byte is a binding too (PythonRenamedImports::shadows: the site-spanned records localNameSet skips).
@@ -7663,7 +7678,7 @@ inline NodeId pythonRenamedImportPin( const IngestResult& ing, const PythonRenam
     std::string key;
     const auto  rit = imports.renamed.find( fileNameKey( key, r.fileId, r.calleeName ) );
     if( rit == imports.renamed.end() || r.fromSymbol == kNoNode || r.fromSymbol >= ing.symbols.size()
-        || v.pythonModuleRebind.contains( key ) || v.pythonModuleRebind.contains( fileNameKey( key, r.fileId, kPythonDynamicBind ) )
+        || v.pythonModuleRebind.contains( key ) || v.pythonModuleRebind.contains( fileNameKey( key, r.fileId, kPythonDynamicWrite ) )
         || ( r.fileId < v.pythonScopes.starTargets.size() && !v.pythonScopes.starTargets[ r.fileId ].empty() ) || veto.hasLocal( r, r.calleeName )
         || std::ranges::any_of( imports.shadows, [ &r ]( const PythonAliasShadow& s )
                                  { return s.sym == r.fromSymbol && s.var == r.calleeName && r.startByte >= s.span.startByte && r.startByte < s.span.endByte; } ) )
@@ -7703,8 +7718,12 @@ inline NodeId pythonRenamedImportPin( const IngestResult& ing, const PythonRenam
     // m's own module scope must bind x ONLY by that def or class (pythonEndpointBindsOnlyByClass, the re-export chain's endpoint test): a later
     // `from fast import x`, a try-import, `x = other`, `x = deco(x)` or a star import that may bind x leaves the name something else at run time
     // (a star import of a file outside the tree, `from _operator import *`, is unknown: the call keeps the unchanged ladder), and a dynamic
-    // namespace write (`globals()[...]`, a module `__getattr__`) may bind it too
-    if( only != kNoNode && ( !pythonEndpointBindsOnlyByClass( v, mf->second, rit->second ) || v.pythonModuleRebind.contains( fileNameKey( key, mf->second, kPythonDynamicBind ) ) ) )
+    // namespace write (`globals()[...]`, `setattr(...)`) may bind it too. A module `__getattr__` (PEP 562) answers only a name m does not
+    // bind, so it withholds only when x's def sits inside an `if`/`try`/`with`/loop at module scope (kPythonCondDefPrefix: it may not run)
+    if( only != kNoNode
+        && ( !pythonEndpointBindsOnlyByClass( v, mf->second, rit->second ) || v.pythonModuleRebind.contains( fileNameKey( key, mf->second, kPythonDynamicWrite ) )
+             || ( v.pythonModuleRebind.contains( fileNameKey( key, mf->second, kPythonDynamicBind ) )
+                  && v.pythonModuleRebind.contains( fileNameKey( key, mf->second, std::string{ kPythonCondDefPrefix }.append( rit->second ) ) ) ) ) )
     {
         return kNoNode;
     }

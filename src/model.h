@@ -1556,6 +1556,12 @@ struct RubyMainMixinRow
     std::uint32_t line   = 0;   // the constant's 1-based line
 };
 
+// PY-ALIAS-SPLIT-MARKER: a Python def or class statement at MODULE scope that sits inside a compound statement (`if`, `try`,
+// `with`, `for`, `while`, `match`: it may not run) files, besides its ordinary VarDecl, a second VarDecl spelled with this prefix
+// (`?f`). No identifier starts with it, so no name lookup ever matches the record; graph.h pythonRenamedImportPin reads it as "f may
+// be unbound", the case where a module `__getattr__` (PEP 562, consulted only for names the module lacks) answers instead.
+inline constexpr std::string_view kPythonCondDefPrefix = "?";
+
 struct Binding
 {
     NodeId        fromSymbol = kNoNode;   // enclosing function/method (the binding's scope); kNoNode if file-scope
