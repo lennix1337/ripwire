@@ -20,7 +20,7 @@
 #   P4 [P] the clause rides in both legends when the element does, and defines every attribute the element carries
 #   P5 [P] prefix identity: the answer minus <dispatch> and its clause, est_tokens masked, equals RIPWIRE_NO_DISPATCH_HOP=1
 #   P6 [G] next= pasted (--whereis=Fetch) lists every candidate the element names
-#   N1 [G] no element: the bare subject (Loader::Load), the call as a bare word (Loader::Load the Fetch), a wrapper calling its own
+#   N1 [G] no element: the bare subject (build_book), the call as a bare word (Loader::Load the Fetch), a wrapper calling its own
 #          name (CachedSource::Fetch inner_->Fetch), a type subject (DiskSource src_->Fetch), a call declined for another
 #          reason (Python job.run: the ladder tier, no gate — dispatch_job job.run)
 #   N2 [G] no element, byte-identical to RIPWIRE_NO_DISPATCH_HOP=1: --json, --signatures-only, --token-budget=3000
@@ -124,7 +124,8 @@ n1(){ local dir="$1" task="$2" why="$3"
     if [ -s "$TMP/n1" ] && [ -z "$( hop "$TMP/n1" )" ] && ! grep -q '; dispatch call=' "$TMP/n1"; then ok "(N1) no element: $why"
     else no "(N1) an element or clause rode on $why: [$( hop "$TMP/n1" )]"; fi
 }
-n1 "$F/cpp" "Loader::Load" "the bare subject"
+n1 "$F/rs" "build_book" "the bare subject (name-exact, its body makes the iface call)"
+run "$F/rs" --for=build_book | grep -q 'route="name-exact(build_book)' && ok "(N1pre) the bare subject routes name-exact (the task-names guard, not the route, holds it)" || no "(N1pre) build_book did not route name-exact"
 n1 "$F/cpp" "Loader::Load the Fetch" "the call as a bare word"
 n1 "$F/cppwrap" "CachedSource::Fetch inner_->Fetch" "a wrapper calling its own name"
 n1 "$F/cpp" "DiskSource src_->Fetch" "a type subject"
