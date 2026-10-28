@@ -122,7 +122,7 @@ public:
     std::vector<std::uint32_t> sitesNaming( NodeId d ) const
     {
         std::vector<std::uint32_t> out;
-        if( !any() || !isHandlerShaped( d ) )
+        if( !any() || d >= m_inClass.size() || m_inClass[d] == 0 )   // a Python function definition inside a class
         {
             return out;
         }
@@ -207,11 +207,6 @@ public:
     }
 
 private:
-    // A Python function definition inside a class (collectMessagesAndMethods marks them).
-    bool isHandlerShaped( NodeId d ) const
-    {
-        return d < m_inClass.size() && m_inClass[d] != 0;
-    }
     std::string_view span( const Symbol& s ) const
     {
         const std::string& t = text( s.fileId );
