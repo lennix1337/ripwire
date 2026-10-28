@@ -45,6 +45,7 @@
 #include "infra/namesplit.h"  // afterLast — a bound scope's final segment, the base index key (K5 rule 2c)
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -1045,7 +1046,8 @@ inline constexpr std::string_view kNearSinkLegend =
 inline constexpr std::string_view kNearSinkNameKeyLegend =
     "ns via=name-key cands=K: the declined site is a NAME-KEYED lookup, not a call: in= looks a method up by a name built from a template "
     "(getattr(o, 'do_' + c), o['on' + e]) that fits this row, a template that can name K definitions including it; matched, never traced; "
-    "the bridge crosses a lookup of at most 16, so a wider one is a way in with no bridge row. ";
+    "the bridge crosses a lookup of at most 16, so a wider one is a way in with no bridge row. Or a posted message: in= passes a construction of a "
+    "message class whose handler name (the repo's own __init_subclass__ rule) is this row's name, at site=; K the methods of that name. ";
 inline std::string nearSinkLegend( const PathNearSink& ns )
 {
     const std::size_t shown = std::min( ns.rows.size(), kNearSinkRows );
@@ -1533,6 +1535,259 @@ inline std::string pathBridgeXml( const IngestResult& ing, const Graph& g, const
         out += "/>";
     }
     return out + "</bridge>";
+}
+
+// ── ON-NAME-HANDLERS-V2: the message-handler rule on a reachable=0 --path ─────────────────────────────────────────────────
+// When from= is a poster (handlerrule.h: a method of a class that reads the rule attribute) called at post sites whose
+// message class names a to= handler, the answer says HOW the message gets there by name: the rule (where the repo writes the
+// handler name and its spelling), the readers that pass the name on (the dispatch side, by name on the read's own line),
+// and the posted classes with the width of each handler name. All of it is a HEDGE: matched by name, never traced, never in
+// reachable=/hops=; a handler name with more than kHandlerRuleListMax definitions is a count with next=, never a cut list.
+inline constexpr std::size_t kHandlerRuleShown   = 3;    // <hm> rows: the widest posted classes first
+inline constexpr std::size_t kHandlerRuleReaders = 4;    // <hrd> rows
+inline constexpr std::size_t kHandlerRuleListMax = 16;   // the bridge's own width limit: at most this many defs are listed as <h>
+
+struct PathHandlerRow
+{
+    NodeId        cls   = kNoNode;
+    std::uint32_t site  = 0;   // the first post site of that class
+    std::uint32_t posts = 0;
+    std::uint32_t cands = 0;
+    std::string   handler;
+};
+struct PathHandlerRule
+{
+    const HandlerRule*          rule = nullptr;
+    std::uint32_t               posts = 0;
+    std::uint32_t               defs  = 0;
+    std::vector<PathHandlerRow> rows;      // every posted class, widest first
+    std::vector<NodeId>         listed;    // the handler defs when defs <= kHandlerRuleListMax
+    bool found() const noexcept { return rule != nullptr && !rows.empty(); }
+};
+
+inline PathHandlerRule pathHandlerRule( const IngestResult& ing, const NameKeyHops& names, std::span<const NodeId> srcDefs, std::span<const NodeId> dstDefs )
+{
+    PathHandlerRule     out;
+    const HandlerRules& hr = names.rules();
+    if( !hr.any() )
+    {
+        return out;
+    }
+    std::vector<std::string_view> fromNames;
+    for( const NodeId s : srcDefs )
+    {
+        fromNames.push_back( ing.symbols[s].name );
+    }
+    std::vector<std::string_view> toNames;
+    for( const NodeId d : dstDefs )
+    {
+        toNames.push_back( ing.symbols[d].name );
+    }
+    std::ranges::sort( toNames, sortutil::svLess );
+    toNames.erase( std::ranges::unique( toNames ).begin(), toNames.end() );
+    std::vector<std::string> hit;   // the handler names a counted post site carries that to= names
+    for( const HandlerPostSite& site : hr.sites() )
+    {
+        const Reference& r = ing.references[ site.ref ];
+        if( !std::ranges::contains( fromNames, std::string_view( r.calleeName ) ) )
+        {
+            continue;
+        }
+        bool counted = false;
+        for( std::size_t k = 0; k < site.classes.size(); ++k )
+        {
+            const std::string h = hr.handlerNameOf( site.classes[k] );
+            if( !std::ranges::binary_search( toNames, std::string_view( h ), sortutil::svLess ) )
+            {
+                continue;
+            }
+            counted = true;
+            hit.push_back( h );
+            const auto row = std::ranges::find( out.rows, site.classes[k], &PathHandlerRow::cls );
+            if( row != out.rows.end() )
+            {
+                ++row->posts;
+                continue;
+            }
+            const std::vector<NodeId> t = hr.targets( site.ref );
+            out.rows.push_back( PathHandlerRow{ site.classes[k], site.ref, 1, std::uint32_t( std::ranges::count_if( t, [ & ]( NodeId d ) { return ing.symbols[d].name == h; } ) ), h } );
+        }
+        out.posts += counted ? 1 : 0;
+    }
+    if( out.rows.empty() )
+    {
+        return out;
+    }
+    std::ranges::sort( hit, sortutil::svLess );
+    hit.erase( std::ranges::unique( hit ).begin(), hit.end() );
+    for( const NodeId d : dstDefs )
+    {
+        if( std::ranges::binary_search( hit, std::string_view( ing.symbols[d].name ), sortutil::svLess ) && hr.classes().ownerOf( d ) != kNoNode )
+        {
+            ++out.defs;
+            out.listed.push_back( d );
+        }
+    }
+    if( out.defs > kHandlerRuleListMax )
+    {
+        out.listed.clear();
+    }
+    std::ranges::stable_sort( out.rows, []( const PathHandlerRow& a, const PathHandlerRow& b ) { return a.cands > b.cands; } );
+    out.rule = hr.ruleOf( out.rows.front().cls );   // the ONE rule pick (handlerrule.h): the nearest rule base
+    return out;
+}
+
+// Owner.name for a definition inside a class, else the name.
+inline std::string handlerRuleQualified( const IngestResult& ing, const HandlerRules& hr, NodeId d )
+{
+    const NodeId owner = hr.classes().ownerOf( d );
+    return owner != kNoNode ? ing.symbols[ owner ].name + "." + ing.symbols[d].name : ing.symbols[d].name;
+}
+
+// The line `n` of `text` (1-based), or empty.
+inline std::string_view handlerRuleLine( std::string_view text, std::uint32_t n )
+{
+    std::size_t at = 0;
+    for( std::uint32_t k = 1; k < n && at != std::string_view::npos; ++k )
+    {
+        at = text.find( '\n', at );
+        at = at == std::string_view::npos ? at : at + 1;
+    }
+    if( at == std::string_view::npos || at >= text.size() )
+    {
+        return {};
+    }
+    return text.substr( at, std::min( text.find( '\n', at ), text.size() ) - at );
+}
+// Does `line` pass word `w` as a call argument (`(w` or `, w` before a `,` or `)`)?
+inline bool handlerRulePassesWord( std::string_view line, std::string_view w )
+{
+    for( std::size_t at = line.find( w ); at != std::string_view::npos && !w.empty(); at = line.find( w, at + 1 ) )
+    {
+        std::size_t b = at;
+        while( b > 0 && line[ b - 1 ] == ' ' )
+        {
+            --b;
+        }
+        std::size_t e = at + w.size();
+        while( e < line.size() && line[e] == ' ' )
+        {
+            ++e;
+        }
+        if( b > 0 && ( line[ b - 1 ] == '(' || line[ b - 1 ] == ',' ) && e < line.size() && ( line[e] == ',' || line[e] == ')' ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+// The definition a reader passes the name to: a call of a method of the reader's own class (same file) on the line of its
+// read, or on a later line that passes the local the read was assigned to (`n = m.attr` … `self.f( n, m )`).
+inline NodeId handlerRulePassee( const IngestResult& ing, const HandlerRules& hr, const HandlerReader& reader )
+{
+    const Symbol&          fn    = ing.symbols[ reader.fn ];
+    const NodeId           owner = hr.classes().ownerOf( reader.fn );
+    const std::string_view text( hr.text( fn.fileId ) );
+    const std::string_view read  = handlerRuleLine( text, reader.line );
+    std::string_view       local;
+    if( const std::size_t eq = read.find( '=' ); eq != std::string_view::npos && read.find( "==" ) == std::string_view::npos )
+    {
+        local = read.substr( 0, eq );
+        while( !local.empty() && ( local.front() == ' ' || local.front() == '\t' ) )
+        {
+            local.remove_prefix( 1 );
+        }
+        while( !local.empty() && local.back() == ' ' )
+        {
+            local.remove_suffix( 1 );
+        }
+        if( !std::ranges::all_of( local, []( char c ) { return std::isalnum( static_cast<unsigned char>( c ) ) || c == '_'; } ) )
+        {
+            local = {};
+        }
+    }
+    for( const Reference& c : ing.references )
+    {
+        if( c.fromSymbol != reader.fn || c.role != RefRole::Call || c.line < reader.line
+            || ( c.line != reader.line && !handlerRulePassesWord( handlerRuleLine( text, c.line ), local ) ) )
+        {
+            continue;
+        }
+        for( const Symbol& s : ing.symbols )
+        {
+            if( s.name == c.calleeName && s.fileId == fn.fileId && hr.classes().ownerOf( s.id ) == owner && s.id != reader.fn )
+            {
+                return s.id;
+            }
+        }
+    }
+    return kNoNode;
+}
+
+inline std::string pathHandlerRuleXml( const IngestResult& ing, const NameKeyHops& names, const PathHandlerRule& hrule, bool singleRoot, std::string_view rootPrefix )
+{
+    if( !hrule.found() || hrule.rule == nullptr )
+    {
+        return {};
+    }
+    const HandlerRules& hr = names.rules();
+    const HandlerRule&  rule = *hrule.rule;
+    std::vector<char>   esc;
+    const auto          ex  = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
+    const auto          rel = [ & ]( std::uint32_t fileId ) -> std::string
+    {
+        return ex( singleRoot ? sarif::rootRelativeUri( ing.files[ fileId ], rootPrefix ) : std::string_view( ing.files[ fileId ] ) );
+    };
+    const auto loc = [ & ]( NodeId n ) { return rel( ing.symbols[n].fileId ) + ":" + std::to_string( ing.symbols[n].line ); };
+    const std::string spelled = rule.prefix + ( rule.qualified ? "{snake(Owner)_}" : "" ) + "{snake(Class)}" + ( rule.nsKeyword ? " | " + rule.prefix + "{namespace}_{snake(Class)}" : std::string() );
+    const std::size_t shown = std::min( hrule.rows.size(), kHandlerRuleShown );
+    std::string out = "<handler_rule via=\"name-key\" base=\"" + ex( ing.symbols[ rule.base ].name ) + "\" attr=\"" + ex( rule.attr ) + "\" name=\"" + ex( spelled )
+                    + "\" p=\"" + rel( rule.fileId ) + ":" + std::to_string( rule.line ) + "\" posts=\"" + std::to_string( hrule.posts ) + "\" classes=\""
+                    + std::to_string( hrule.rows.size() ) + "\" handlers=\"" + std::to_string( hrule.defs ) + "\" shown=\"" + std::to_string( shown ) + "\"";
+    if( hrule.listed.empty() )
+    {
+        out += nextAttrXml( nextFlag( "--regex=", "def " + hrule.rows.front().handler + "\\(" ) );
+    }
+    out += ">";
+    std::size_t readers = 0;
+    for( const HandlerReader& reader : rule.readers )
+    {
+        const NodeId rd = reader.fn;
+        if( readers == kHandlerRuleReaders )
+        {
+            break;
+        }
+        ++readers;
+        const NodeId passee = handlerRulePassee( ing, hr, reader );
+        out += "<hrd n=\"" + ex( handlerRuleQualified( ing, hr, rd ) ) + "\" p=\"" + loc( rd ) + "\""
+             + ( passee != kNoNode ? " passes=\"" + ex( handlerRuleQualified( ing, hr, passee ) ) + "\" passes_p=\"" + loc( passee ) + "\"" : std::string() ) + "/>";
+    }
+    for( std::size_t i = 0; i < shown; ++i )
+    {
+        const PathHandlerRow& row  = hrule.rows[i];
+        const Reference&      site = ing.references[ row.site ];
+        out += "<hm n=\"" + ex( handlerRuleQualified( ing, hr, row.cls ) ) + "\" h=\"" + ex( row.handler ) + "\" in=\"" + ex( handlerRuleQualified( ing, hr, site.fromSymbol ) )
+             + "\" site=\"" + rel( site.fileId ) + ":" + std::to_string( site.line ) + "\" posts=\"" + std::to_string( row.posts ) + "\" cands=\"" + std::to_string( row.cands ) + "\"/>";
+    }
+    for( const NodeId d : hrule.listed )
+    {
+        out += "<h n=\"" + ex( handlerRuleQualified( ing, hr, d ) ) + "\" p=\"" + loc( d ) + "\"/>";
+    }
+    return out + "</handler_rule>";
+}
+
+// Present-only: rides exactly when <handler_rule> prints.
+inline constexpr std::string_view kHandlerRuleLegend =
+    "<handler_rule via=name-key base= attr= name= p= posts= classes= handlers= shown=>: HOW a posted message reaches a to= handler BY NAME, not a call: "
+    "base='s __init_subclass__ writes attr= (p=) as name= (snake: an underscore between a lower and an upper letter, then lower case; Owner = the class it is "
+    "nested in), read from this repo's own source; posts= calls of from= whose first argument constructs a subclass of base= that names a to= handler, "
+    "classes= those classes, handlers= the to= definitions those names match (methods; which one runs depends on the receiver's class). "
+    "<hrd n= p= passes=>: a function that reads attr= (outside tests) and, in passes=, the method it hands the name to: a call on the line of the read, or a later call passing the local it was read into (the lookup side; no such call found: no passes=). "
+    "<hm n= h= in= site= posts= cands=>: one posted class (widest first, shown= of classes=), its handler name, its first post site, cands=K definitions of h=. "
+    "<h n= p=>: every handler definition when handlers= is at most 16; above that next= lists one name's definitions. Matched, never traced; a hedge, never a hop. ";
+inline std::string_view pathHandlerRuleLegend( const PathHandlerRule& hrule ) noexcept
+{
+    return hrule.found() ? kHandlerRuleLegend : std::string_view();
 }
 
 }   // namespace rw

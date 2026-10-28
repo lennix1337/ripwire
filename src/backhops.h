@@ -20,6 +20,7 @@
 // named, the width beside it) and never counts it in reachable= / hops= / reaches=.
 
 #include "graphlegend.h"        // countFieldOrEmpty — reaches_hedged= absent at zero
+#include "handlerrule.h"        // HandlerRules — a posted message class names its handlers (name-key sites)
 #include "graph.h"              // Graph — the declined records and their stored candidate lists
 #include "model.h"
 #include "nextverb.h"           // nextAttrXml / nextFlag — the ring's continuation
@@ -609,7 +610,7 @@ private:
 class NameKeyHops
 {
 public:
-    NameKeyHops( const IngestResult& ing, const ValueRefIndex& values ) : m_ing( ing ), m_values( values ) {}
+    NameKeyHops( const IngestResult& ing, const ValueRefIndex& values ) : m_ing( ing ), m_values( values ), m_rules( ing, values ) {}
 
     // The sink's NAME-KEY hops: one per function holding a template lookup that can name the sink (the sink's own lookups excluded).
     void backHops( NodeId sink, std::vector<BackHop>& out ) const
@@ -635,7 +636,7 @@ public:
                 return isCall( m_ing.references[ site ] ) && from != d && from < m_ing.symbols.size();
             } );
         }
-        return out;
+        return mergedSiteLists( out, m_rules.sitesNaming( d ) );   // ON-NAME-HANDLERS-V2: a posted message class names d
     }
     // The template lookups made in u that make a call, in reference order.
     std::vector<std::uint32_t> sitesIn( NodeId u ) const
@@ -645,15 +646,25 @@ public:
         {
             std::ranges::copy_if( m_pix->sitesIn( std::span<const NodeId>( &u, 1 ) ), std::back_inserter( out ), [ & ]( std::uint32_t site ) { return isCall( m_ing.references[ site ] ); } );
         }
-        return out;
+        return mergedSiteLists( out, m_rules.sitesIn( u ) );
     }
+    // The message-handler rule (handlerrule.h): its post sites are name-key sites too.
+    const HandlerRules& rules() const noexcept { return m_rules; }
     // The definitions template lookup `site` can name, in symbol order (memoised: a walk asks once per site). A COPY: a later
     // insert may move the memo's storage while a caller (ForwardHops::confirm) still reads the set.
     std::vector<NodeId> targets( std::uint32_t site ) const
     {
-        EXPECTS( any(), "a name-key site comes from this index's own sites" );
         const auto it = m_targets.find( site );
-        return it != m_targets.end() ? it->second : m_targets.try_emplace( site, m_pix->targets( site ) ).first->second;
+        if( it != m_targets.end() )
+        {
+            return it->second;
+        }
+        if( m_rules.siteAt( site ) != nullptr )
+        {
+            return m_targets.try_emplace( site, m_rules.targets( site ) ).first->second;
+        }
+        EXPECTS( any(), "a name-key site comes from this index's own sites" );
+        return m_targets.try_emplace( site, m_pix->targets( site ) ).first->second;
     }
 
 private:
@@ -682,6 +693,7 @@ private:
     mutable bool                                  m_built = false;
     mutable std::optional<PatternIndex>           m_pix;
     mutable HashMap<std::uint32_t, std::vector<NodeId>> m_targets;   // site → the definitions it can name
+    HandlerRules                                  m_rules;     // ON-NAME-HANDLERS-V2: post sites keyed by the message class
 };
 
 class BackwardHops
@@ -1409,6 +1421,9 @@ inline constexpr std::string_view kNameKeyHopLegend =
     "(getattr(o, 'do_' + cmd), X.__dict__.get(f'on_{n}'), o['on' + e], o[`on${e}`]) that calls= (of= at d=1) fits (prefix and suffix around a non-empty "
     "hole; a self/this/cls receiver keeps the site's class family: the same class definition, its ancestors and its subclasses); cands=K the definitions that template can name. "
     "A presence test (hasattr) or a store (o['on' + e] = fn) is no lookup. The name is matched, never traced. "
+    "Or a POSTED MESSAGE (Python): called_by= passes a construction of a message class (self.post_message(Button.Pressed(self))) to a method of a class "
+    "that reads the handler-name attribute, and calls= is a method named by the repo's own __init_subclass__ rule for that class (on_button_pressed); "
+    "cands=K the methods of that name. "
     "Python, JavaScript, TypeScript. In a path bridge, s via=name-key is the same crossing: the previous row looks this row up by name. ";
 // Whether any ring row is a queue hop: the queue clause rides.
 inline bool impactRingHasQueue( const ImpactRing& ring ) noexcept

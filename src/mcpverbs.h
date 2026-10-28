@@ -3806,6 +3806,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
         ptBackHops.emplace( ing, g, valueRefIndexOf( ix ) );
     }
     const PathNearSink        ptNear       = pth.empty() ? pathNearSink( ing, g, dstDefs, ptGaps.cone, valueRefIndexOf( ix ), ptBackHops->names() ) : PathNearSink{};   // ix2-slice, as on the CLI
+    const PathHandlerRule     ptHandler    = pth.empty() ? pathHandlerRule( ing, ptBackHops->names(), srcDefs, dstDefs ) : PathHandlerRule{};   // ON-NAME-HANDLERS-V2, as on the CLI
     // TRACE-EP: the CLI's reaching definition pairs, by the same call (src/pathpairs.h)
     const PathPairs ptPairs = pth.empty() || srcGlob || dstGlob ? PathPairs{}
         : pathReachingPairs( ing, g, srcDefs, dstDefs, pth, std::string( from ) + "," + std::string( to ), [ & ]( std::span<const NodeId> dstMembers )
@@ -3842,7 +3843,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
                                                            + std::string( pathHopBodiesLegend( !ptHopBodies.empty() ) ) + std::string( pathHopNextLegend( !ptHopNext.empty() ) ) ).c_str(),
                   ( std::string( toValueRefsLegend( ptToValueRefs.count > 0 ) ) + valueRefsDepthLegend( ptToValueRefs.depthCut.files > 0 ) ).c_str(),
                   ( pathGapsLegend( ptGaps.any(), !ptSinkCallers.empty() ) + pathBridgeLegend( ptBridge )
-                    + nearSinkLegend( ptNear ) + std::string( pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
+                    + nearSinkLegend( ptNear ) + std::string( pathHandlerRuleLegend( ptHandler ) ) + std::string( pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
                   graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rootRelPathsLegend( ptSingleRoot ) );
     rw::emitTo( mem, "<path from=\"{}\" to=\"{}\"{}{} from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
                   ex( from ).c_str(), ex( to ).c_str(), ptBound.from ? " from_p=\"" + loc( srcUsed ) + "\"" : std::string(),
@@ -3856,8 +3857,9 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     const PathGapsXml ptUnreached = pth.empty()
         ? pathUnreachedXml( ing, ptGaps, ptSingleRoot, ptRootPrefix, { "the connect verb on " + from + "," + to, "uses/impact", "" }, ptSinkCallers )
         : PathGapsXml{};
-    rw::emitTo( mem, "{}>{}{}{}", ptUnreached.rootAttrs, ptUnreached.rows, pathBridgeXml( ing, g, ptBridge, ptSingleRoot, ptRootPrefix ),
-                  pathNearSinkXml( ing, ptNear, ptSingleRoot, ptRootPrefix ) );
+    rw::emitTo( mem, "{}>{}{}{}{}", ptUnreached.rootAttrs, ptUnreached.rows, pathBridgeXml( ing, g, ptBridge, ptSingleRoot, ptRootPrefix ),
+                  pathNearSinkXml( ing, ptNear, ptSingleRoot, ptRootPrefix ),
+                  pth.empty() ? pathHandlerRuleXml( ing, ptBackHops->names(), ptHandler, ptSingleRoot, ptRootPrefix ) : std::string() );
     emitPathAnswerRows( mem, ing, g, ptPairs, pth, ptOwners, ptSingleRoot, ptRootPrefix );   // the CLI's own row emitter (pathpairs.h / defattrib.h)
     rw::emitRaw( mem, ptHopBodies.c_str() );   // PATH-HOP-BODY, as on the CLI
     rw::emitRaw( mem, "</path>" );
