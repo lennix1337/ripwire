@@ -94,15 +94,16 @@ public:
                 have = have.empty() || have == b.typeName ? b.typeName : std::string( kNoSlot );
             }
         }
-        HashMap<std::string, std::uint32_t> first;   // a directory as the files spell it → its first file
+        HashMap<std::string, std::uint32_t> first;    // a directory as the files spell it → its first file
+        HashMap<std::uint32_t, char>        goDir;    // CR 4396503857: first files of the directories already in m_dirs (the first file may be no .go file)
         m_dirOfFile.resize( ing.files.size() );
         for( std::uint32_t f = 0; f < ing.files.size(); ++f )
         {
-            const auto [ it, fresh ] = first.try_emplace( std::string( includerDir( ing.files[f] ) ), f );
+            const auto it = first.try_emplace( std::string( includerDir( ing.files[f] ) ), f ).first;
             m_dirOfFile[f] = it->second;
-            if( fresh && ing.files[f].ends_with( ".go" ) )
+            if( ing.files[f].ends_with( ".go" ) && goDir.try_emplace( it->second, char( 1 ) ).second )
             {
-                m_dirs.emplace_back( std::string( includerDir( rootRelPath( ing, f ) ) ), f );
+                m_dirs.emplace_back( std::string( includerDir( rootRelPath( ing, f ) ) ), it->second );
             }
         }
         for( const Symbol& sym : ing.symbols )
