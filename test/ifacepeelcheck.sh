@@ -25,7 +25,7 @@
 #   N2 Rust: the inherent namesake CallEval::run is never a candidate (P2's absence check)
 #   N3 Rust: a by-name callee (`s.get_decl` on a generic S) types nothing — base by-name rows unchanged, no iface row
 #   N4 C++ `.` on the alias member reaches the smart pointer, never the pointee (no decodeHeaders row)
-#   N5 C++ alias of std::shared_ptr<std::string> types nothing (no in-tree row for name_->size())
+#   N5 C++ alias of std::shared_ptr<std::string> types nothing (an in-tree text::string keeps its base by-name row)
 #   N6 Rust: a generic `-> R` (R: Command) is never read as a trait object (no iface row)
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
@@ -66,7 +66,7 @@ o="$( callees "$RS" "src/lib.rs:eval_unknown" )"
 say "$( hasnt "$o" 'gate="iface"' )" "N3 a by-name callee types nothing (no iface row)"
 say "$( has "$o" 'n="Ls::run"' )" "N3 base by-name rows unchanged"
 o="$( callees "$CPP" "filter.h:nameLen" )"
-say "$( hasnt "$o" '<s ' )" "N5 an alias of shared_ptr<std::string> types nothing in-tree"
+say "$( has "$o" '<s t="method" n="string::size" p="filter.h:21" via="name"/>' )" "N5 an alias of shared_ptr<std::string> types nothing: the in-tree namesake text::string stays a by-name row (base reading)"
 o="$( callees "$RS" "src/lib.rs:eval_generic" )"
 say "$( hasnt "$o" 'gate="iface"' )" "N6 a generic -> R result is not read as a trait object"
 echo "ifacepeelcheck: $npass passed, $nfail failed"

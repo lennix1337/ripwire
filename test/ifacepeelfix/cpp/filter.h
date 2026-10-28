@@ -18,6 +18,7 @@ public:
   int encodeFrame(int h) { return h * 2; }
 };
 using CodecSharedPtr = std::shared_ptr<Codec>;
+namespace text { class string { public: int size() { return 1; } }; }   // an in-tree namesake of std::string (N5)
 using NameSharedPtr = std::shared_ptr<std::string>;
 class Other { public: int encodeFrame(int h) { return h; } };
 class ActiveStreamDecoderFilter {
