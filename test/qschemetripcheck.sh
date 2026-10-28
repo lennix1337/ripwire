@@ -34,6 +34,12 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-27, train 40 (lanes ci-flakes-2, r1-followup, js-def-naming, testonly-dead, string-keyed, alias-channel, fn-slot, for-route
+#   merged onto main aba4d28e): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the composed tree (main's pin b4eb6e92… and the js-def-naming, string-keyed and
+#   fn-slot (18dfbcac…) branch pins conflicted -> f4d5b120…). Watched text: kParserVer 239 -> 251 (rich 252; above the placeholders 238, 241, 247 and
+#   fn-slot-2's 249) and kCacheVersion 44 -> 46 (js-def-naming's JsObjectLiteral bind record; its placeholder 45), quality.h's two
+#   kIngest*Mirror constants with them. kQSnapCacheScheme stays 24: no watched quality.h function moved (testonly-dead's
+#   symbolHasStaticLinkage / underscorePrivateDef are view-side, outside the manifest).
 # 2026-10-27, lane string-keyed fix round 1 (placeholder 241 / rich 242; the train renumbers and re-pins again): RE-PINNED ONCE with
 #   UPDATE_GOLDEN=1 (b4eb6e92… -> the pin above). The only watched text that moved is kParserVer 239 -> 241 (rich file tag 242; quality.h's
 #   kIngestParserVerMirror with it): an IX-3 Pattern reference at a Python hasattr test or a JS/TS subscript store records qualifier "t".
