@@ -9,7 +9,7 @@ int command_not_found_hook( int w )
 
 int hook_user( int w )
 {
-    fputs( "command\n", stderr );   /* ONE task word in a string: below the two-word bar */
+    fputs( "error command\n", stderr );   /* ONE task word plus "error" (never a task word): below the two-word bar */
     return command_not_found_hook( w );
 }
 
