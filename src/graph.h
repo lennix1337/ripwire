@@ -13273,9 +13273,12 @@ inline std::vector<NodeId> resolveAllByDottedScope( const IngestResult& ing, std
         return found;
     }
     std::string scoped;
-    for( const char c : spec )
+    for( std::size_t i = 0; i < spec.size(); ++i )
     {
-        scoped += ( c == '.' || c == '#' ) ? std::string_view( "::" ) : std::string_view( &c, 1 );
+        const char c = spec[i];
+        // a '#' that starts a segment is a JS/TS private name's own first character (splitSpellingSegments' rule)
+        const bool sep = c == '.' || ( c == '#' && i > 0 && spec[ i - 1 ] != '.' && spec[ i - 1 ] != '#' );
+        scoped += sep ? std::string_view( "::" ) : std::string_view( &c, 1 );
     }
     return resolveAllByScopeQualified( ing, scoped );
 }
@@ -13331,7 +13334,9 @@ struct WrittenSpec
     std::string_view              leaf;
 };
 
-// segments of `text` split on "::", '.' and '#'; false when any segment is empty
+// segments of `text` split on "::", '.' and '#'; false when any segment is empty. A '#' that STARTS a segment is part of the
+// name, not a separator: a JS/TS private member (`Hono.#dispatch`, the n= the --path/--callers rows print) — Ruby's
+// `Class#method` separator always follows a non-empty owner segment, so the two never collide (lane D2, readout-40 G).
 inline bool splitSpellingSegments( std::string_view text, std::vector<std::string_view>& out )
 {
     std::size_t start = 0;
@@ -13339,7 +13344,7 @@ inline bool splitSpellingSegments( std::string_view text, std::vector<std::strin
     {
         const bool end    = i == text.size();
         const bool colons = !end && text.compare( i, 2, "::" ) == 0;
-        if( end || colons || text[i] == '.' || text[i] == '#' )
+        if( end || colons || text[i] == '.' || ( text[i] == '#' && i != start ) )
         {
             if( i == start )
             {
