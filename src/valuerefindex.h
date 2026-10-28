@@ -7,6 +7,7 @@
 #include "mention.h"           // pathStem — a module path's file stem
 #include "resolve.h"           // includerDir, resolvePreciseInclude — a module path's file
 #include "infra/Diagnostics.h"   // EXPECTS/ENSURES — the window and index invariants
+#include "infra/sortutil.h"      // svLess: the method-name list slot_join::memberCalls binary-searches
 #include "model.h"
 
 #include <algorithm>
@@ -69,6 +70,203 @@ inline bool vrBindLess( const IngestResult& ing, const Reference& a, const Refer
     return a.startByte < b.startByte;
 }
 
+// ── IX1-V2: the byFieldName languages' side of the slot join (model.h kVrSlotLangs) ──────────────────────────────────
+namespace slot_join
+{
+// fix1 F-2: a byFieldName (Go) slot type's key — the package DIRECTORY the type is declared in (a Go package is a directory:
+// x/types.Cmd and y/types.Cmd are two types though both packages are named `types`), as the first file of that directory, and the
+// type name: jsImportKey( dirFile, name ). keyOfSymbol is the ONE spelling the store side (SlotIndex) and --for's struct rows
+// (forslots.h, through SlotIndex::goTypeKeyOf) both key by. A store's type (Reference::memberCtor, keyOf): `T` → the writing
+// file's directory; `pkg.T` → the directory of the file's import bound to `pkg`, when exactly one in-tree Go directory is that
+// import path's tail, else "" (unknown: the name tier — an out-of-tree package, an unmatched or ambiguous path). fix1 F-5: an
+// in-tree type that is no STRUCT (`type Table map[Op]func()`, an alias) keys kNoSlot: its keyed literal names map keys, not fields.
+inline constexpr std::string_view kNoSlot = "\x01";   // == SlotIndex's kConflict: an end that joins nothing
+class GoTypeKeys
+{
+public:
+    void build( const IngestResult& ing )
+    {
+        for( const Binding& b : ing.bindings )
+        {
+            if( b.kind == LocalBindKind::ModuleAlias && !b.var.empty() && !b.typeName.empty() )
+            {
+                std::string& have = m_imports[ jsImportKey( b.fileId, b.var ) ];
+                have = have.empty() || have == b.typeName ? b.typeName : std::string( kNoSlot );
+            }
+        }
+        HashMap<std::string, std::uint32_t> first;   // a directory as the files spell it → its first file
+        m_dirOfFile.resize( ing.files.size() );
+        for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+        {
+            const auto [ it, fresh ] = first.try_emplace( std::string( includerDir( ing.files[f] ) ), f );
+            m_dirOfFile[f] = it->second;
+            if( fresh && ing.files[f].ends_with( ".go" ) )
+            {
+                m_dirs.emplace_back( std::string( includerDir( rootRelPath( ing, f ) ) ), f );
+            }
+        }
+        for( const Symbol& sym : ing.symbols )
+        {
+            if( sym.kind == SymKind::Struct && slotJoinsByFieldName( sym.lang ) )
+            {
+                m_structs.try_emplace( keyOfSymbol( sym ), char( 1 ) );
+            }
+        }
+    }
+    std::string keyOfSymbol( const Symbol& s ) const { return jsImportKey( m_dirOfFile[ s.fileId ], s.name ); }
+    std::string keyOf( const Reference& r )
+    {
+        const std::string_view t   = r.memberCtor;
+        const std::size_t      dot = t.find( '.' );
+        std::uint32_t          dir = t.empty() ? kNoFile : m_dirOfFile[ r.fileId ];
+        if( dot != std::string_view::npos )
+        {
+            const auto imp = m_imports.find( jsImportKey( r.fileId, t.substr( 0, dot ) ) );
+            dir = imp == m_imports.end() || imp->second == kNoSlot ? kNoFile : dirOfImport( imp->second );
+        }
+        if( dir == kNoFile )
+        {
+            return {};
+        }
+        std::string key = jsImportKey( dir, dot == std::string_view::npos ? t : t.substr( dot + 1 ) );
+        return m_structs.contains( key ) ? key : std::string( kNoSlot );
+    }
+
+private:
+    // the ONE in-tree Go directory whose root-relative path is the tail of import path `path`, kNoFile when none or several
+    std::uint32_t dirOfImport( const std::string& path )
+    {
+        if( const auto it = m_dirOf.find( path ); it != m_dirOf.end() )
+        {
+            return it->second;
+        }
+        std::uint32_t hit = kNoFile;
+        int           n   = 0;
+        for( const auto& [ rel, dir ] : m_dirs )
+        {
+            if( !rel.empty() && path.ends_with( rel ) && ( path.size() == rel.size() || path[ path.size() - rel.size() - 1 ] == '/' ) )
+            {
+                hit = dir;
+                ++n;
+            }
+        }
+        return m_dirOf[ path ] = n == 1 ? hit : kNoFile;
+    }
+    HashMap<std::string, std::string>                  m_imports;     // "fileId#alias" → import path (kNoSlot: two paths)
+    std::vector<std::uint32_t>                         m_dirOfFile;   // file → the first file of its directory
+    std::vector<std::pair<std::string, std::uint32_t>> m_dirs;        // (root-relative dir, its first file), one per Go dir
+    HashMap<std::string, char>                         m_structs;     // every in-tree Go struct's key
+    HashMap<std::string, std::uint32_t>                m_dirOf;       // import path → its directory's first file (kNoFile none)
+};
+// The member calls `x.F( … )` of a byFieldName language whose field F holds a stored function somewhere (`holds`), as calls
+// through that slot, in reference order. Not when that language defines a METHOD named F anywhere in the tree: the call may
+// then be that method, and the receiver's type is not read here (a named floor, never a guess).
+template<class Holds>
+std::vector<std::uint32_t> memberCalls( const IngestResult& ing, const Holds& holds )
+{
+    std::vector<std::uint32_t> out;
+    if( holds.empty() )
+    {
+        return out;
+    }
+    std::vector<std::string_view> methods;
+    for( const Symbol& s : ing.symbols )
+    {
+        if( s.kind == SymKind::Method && slotJoinsByFieldName( s.lang ) && holds.contains( s.name ) )
+        {
+            methods.push_back( s.name );
+        }
+    }
+    std::ranges::sort( methods, rw::sortutil::svLess );
+    for( std::uint32_t i = 0; i < ing.references.size(); ++i )
+    {
+        const Reference& r = ing.references[i];
+        if( r.role == RefRole::Call && r.memberCall && slotJoinsByFieldName( r.lang ) && holds.contains( r.calleeName )
+            && !std::ranges::binary_search( methods, std::string_view( r.calleeName ), rw::sortutil::svLess ) )
+        {
+            out.push_back( i );
+        }
+    }
+    return out;
+}
+// The registrars' parameters stored into field slots (model.h kValueRefSlotParamScope facts): an ARGUMENT row of a bare call
+// `Reg( … )` (scope 'a', key "#k") lands in the slot parameter k of Reg is stored into. fix1 F-1: a fact is keyed by the
+// registrar's DEFINITION (the symbol it is recorded in), and the argument row by the definitions its bare callee resolves to
+// (ValueRefIndex::resolveName, the same rule the parameter join uses) — so a same-named function of another package that stores
+// nothing, or a METHOD (a bare call never calls one), never feeds the slot. Every resolved definition must record the one same
+// slot; one storing the parameter in two fields decides nothing.
+class ParamSlots
+{
+public:
+    void take( std::uint32_t refIdx ) { m_refs.push_back( refIdx ); }
+    void build( const IngestResult& ing, GoTypeKeys& keys )
+    {
+        for( const std::uint32_t q : m_refs )
+        {
+            const Reference& r = ing.references[q];
+            if( r.fromSymbol >= ing.symbols.size() || ing.symbols[ r.fromSymbol ].kind != SymKind::Function
+                || ing.symbols[ r.fromSymbol ].name != r.recvVar )
+            {
+                continue;   // a method registrar (no bare call reaches it), or a fact outside its own function's definition
+            }
+            const std::string to   = keys.keyOf( r ) + "#" + r.memberPath;
+            std::string&      have = m_slot[ jsImportKey( r.fromSymbol, std::to_string( r.argCount ) ) ];
+            have = have.empty() || have == to ? to : std::string( kConflict );
+        }
+    }
+    // (type, field) of argument row `v`'s slot, or nothing; `ownersOf( v )` = the registrar definitions its bare callee resolves to.
+    template<class OwnersOf>
+    std::optional<std::pair<std::string, std::string>> slotOf( const Reference& v, const OwnersOf& ownersOf ) const
+    {
+        if( m_slot.empty() || !v.argCountKnown || v.recvVar.empty() || v.qualifier.empty() || v.qualifier[0] != 'a' )
+        {
+            return std::nullopt;
+        }
+        std::optional<std::string_view> to;
+        for( const NodeId o : ownersOf( v ) )
+        {
+            const auto it = m_slot.find( jsImportKey( o, std::to_string( v.argCount ) ) );
+            if( it == m_slot.end() || it->second == kConflict || ( to.has_value() && *to != it->second ) )
+            {
+                return std::nullopt;   // a resolved definition that stores nothing there, or two that disagree
+            }
+            to = it->second;
+        }
+        if( !to.has_value() )
+        {
+            return std::nullopt;
+        }
+        const std::size_t hash = to->rfind( '#' );
+        return std::pair{ std::string( to->substr( 0, hash ) ), std::string( to->substr( hash + 1 ) ) };
+    }
+
+private:
+    static constexpr std::string_view kConflict = "\x01";
+    std::vector<std::uint32_t>        m_refs;   // the facts, keyed in build() (the type key by its file, GoTypeKeys)
+    HashMap<std::string, std::string> m_slot;   // "registrarId#k" → "TypeKey#field" (kConflict: two different slots)
+};
+// `extra` (ascending) merged into the slot calls and their per-function lists, all kept in reference order (join() and callsIn()
+// binary-search them).
+inline void addCalls( const IngestResult& ing, const std::vector<std::uint32_t>& extra, std::vector<std::uint32_t>& calls,
+                      HashMap<NodeId, std::vector<std::uint32_t>>& bySym )
+{
+    const bool resort = !calls.empty() && !extra.empty();
+    for( const std::uint32_t c : extra )
+    {
+        calls.push_back( c );
+        bySym[ ing.references[c].fromSymbol ].push_back( c );
+    }
+    if( resort )
+    {
+        std::ranges::sort( calls );
+        for( auto& [ sym, list ] : bySym )
+        {
+            std::ranges::sort( list );
+        }
+    }
+}
+}   // namespace slot_join
+
 // ── IX-1 slot-type join ──────────────────────────────────────────────────────────────────────────────────
 // A function stored in struct field T.f (a Value row with a slot, ingest_valuerefs.h valueSlot) MAY be called by every call
 // through a field f (`x->f( … )`, a slot Through, scope 's'): via="slot" when both sides' declared struct types resolve to the
@@ -99,22 +297,45 @@ public:
             m_callsBySym[ r.fromSymbol ].push_back( i );
             return true;
         }
+        if( r.role == RefRole::Value && sc == kValueRefSlotParamScope )
+        {
+            m_params.take( i );   // IX1-V2: a registrar's parameter stored into a field slot
+            return true;
+        }
         return false;
     }
+    // fix1 F-1: how an argument row's bare callee resolves to its definitions (the registrars, ParamSlots) — before build().
+    void resolveCalleesBy( std::function<std::vector<NodeId>( const Reference& )> ownersOf ) { m_ownersOf = std::move( ownersOf ); }
     // After every take: keys the slot values (`values`, ascending, with their resolved `targets`) and the calls by field.
     void build( const IngestResult& ing, std::span<const std::uint32_t> values, std::span<const std::vector<NodeId>> targets )
     {
+        m_goKeys.build( ing );
+        m_params.build( ing, m_goKeys );
+        for( std::size_t k = 0; k < values.size(); ++k )
+        {
+            if( targets[k].empty() )
+            {
+                continue;
+            }
+            const Reference& v = ing.references[ values[k] ];
+            if( !v.memberPath.empty() )
+            {
+                m_values.push_back( endOf( ing, values[k] ) );
+            }
+            else if( const auto ps = m_ownersOf ? m_params.slotOf( v, m_ownersOf ) : std::nullopt )
+            {
+                m_values.push_back( { values[k], ps->first, ps->second, valueRefFamily( v.lang ) } );   // IX1-V2: `Reg( Put )`, Reg storing that parameter in a field
+            }
+            else
+            {
+                continue;
+            }
+            m_valuesByField[ m_values.back().field ].push_back( static_cast<std::uint32_t>( m_values.size() - 1 ) );
+        }
+        slot_join::addCalls( ing, slot_join::memberCalls( ing, m_valuesByField ), m_calls, m_callsBySym );   // IX1-V2: a byFieldName slot's calls
         if( m_calls.empty() )
         {
             return;   // no call through a struct field anywhere: no value needs a slot key
-        }
-        for( std::size_t k = 0; k < values.size(); ++k )
-        {
-            if( !ing.references[ values[k] ].memberPath.empty() && !targets[k].empty() )
-            {
-                m_values.push_back( endOf( ing, values[k] ) );
-                m_valuesByField[ m_values.back().field ].push_back( static_cast<std::uint32_t>( m_values.size() - 1 ) );
-            }
         }
         m_callEnds.reserve( m_calls.size() );
         for( const std::uint32_t c : m_calls )
@@ -128,6 +349,22 @@ public:
     std::vector<Hit> callsFor( std::uint32_t valueIdx ) const { return join( m_values, valueIdx, m_callsByField, m_callEnds ); }
     // The slot value references (with a resolved function) the slot call `callIdx` may call through.
     std::vector<Hit> valuesFor( std::uint32_t callIdx ) const { return join( m_callEnds, callIdx, m_valuesByField, m_values ); }
+    // fix1 F-2: a byFieldName struct symbol's type key, as valuesOfType reads it (the store side keys the same way)
+    std::string goTypeKeyOf( const Symbol& s ) const { return m_goKeys.keyOfSymbol( s ); }
+    // IX1-V2: the slot value references stored into a field of struct type `type` (the resolved type name), with the field,
+    // in reference order — what --for's slot_fields= lists on a struct row.
+    std::vector<std::pair<std::uint32_t, std::string_view>> valuesOfType( std::string_view type ) const
+    {
+        std::vector<std::pair<std::uint32_t, std::string_view>> out;
+        for( const End& e : m_values )
+        {
+            if( e.type == type )
+            {
+                out.emplace_back( e.ref, e.field );
+            }
+        }
+        return out;
+    }
     // The slot calls made inside function `f`, ascending.
     std::span<const std::uint32_t> callsIn( NodeId f ) const
     {
@@ -156,8 +393,8 @@ private:
         std::uint32_t ref = 0;
         std::string   type;    // the resolved declared struct type, "" unknown
         std::string   field;
+        VrLangFamily  fam = VrLangFamily::None;   // fix1 F-3: the value-ref family; a slot never joins across two
     };
-
     // An anonymous struct's "@LINE" key is unique in its own file only: the file joins the key.
     static std::string canonType( std::string_view t, std::uint32_t fileId )
     {
@@ -227,11 +464,20 @@ private:
     }
     // The slot of a slot reference: the root's type through the typedef aliases, then each field of the chain through the
     // field-type facts; a hop the facts do not know leaves the type unknown (the name tier).
-    End endOf( const IngestResult& ing, std::uint32_t refIdx ) const
+    End endOf( const IngestResult& ing, std::uint32_t refIdx )
     {
         const Reference& r = ing.references[refIdx];
         End              e;
         e.ref = refIdx;
+        e.fam = valueRefFamily( r.lang );
+        if( r.role == RefRole::Call || slotJoinsByFieldName( r.lang ) )
+        {
+            // IX1-V2: a member call `x.F( … )` (slot_join::memberCalls, its receiver's type unread: the name tier), or a byFieldName
+            // store (package-qualified; no typedef aliases or field-type facts on this side)
+            e.type  = r.role == RefRole::Call ? std::string() : m_goKeys.keyOf( r );
+            e.field = r.role == RefRole::Call ? r.calleeName : r.memberPath;
+            return e;
+        }
         std::string_view chain = r.memberPath;
         std::string      t     = r.memberCtor.empty() ? std::string() : unalias( canonType( r.memberCtor, r.fileId ), r.fileId );
         for( std::size_t dot = chain.find( '.' ); dot != std::string_view::npos; dot = chain.find( '.' ) )
@@ -267,9 +513,9 @@ private:
         for( const std::uint32_t k : it->second )
         {
             const End& o = other[k];
-            if( o.type == kConflict )
+            if( o.type == kConflict || o.fam != e->fam )
             {
-                continue;
+                continue;   // fix1 F-3: a Go member call never runs what a C function-pointer field holds, nor the reverse
             }
             if( e->type.empty() || o.type.empty() || e->type == o.type )
             {
@@ -283,6 +529,9 @@ private:
     HashMap<std::string, std::string>                m_alias;          // typedef name → struct type (kConflict: files disagree)
     HashMap<std::string, std::string>                m_aliasInFile;    // "fileId#name" → struct type, the file's own typedef
     HashMap<std::string, std::string>                m_body;           // struct type → its body's digest (kConflict: files differ)
+    slot_join::ParamSlots                            m_params;         // IX1-V2: registrars' parameters stored into field slots
+    slot_join::GoTypeKeys                            m_goKeys;         // fix1 F-2: Go type keys by package directory
+    std::function<std::vector<NodeId>( const Reference& )> m_ownersOf;  // fix1 F-1: a bare callee's definitions
     std::vector<std::uint32_t>                       m_calls;          // slot Through references, ascending
     HashMap<NodeId, std::vector<std::uint32_t>>      m_callsBySym;     // calling function → its slot Through references
     std::vector<End>                                 m_values;         // slot Value rows with a resolved function, by ref
@@ -295,67 +544,13 @@ private:
 class ValueRefIndex
 {
 public:
-    explicit ValueRefIndex( const IngestResult& ing ) : m_ing( ing )
-    {
-        for( NodeId id = 0; id < ing.symbols.size(); ++id )
-        {
-            const Symbol& s = ing.symbols[id];
-            if( ( s.kind == SymKind::Function || s.kind == SymKind::Method ) && valueRefFamily( s.lang ) != VrLangFamily::None )
-            {
-                m_fnByName[ s.name ].push_back( id );
-            }
-        }
-        markPythonMembers();
-        for( std::uint32_t i = 0; i < ing.references.size(); ++i )
-        {
-            const Reference& r = ing.references[i];
-            if( m_slots.take( i, r ) )
-            {
-                continue;   // IX-1: a slot fact or a call through a struct field (SlotIndex)
-            }
-            if( r.role == RefRole::Value && scopeOf( r ) == kValueRefDepthCutScope )
-            {
-                m_depthCuts.push_back( i );   // the file's depth-cut record: no row, a disclosure (depthCutsFor)
-            }
-            else if( r.role == RefRole::Value )
-            {
-                m_values.push_back( i );
-                if( !r.recvVar.empty() )
-                {
-                    m_valueByContainer[ jsImportKey( r.fileId, r.recvVar ) ].push_back( i );
-                }
-            }
-            else if( r.role == RefRole::Through )
-            {
-                if( scopeOf( r ) == 'p' )
-                {
-                    m_throughParamBySym[ r.fromSymbol ].push_back( i );
-                }
-                else
-                {
-                    m_throughByContainer[ jsImportKey( r.fileId, r.calleeName ) ].push_back( i );
-                }
-            }
-        }
-        for( const Binding& b : ing.bindings )
-        {
-            if( b.kind == LocalBindKind::JsImport || b.kind == LocalBindKind::Import )
-            {
-                m_importsByFile[ b.fileId ].push_back( &b );
-            }
-        }
-        ENSURES( std::is_sorted( m_values.begin(), m_values.end() ), "m_values is built in reference order — targetsOf binary-searches it" );
-        m_targets.resize( m_values.size() );
-        for( std::size_t k = 0; k < m_values.size(); ++k )
-        {
-            m_targets[k] = resolveName( ing.references[ m_values[k] ], ing.references[ m_values[k] ].calleeName );
-            for( const NodeId t : m_targets[k] )
-            {
-                m_valuesByTarget[ t ].push_back( static_cast<std::uint32_t>( k ) );
-            }
-        }
-        m_slots.build( ing, m_values, m_targets );
-    }
+    explicit ValueRefIndex( const IngestResult& ing ) : m_ing( ing ) { index( nullptr ); }
+    // fix1 (RSS): a NARROW index — what --for's slot splice (forslots.h spliceSlotJoinRows) reads, and nothing else: the Value
+    // references naming one of `names` (sorted by svLess: the shown functions), every slot STORE (a struct-field value, an argument
+    // of a registrar that stores its parameter in a field: the cands=, K and @C counts need the whole slot), every slot fact and
+    // slot call, and the Throughs those kept values join (their container, the parameter calls of their callee). Every query the
+    // splice makes answers the same as on the full index, by construction; the by-name table holds only the names they resolve.
+    static ValueRefIndex narrowFor( const IngestResult& ing, std::span<const std::string_view> names ) { return ValueRefIndex( Narrowed{ ing, keepSets( ing, names ) } ); }
 
     const SlotIndex& slots() const noexcept { return m_slots; }   // IX-1: the struct-field slot join
 
@@ -603,6 +798,142 @@ public:
     }
 
 private:
+    struct KeepSets;
+    struct Narrowed;
+    explicit ValueRefIndex( const Narrowed& n );
+    // The tables (`keep` non-null: a narrow index, narrowFor).
+    void index( const KeepSets* keep )
+    {
+        const IngestResult& ing = m_ing;
+        for( NodeId id = 0; id < ing.symbols.size(); ++id )
+        {
+            const Symbol& s = ing.symbols[id];
+            if( ( s.kind == SymKind::Function || s.kind == SymKind::Method ) && valueRefFamily( s.lang ) != VrLangFamily::None
+                && ( keep == nullptr || keep->names.contains( s.name ) ) )
+            {
+                m_fnByName[ s.name ].push_back( id );
+            }
+        }
+        markPythonMembers();
+        for( std::uint32_t i = 0; i < ing.references.size(); ++i )
+        {
+            indexReference( i, keep );
+        }
+        for( const Binding& b : ing.bindings )
+        {
+            if( b.kind == LocalBindKind::JsImport || b.kind == LocalBindKind::Import )
+            {
+                m_importsByFile[ b.fileId ].push_back( &b );
+            }
+        }
+        ENSURES( std::is_sorted( m_values.begin(), m_values.end() ), "m_values is built in reference order — targetsOf binary-searches it" );
+        m_targets.resize( m_values.size() );
+        for( std::size_t k = 0; k < m_values.size(); ++k )
+        {
+            m_targets[k] = resolveName( ing.references[ m_values[k] ], ing.references[ m_values[k] ].calleeName );
+            for( const NodeId t : m_targets[k] )
+            {
+                m_valuesByTarget[ t ].push_back( static_cast<std::uint32_t>( k ) );
+            }
+        }
+        m_slots.resolveCalleesBy( [ this ]( const Reference& v ) { return resolveName( v, v.recvVar ); } );
+        m_slots.build( ing, m_values, m_targets );
+        m_slots.resolveCalleesBy( nullptr );   // it captured `this`: never outlives the build
+    }
+    // Reference `i` into its table (`keep` non-null: a narrow index, which skips what the splice never reads).
+    void indexReference( std::uint32_t i, const KeepSets* keep )
+    {
+        const Reference& r = m_ing.references[i];
+        if( m_slots.take( i, r ) )
+        {
+            return;   // IX-1: a slot fact or a call through a struct field (SlotIndex)
+        }
+        if( r.role == RefRole::Value && scopeOf( r ) == kValueRefDepthCutScope )
+        {
+            m_depthCuts.push_back( i );   // the file's depth-cut record: no row, a disclosure (depthCutsFor)
+        }
+        else if( r.role == RefRole::Value && ( keep == nullptr || keep->values.contains( i ) ) )
+        {
+            m_values.push_back( i );
+            if( !r.recvVar.empty() )
+            {
+                m_valueByContainer[ jsImportKey( r.fileId, r.recvVar ) ].push_back( i );
+            }
+        }
+        else if( r.role == RefRole::Through && ( keep == nullptr || keep->keepsThrough( m_ing, r ) ) )
+        {
+            if( scopeOf( r ) == 'p' )
+            {
+                m_throughParamBySym[ r.fromSymbol ].push_back( i );
+            }
+            else
+            {
+                m_throughByContainer[ jsImportKey( r.fileId, r.calleeName ) ].push_back( i );
+            }
+        }
+    }
+    // fix1 (RSS): what a narrow index keeps (narrowFor).
+    struct KeepSets
+    {
+        HashMap<std::uint32_t, char> values;       // kept Value reference indices
+        HashMap<std::string, char>   names;        // the names resolveName looks up: kept values' callees and their bare callees
+        HashMap<std::string, char>   containers;   // "fileId#container" of the kept values
+        HashMap<NodeId, char>        paramOwners;  // a kept parameter default's function
+        bool keepsThrough( const IngestResult& ing, const Reference& t ) const
+        {
+            if( scopeOf( t ) == 'p' )
+            {
+                return paramOwners.contains( t.fromSymbol ) || ( t.fromSymbol < ing.symbols.size() && names.contains( ing.symbols[ t.fromSymbol ].name ) );
+            }
+            return containers.contains( jsImportKey( t.fileId, t.calleeName ) );
+        }
+    };
+    struct Narrowed
+    {
+        const IngestResult& ing;
+        KeepSets            keep;
+    };
+    static KeepSets keepSets( const IngestResult& ing, std::span<const std::string_view> names )
+    {
+        KeepSets                   k;
+        HashMap<std::string, char> registrars;   // functions storing a parameter in a field slot (kValueRefSlotParamScope facts)
+        for( const Reference& r : ing.references )
+        {
+            if( r.role == RefRole::Value && scopeOf( r ) == kValueRefSlotParamScope )
+            {
+                registrars.try_emplace( r.recvVar, char( 1 ) );
+            }
+        }
+        for( std::uint32_t i = 0; i < ing.references.size(); ++i )
+        {
+            const Reference& r  = ing.references[i];
+            const char       sc = scopeOf( r );
+            if( r.role != RefRole::Value || isSlotJoinRecord( r ) || sc == kValueRefDepthCutScope )
+            {
+                continue;
+            }
+            const bool named = std::ranges::binary_search( names, std::string_view( r.calleeName ), rw::sortutil::svLess );
+            if( !named && r.memberPath.empty() && !( sc == 'a' && registrars.contains( r.recvVar ) ) )
+            {
+                continue;
+            }
+            k.values.try_emplace( i, char( 1 ) );
+            k.names.try_emplace( r.calleeName, char( 1 ) );
+            if( sc == 'a' )
+            {
+                k.names.try_emplace( r.recvVar, char( 1 ) );
+            }
+            else if( sc == 'p' )
+            {
+                k.paramOwners.try_emplace( r.fromSymbol, char( 1 ) );
+            }
+            if( !r.recvVar.empty() )
+            {
+                k.containers.try_emplace( jsImportKey( r.fileId, r.recvVar ), char( 1 ) );
+            }
+        }
+        return k;
+    }
 
     // A value key "#N" (an argument position) or "#name" (a keyword / a parameter default) against a parameter Through.
     static bool paramMatches( std::string_view valueKey, const Reference& through ) noexcept
@@ -741,6 +1072,22 @@ private:
             return {};
         }
         const VrLangFamily  fam = valueRefFamily( r.lang );
+        if( r.role == RefRole::Value && !r.memberRoot.empty() )
+        {
+            // IX1-V2: a Go method value `b.opPlan` of the enclosing method's receiver (ingest_valuerefs.h methodValueAt): that
+            // receiver type's method of this name in this package, else nothing
+            std::vector<NodeId> out;
+            for( const NodeId id : it->second )
+            {
+                const Symbol& s = m_ing.symbols[id];
+                if( s.kind == SymKind::Method && valueRefFamily( s.lang ) == fam && s.scope == r.memberRoot
+                    && includerDir( m_ing.files[ s.fileId ] ) == includerDir( m_ing.files[ r.fileId ] ) )
+                {
+                    out.push_back( id );
+                }
+            }
+            return out;
+        }
         // A C/C++ PROTOTYPE (a bodyless declaration) names the function its definition lives in: it is the target only
         // when no definition with a body is visible — a prototype in this file never hides the extern definition.
         std::vector<NodeId> sameFile, other, declsHere;
@@ -1007,6 +1354,12 @@ private:
     mutable bool                                 m_basesBuilt = false;
 };
 
+// fix1 (RSS): the narrow index (ValueRefIndex::narrowFor), defined here where Narrowed is complete.
+inline ValueRefIndex::ValueRefIndex( const Narrowed& n ) : m_ing( n.ing )
+{
+    index( &n.keep );
+}
+
 // ── IX-3 name-template dispatch ───────────────────────────────────────────────────────────────────────────────
 // The Pattern references (model.h RefRole::Pattern) and what they may name. Its own index beside ValueRefIndex, built
 // from the same IngestResult: a template site (indices into ing.references, in reference order) can name a class member
@@ -1137,6 +1490,7 @@ struct ValueRefRow
     std::vector<std::uint32_t> slotCalls;
     bool                       slotTyped    = false;
     std::uint32_t              slotNameAlso = 0;
+    std::uint32_t              slotCands    = 0;   // IX1-V2: distinct functions the first slot call's slot may hold (this one among them)
 };
 
 // IX-1, callees side: one call through a struct field made in the answered functions, and the functions its slot may hold.
@@ -1157,6 +1511,7 @@ struct ValueRefRows
     std::vector<std::uint32_t> patternWideSites;   // IX-3 (callers): too-wide templates whose sides could name the defs
     std::vector<SlotSiteRow>   slotSites;          // IX-1 (callees): calls through a struct field with at least one target
     bool                       slotCallers = false;   // IX-1 (callers): a row carries slot callers (called_at= via=)
+    bool                       slotCands   = false;   // IX1-V2 (callers): a row carries cands= (its slot holds more than one function)
 };
 
 // IX-1: the calling functions of a slot hit list, one per function (its first site, by reference order), by name; `typed`
@@ -1199,7 +1554,22 @@ inline std::vector<std::uint32_t> slotCallers( const IngestResult& ing, std::vec
     return out;
 }
 
+inline SlotSiteRow slotSiteOf( const IngestResult& ing, const ValueRefIndex& idx, std::uint32_t call );
+
 // --callers side: every value reference resolving to one of `defs`.
+// IX-1 / IX1-V2: the slot callers of callers-side row `row` (only when no container or parameter join answered it), and how many
+// distinct functions the first slot call's slot holds (cands=).
+inline void fillSlotCallers( const IngestResult& ing, const ValueRefIndex& idx, ValueRefRow& row, ValueRefRows& out )
+{
+    row.slotCalls   = slotCallers( ing, idx.slots().callsFor( row.ref ), row.slotTyped, row.slotNameAlso );
+    out.slotCallers = out.slotCallers || !row.slotCalls.empty();
+    if( !row.slotCalls.empty() )
+    {
+        row.slotCands = static_cast<std::uint32_t>( slotSiteOf( ing, idx, row.slotCalls.front() ).targets.size() );
+        out.slotCands = out.slotCands || row.slotCands > 1;
+    }
+}
+
 inline ValueRefRows valueRefCallerRows( const IngestResult& ing, const ValueRefIndex& idx, std::span<const NodeId> defs )
 {
     ValueRefRows out;
@@ -1219,8 +1589,7 @@ inline ValueRefRows valueRefCallerRows( const IngestResult& ing, const ValueRefI
         }
         if( row.calledBy.empty() )
         {
-            row.slotCalls   = slotCallers( ing, idx.slots().callsFor( r ), row.slotTyped, row.slotNameAlso );   // IX-1
-            out.slotCallers = out.slotCallers || !row.slotCalls.empty();
+            fillSlotCallers( ing, idx, row, out );   // IX-1
         }
         out.rows.push_back( std::move( row ) );
     }

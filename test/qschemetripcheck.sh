@@ -38,6 +38,10 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   UPDATE_GOLDEN=1 (b4eb6e92… -> the pin above). The only watched text that moved is kParserVer 239 -> 241 (rich file tag 242; quality.h's
 #   kIngestParserVerMirror with it): an IX-3 Pattern reference at a Python hasattr test or a JS/TS subscript store records qualifier "t".
 #   kCacheVersion stays 44 and kQSnapCacheScheme stays 24: no record layout and no watched quality.h function moved.
+# 2026-10-27, lane fn-slot (IX1-V2, base integration/train-39 3d03da53): RE-PINNED ONCE with UPDATE_GOLDEN=1 (b4eb6e92… -> 18dfbcac…).
+#   Watched text: kParserVer 239 -> 247, a PLACEHOLDER (train 40 renumbers; Go value refs now include field assignments, method
+#   values and registrar-parameter slot facts, so the dead set is extraction-dependent), its quality.h mirror with it.
+#   kCacheVersion stays 44 (no record changes shape). kQSnapCacheScheme stays 24: no watched quality.h function moved.
 # 2026-10-27, train 39 (lanes ci-flakes, for-small, path-order, receiver-fixes merged onto integration/train-38 aaadc628): RE-DERIVED
 #   ONCE with UPDATE_GOLDEN=1 on the composed tree (the two branch pins f9ffa1bf… / dc0d4c67… conflicted -> b4eb6e92…). Watched text: kParserVer
 #   235 -> 239 (rich 240; receiver-fixes' typing, its placeholder 237) and quality.h's kIngestParserVerMirror with it.

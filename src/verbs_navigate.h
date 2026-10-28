@@ -424,7 +424,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                          ( rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ) + rw::valueRefsLegend( !chRows.valueRefs.rows.empty(), wantCallers )
                            + rw::valueRefsDepthLegendFor( chRows.valueRefs )   // exactly when the root carries the depth disclosure
                            + rw::patternDispatchLegend( !chRows.valueRefs.patternSites.empty() || !chRows.valueRefs.patternWideSites.empty(), wantCallers )
-                           + std::string( rw::slotJoinLegend( wantCallers ? chRows.valueRefs.slotCallers : !chRows.valueRefs.slotSites.empty(), wantCallers ) )   // IX-1: exactly when a slot join rides
+                           + std::string( rw::slotJoinLegend( wantCallers ? chRows.valueRefs.slotCallers : !chRows.valueRefs.slotSites.empty(), wantCallers, wantCallers && chRows.valueRefs.slotCands ) )   // IX-1: exactly when a slot join rides
                            + std::string( rw::closureBlocksLegend( !chClosures.empty() ) ) ).c_str(),   // IX-3: exactly when pattern_dispatch= rides; ix2-slice: exactly when an <in> block rides
                          rw::rootRelPathsLegend( chSingleRoot ),
                          rw::multiRootTableLegend( ing.rootLabels.size() >= 2 ) );
@@ -1060,6 +1060,7 @@ struct SafeDeleteLegendFlags
     bool        patternDispatch = false; // IX-3: pattern_dispatch= / pattern_too_wide= on the root (valuerefs.h)
     bool        patternWideRows = false; // IX-3: the <pdw> rows ride (risk=hedged and a too-wide template can name SYM)
     bool        slotJoin        = false; // IX-1: a <vr> row carries via=slot|slot-name
+    bool        slotCands       = false; // IX1-V2: a <vr> row carries cands=
     bool        callersFloor  = false;   // callers_floor= on the root (countfloor.h): callers= may be short for THIS definition
     bool        usesFloor     = false;   // uses_floor= on the root: this kind's reads/type mentions are not indexed in this run
     bool        hasSitesAt    = false;   // a <c sites_at=> row is on this page (CALLSITE-AT)
@@ -1174,7 +1175,7 @@ inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs
                                + rw::declinedSitesLegend( flags.declinedSites );
     declinedClause += rw::valueRefsSafeDeleteLegend( flags.valueRefs > 0 );   // exactly when the root carries value_refs=
     declinedClause += rw::patternDispatchLegend( flags.patternDispatch, true, flags.patternWideRows );     // IX-3: exactly when the root carries pattern_dispatch=/pattern_too_wide=
-    declinedClause += rw::slotJoinLegend( flags.slotJoin, true );   // IX-1: exactly when a <vr> row carries via=
+    declinedClause += rw::slotJoinLegend( flags.slotJoin, true, flags.slotCands );   // IX-1: exactly when a <vr> row carries via=
     declinedClause += rw::valueRefsDepthLegend( flags.valueRefDepthCut );      // exactly when it carries the depth disclosure
     declinedClause += safeDeleteFloorLegend( flags, risk );   // count-floor + CALLSITE-AT: present-only clauses
     rw::emitTo( stdout, "<!-- ripwire safe-delete: composes signals the tool already computes into one \"can I delete this?\" READ "
@@ -1453,7 +1454,7 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
                           SafeDeleteLegendFlags{ .singleRoot = sdSingleRoot, .hasUnindexed = rw::graphGaugeClauses( g ),
                                                  .hasModScope = anyModuleScopeRow( ing, std::span<const NodeId>( callerIds ).subspan( sdLw.begin, sdLw.end - sdLw.begin ) ),
                                                  .declinedCalls = sdDeclinedCalls, .gateDeclined = g.gateDeclinedCalls > 0, .stdDeclined = g.stdMemberDeclinedCalls > 0,
-                                                 .valueRefs = sdValueRefs.rows.size(), .patternDispatch = !sdPatterns.empty() || !sdWide.empty(), .patternWideRows = sdWideRows, .slotJoin = sdValueRefs.slotCallers, .callersFloor = sdFloor.isFloor, .usesFloor = usesFloor,
+                                                 .valueRefs = sdValueRefs.rows.size(), .patternDispatch = !sdPatterns.empty() || !sdWide.empty(), .patternWideRows = sdWideRows, .slotJoin = sdValueRefs.slotCallers, .slotCands = sdValueRefs.slotCands, .callersFloor = sdFloor.isFloor, .usesFloor = usesFloor,
                                                  .hasSitesAt = sdSites.any, .sitesCut = sdSites.anyCut, .valueRefDepthCut = sdValueRefs.depthCut.files > 0,
                                                  .defTable = sdAttr.groups.multi(), .defTableCut = sdListing.cut, .splitArms = sdHasSplit,
                                                  .linkRows = sdHasLink, .anchorRows = sdHasMiss,
@@ -3025,7 +3026,7 @@ inline void emitImpactLegend( const rw::Config& cfg, const rw::IngestResult& ing
                  ( std::string( rw::valueRefsReachLegend( !imValueRefs.rows.empty() ) )
                    + rw::valueRefsDepthLegendFor( imValueRefs )
                    + rw::patternDispatchLegend( !imValueRefs.patternSites.empty() || !imValueRefs.patternWideSites.empty(), true )   // IX-3: exactly when pattern_dispatch=/pattern_too_wide= rides
-                   + std::string( rw::slotJoinLegend( imValueRefs.slotCallers, true ) )   // IX-1: exactly when a <vr> row carries via=slot|slot-name
+                   + std::string( rw::slotJoinLegend( imValueRefs.slotCallers, true, imValueRefs.slotCands ) )   // IX-1: exactly when a <vr> row carries via=slot|slot-name
                    + std::string( rw::impactRingLegend( imRing, !cfg.columnar ) ) ).c_str(),   // HOP1: exactly when reaches_hedged= / <ring> ride
                  rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
 }
