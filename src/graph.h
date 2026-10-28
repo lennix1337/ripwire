@@ -2232,7 +2232,8 @@ inline HashMap<std::string, char> pythonBaseClauseNames( const IngestResult& ing
 // the names a base clause is LOOKED UP under in another file, beyond the clause's first name: a qualified clause's own name (`q.Base`:
 // Base, what a re-export chain hops by) and the member an aliased import of a first name renames (`from pkg.x import a as q`: a, the name
 // pkg's __init__ may bind). pythonReexportChain and pythonImportedBases read the bindings of exactly these (a renamed hop, a package
-// that binds the submodule's name).
+// that binds the submodule's name). PY-IMPORT-ALIAS-CALL adds the member of EVERY renamed
+// member import (`from m import f as g`: f), whose bindings in m pythonRenamedImportPin reads (pythonEndpointBindsOnlyByClass).
 inline void addPythonLookupNames( const IngestResult& ing, HashMap<std::string, char>& names )
 {
     for( const Reference& r : ing.references )
@@ -2244,9 +2245,14 @@ inline void addPythonLookupNames( const IngestResult& ing, HashMap<std::string, 
     }
     for( const Binding& b : ing.bindings )
     {
-        if( b.kind == LocalBindKind::Import && b.importedName.starts_with( kPythonFromMemberMark ) && names.contains( b.var ) )
+        if( b.kind != LocalBindKind::Import || !b.importedName.starts_with( kPythonFromMemberMark ) )
         {
-            names.try_emplace( b.importedName.substr( kPythonFromMemberMark.size() ), '\0' );
+            continue;
+        }
+        const std::string_view member = std::string_view( b.importedName ).substr( kPythonFromMemberMark.size() );
+        if( names.contains( b.var ) || member != b.var )   // a RENAMED import's member: pythonRenamedImportPin asks m's own bindings of it
+        {
+            names.try_emplace( std::string( member ), '\0' );
         }
     }
 }
@@ -3074,8 +3080,8 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
 //   (3) a split with one evidenced arm is kept whole, false arms included;
 //   (4) an object handed to the caller with no mention of its class in the file (an unannotated parameter, dependency
 //       injection, a factory return) no longer reaches the in-repo method by name; the call is declined and counted;
-//   (5) Python `from m import Cls as Alias` records no original name (emitCapturedPythonImportBind keeps the module
-//       only), so an aliased class is no evidence until the extractor records it (a parser-version change); likewise a TS
+//   (5) Python `from m import Cls as Alias`: this gate reads no original name (the bind records "from:Cls" since ind4b
+//       fix 5, emitCapturedImportBind), so an aliased class is no evidence here; likewise a TS
 //       namespace import used as `ns.Cls.m()` and a CJS `const X = require( … )` that the export table does not pin;
 //   (6) languages without a table keep the ladder unchanged, each for the reason externalnames.h records: Java,
 //       Kotlin, C#, Swift, Rust and ObjC (the extractor records no declared parameter or local type there — an ObjC
@@ -7411,7 +7417,7 @@ inline bool pythonFileBindsOnlyByImport( const ExternalVetoTables& v, std::uint3
         && !pythonStarMayBind( v, f, name );
 }
 
-// Is the class `name` a re-export chain finds in Python file `f` the name's binding there? Only when `name` has exactly ONE module-scope
+// Is the class (or, for pythonRenamedImportPin, the def) `name` a re-export chain finds in Python file `f` the name's binding there? Only when `name` has exactly ONE module-scope
 // binding in `f`, its own `class` statement (the def is a VarDecl row like any rebind, so a second row of any form is the later rebind: an
 // assignment, augmented assignment, loop, with or except target, walrus, another def or class, an import of the name, a `global`), and
 // no star import of `f` could bind it (pythonStarMayBind for THIS name). Anything else, or no row at all, is unknown: the chain withholds.
@@ -7589,6 +7595,120 @@ inline void pythonImportedBases( const BaseEvidenceTables& t, const Reference& r
     {
         pythonReexportChain( t, cand, pkg, link, out );
     }
+}
+
+// PY-IMPORT-ALIAS-CALL: what pythonRenamedImportPin reads. `renamed`: "<fileId>#y" → the member a module-scope `from m import x as y`
+// (y != x) renames, for every Python file where EVERY import of y is that one module-scope rename; "" (poisoned) when any import of y in the
+// file is another form, another member, or sits inside a def or class. Built from the shared binds channel's Import records (emitCapturedImportBind:
+// "from:x"). `shadows`: the byte span of every site-spanned local binding of an alias y in a def (a comprehension target, a lambda
+// parameter: the receiver-evidence records localNameSet skips).
+struct PythonAliasShadow
+{
+    NodeId      sym;    // the def holding the binding
+    std::string var;    // the bound name (an alias of a renamed import in that file)
+    VarSpan     span;   // [startByte, endByte): where the name is the comprehension target or lambda parameter
+};
+
+struct PythonRenamedImports
+{
+    HashMap<std::string, std::string> renamed;
+    std::vector<PythonAliasShadow>    shadows;
+    [[nodiscard]] bool                empty() const noexcept { return renamed.empty(); }
+};
+
+inline PythonRenamedImports buildPythonRenamedImports( const IngestResult& ing )
+{
+    PythonRenamedImports out;
+    std::string          key;
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.kind != LocalBindKind::Import || b.var.empty() || b.fileId >= ing.files.size() || !isPythonSourcePath( rootRelPath( ing, b.fileId ) ) )
+        {
+            continue;
+        }
+        const bool renamed = b.importedName.starts_with( kPythonFromMemberMark ) && pythonBindScope( ing, b ) == kNoNode;
+        const std::string member = renamed ? b.importedName.substr( kPythonFromMemberMark.size() ) : std::string{};
+        const auto [ it, fresh ] = out.renamed.try_emplace( fileNameKey( key, b.fileId, b.var ), member );
+        if( !fresh && it->second != member )
+        {
+            it->second.clear();   // two imports of one name that disagree: never decided
+        }
+    }
+    std::erase_if( out.renamed, []( const auto& kv ) { return kv.second.empty(); } );
+    if( out.renamed.empty() )
+    {
+        return out;
+    }
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.kind == LocalBindKind::RecvType && b.fromSymbol != kNoNode && !b.var.empty() && b.fileId < ing.files.size()
+            && out.renamed.contains( fileNameKey( key, b.fileId, b.var ) ) )
+        {
+            out.shadows.push_back( PythonAliasShadow{ b.fromSymbol, b.var, VarSpan{ b.spanStart, b.spanEnd } } );
+        }
+    }
+    return out;
+}
+
+// PY-IMPORT-ALIAS-CALL: the ONE definition a bare Python call `y()` reaches through `from m import x as y`, else kNoNode. Decided only
+// when y's renamed import is its one binding where the call runs: no local or parameter of y in the caller or any def enclosing it
+// (localNameSet, which also holds a def-scoped import of y), no module-scope rebinding (`y = …`, `def y`, a `global y`, a dynamic
+// namespace write: pythonModuleRebind), and no star import in the file (it may bind y after the rename); and only when m resolves to ONE
+// indexed file (memberImportFile) whose module scope binds x ONLY by that one function or class (pythonEndpointBindsOnlyByClass). A package that
+// re-exports x defines none there: no decision, the call falls to the unchanged ladder (a floor, not a guess). A comprehension target or lambda parameter
+// named y that covers the call byte is a binding too (PythonRenamedImports::shadows: the site-spanned records localNameSet skips).
+inline NodeId pythonRenamedImportPin( const IngestResult& ing, const PythonRenamedImports& imports, const ExternalVetoTables& v,
+                                      const ExternalVeto& veto, const HashMap<std::string, rw::SmallVec<NodeId, 2>>& byName, const Reference& r )
+{
+    std::string key;
+    const auto  rit = imports.renamed.find( fileNameKey( key, r.fileId, r.calleeName ) );
+    if( rit == imports.renamed.end() || r.fromSymbol == kNoNode || r.fromSymbol >= ing.symbols.size()
+        || v.pythonModuleRebind.contains( key ) || v.pythonModuleRebind.contains( fileNameKey( key, r.fileId, kPythonDynamicBind ) )
+        || ( r.fileId < v.pythonScopes.starTargets.size() && !v.pythonScopes.starTargets[ r.fileId ].empty() ) || veto.hasLocal( r, r.calleeName )
+        || std::ranges::any_of( imports.shadows, [ &r ]( const PythonAliasShadow& s )
+                                 { return s.sym == r.fromSymbol && s.var == r.calleeName && r.startByte >= s.span.startByte && r.startByte < s.span.endByte; } ) )
+    {
+        return kNoNode;
+    }
+    for( NodeId outer : pythonClassScopeChain( ing, r.fromSymbol ) )
+    {
+        Reference at = r;
+        at.fromSymbol = outer;
+        if( veto.hasLocal( at, r.calleeName ) )
+        {
+            return kNoNode;   // an enclosing def binds the name: a closure reads that, not the import
+        }
+    }
+    const auto mf = v.memberImportFile.find( fileNameKey( key, r.fileId, r.calleeName ) );
+    const auto dit = byName.find( rit->second );
+    if( mf == v.memberImportFile.end() || mf->second == kNoFile || dit == byName.end() )
+    {
+        return kNoNode;
+    }
+    NodeId only = kNoNode;
+    for( NodeId c : dit->second )
+    {
+        const Symbol& s = ing.symbols[ c ];
+        // module scope = no enclosing def or class by span (a Python class's Symbol::scope is its own name, so scope.empty() cannot say it)
+        if( s.fileId == mf->second && s.lang == Lang::Python && ( s.kind == SymKind::Function || s.kind == SymKind::Class )
+            && pythonClassScopeChain( ing, c ).empty() )
+        {
+            if( only != kNoNode )
+            {
+                return kNoNode;   // two module-scope definitions of x in m: the later one wins at run time, and which is later is not read here
+            }
+            only = c;
+        }
+    }
+    // m's own module scope must bind x ONLY by that def or class (pythonEndpointBindsOnlyByClass, the re-export chain's endpoint test): a later
+    // `from fast import x`, a try-import, `x = other`, `x = deco(x)` or a star import that may bind x leaves the name something else at run time
+    // (a star import of a file outside the tree, `from _operator import *`, is unknown: the call keeps the unchanged ladder), and a dynamic
+    // namespace write (`globals()[...]`, a module `__getattr__`) may bind it too
+    if( only != kNoNode && ( !pythonEndpointBindsOnlyByClass( v, mf->second, rit->second ) || v.pythonModuleRebind.contains( fileNameKey( key, mf->second, kPythonDynamicBind ) ) ) )
+    {
+        return kNoNode;
+    }
+    return only;
 }
 
 // tier 2, JS/TS: a bare name an ES named import pins, or a CommonJS `const { Node } = require('./a')` (a ModuleAlias, not
@@ -8574,6 +8694,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // ExternalVeto above buildGraph; `vetoExternal` is the refusal: no edge, one header count, one `C external`
     // census row with no target.
     const ExternalVeto externalVeto{ ing, canonByName, fieldNarrow.localNameSet, extVeto };
+    const PythonRenamedImports pyRenamedImports = buildPythonRenamedImports( ing );   // PY-IMPORT-ALIAS-CALL (pythonRenamedImportPin)
     // The builtin-method name gate (BuiltinMethodGate above): decides, in Rule 3's place, the calls whose name is a
     // method of the caller language's builtin map/list/set/string type. Inert (active=false) on a corpus with no
     // symbol in a gated language.
@@ -10043,7 +10164,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         //             the unchanged ladder (a refusal here deletes edges the ladder resolved correctly),
         //             unless the import renamed the binding, in which case the local spelling is private
         //             to this file and any same-name ladder hit is a coincidence.
-        bool jsImportPinned = false;
+        bool importPinned = false;   // an ES named import or a Python renamed import decided the site: prov="import"
         // FC3 (T1 class 14): a call through a name WRITTEN in this scope (`Eng = Foo; new Eng()`) is undecided — no edge
         // (unresolved=), like a shadowed import below (jsCallThroughWrittenBinding).
         if( !scipPinned && !jsImports.rebinds.empty() && langFacts( r.lang ).writtenBindingUndecided && jsCallThroughWrittenBinding( jsImports, r ) )
@@ -10055,6 +10176,18 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // …and a MEMBER call through a written root is not receiver-typed by its spelling (jsMemberRootWritten): it goes on to the by-name ladder
         const JsWrittenRoot writtenRoot = !scipPinned && !jsImports.rebinds.empty() && langFacts( r.lang ).writtenBindingUndecided
                                               ? jsMemberRootWritten( jsImports, r ) : JsWrittenRoot::None;
+        // PY-IMPORT-ALIAS-CALL: `from m import x as y; y()` — the Python twin for a RENAMED member import (pythonRenamedImportPin
+        // states when it decides). A plain `from m import x` keeps the ladder: the call's own spelling already names x.
+        if( !scipPinned && !canonical && !narrowed && !pyRenamedImports.empty() && r.role == RefRole::Call && r.recv == RecvKind::None
+            && r.qualifier.empty() && !r.memberCall && r.lang == Lang::Python )
+        {
+            if( const NodeId pin = pythonRenamedImportPin( ing, pyRenamedImports, extVeto, externalVeto, byName, r ); pin != kNoNode )
+            {
+                cand.push_back( pin );
+                narrowed     = true;
+                importPinned = true;
+            }
+        }
         if( !scipPinned && r.role == RefRole::Call && r.recv == RecvKind::None && r.qualifier.empty()
             && ( r.lang == Lang::TypeScript || r.lang == Lang::JavaScript ) )
         {
@@ -10086,7 +10219,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 {
                     cand.push_back( bound.node );
                     narrowed       = true;   // the LATCH that stops the ladder below; see the census call site
-                    jsImportPinned = true;
+                    importPinned = true;
                 }
             }
         }
@@ -11310,8 +11443,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             // rules below cannot append more candidates, and on the ES-import path it says nothing about
             // which stage decided. Reporting `receiver-rule` for a module binding — no receiver, no type,
             // no include graph — is exactly the mislabel this census exists to prevent.
-            const PinDecision d = classifyPin( scipPinned, bindingPinned, jsImportPinned, nReal, canonical,
-                                               narrowed && !jsImportPinned, censusCone, censusArity, censusLocality );
+            const PinDecision d = classifyPin( scipPinned, bindingPinned, importPinned, nReal, canonical,
+                                               narrowed && !importPinned, censusCone, censusArity, censusLocality );
             g.pinCensus.addRow( r.fromSymbol, r.calleeName, d.mech, d.flags, censusPreS6c, nReal, r.line );
             for( NodeId to : tier )
             {
@@ -11365,7 +11498,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 bindingEdges[ekey] = 1; // A4-R5: remember (from,to) for prov="binding"
             }
-            if( jsImportPinned )
+            if( importPinned )
             {
                 importEdges[ekey] = 1;  // remember (from,to) for prov="import"
             }
@@ -11403,7 +11536,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // (prov="final-segment") — so the locals its result binds take the target's declared type. A recursive call (the only
         // target is the caller) types nothing: a floor.
         // A Rust module path (`model::load()`) is a qualifier the canonical tier cannot place but the crate layout can.
-        const bool evidenced = scipPinned || canonical || narrowed || jsImportPinned || languageLookupProved || ( hedgeEligible && !nameOnly );
+        const bool evidenced = scipPinned || canonical || narrowed || importPinned || languageLookupProved || ( hedgeEligible && !nameOnly );
         if( !callResultAt.empty() && nReal == 1 && !nameOnly && !splitPick && !bindingPinned && !subscript && !ifaceImpl )   // L6: one implementor in the tree types nothing
         {
             for( NodeId to : tier )
