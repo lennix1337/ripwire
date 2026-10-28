@@ -9,12 +9,16 @@
 #include "forfold.h"    // body-fold: the whole bodies of the top ranked rows, appended to a compact-route answer
 #include "formembers.h" // member-names: mem= on the shown owner rows of a compact-route answer
 #include "forslots.h"   // FOR-SLOTS: slots= on the shown initializer rows of a compact-route answer
+#include "forgraphverb.h" // FOR-ROUTE-DECLINED: the graph verb a `path from A to B` / `callers of X` task names, appended
 #include "forctorhop.h" // OWNER-CTOR-HOP: ctor_l=/ctor_calls= on the r=1 method row of a compact-route answer
 #include "forcallerhop.h"   // mf1-nx: a name-exact answer about ONE function carries that function's callers
 #include "epmanifest.h"     // ep-manifest: the manifest entry-point groups that register a shown row
 #include <algorithm>         // std::ranges::find: the ep manifest re-picked from the rows <sigs> emits
 #include <optional>          // the redaction-tally snapshots a degraded pre-render restores
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
+
+// FOR-ROUTE-DECLINED: the compact-legend layer's key for a captured verb answer (main.cpp, defined with that layer)
+static std::string_view compactLegendHint( const rw::Config& c, std::string_view doc );
 
 // verbs_for.h — the QUERY family (§A2's contiguous dispatch block), moved VERBATIM from main.cpp in
 // the 2026-08-29 split: computeLensRanking (THE shared lens ranking — the change family's
@@ -2646,6 +2650,97 @@ struct ForLensPassMode
 {
     std::string_view forAtStamp;
 };
+// the verb sections (verbs_navigate.h) come later in this translation unit; the --for block calls their CLI entry points
+std::optional<int> runPath( const MainDispatch& d );
+std::optional<int> runCallHierarchy( const MainDispatch& d );
+std::optional<int> runConnect( const MainDispatch& d );
+
+// FOR-ROUTE-DECLINED (src/forgraphverb.h): a task spelled `path from A to B` / `callers of X` / `common callers of A and B`
+// gets that verb's DEFAULT answer inside <graph_verb endpoints="subject">, just before </ctx>, on the graph this run built
+// (no re-index). Every byte before it is the ordinary answer; nothing resolves → nothing is printed. XML only (the
+// --json / columnar dialects keep their single document; the verb is one call away there).
+inline void appendSubjectGraphVerb( const MainDispatch& d )
+{
+    const rw::Config& cfg = d.cfg;
+    if( cfg.json || cfg.columnar || cfg.candidates || d.multiRoot )
+    {
+        return;
+    }
+    const std::optional<rw::GraphSubjectArgs> args = rw::chooseGraphSubjectArgs( d.ing, cfg.forTask );
+    if( !args )
+    {
+        return;
+    }
+    if( cfg.tokenBudget > 0 )   // --token-budget (the budget --for honours; shapingflagcheck (A) pins the --max-tokens read sites, so this reads only the one)
+    {
+        // a token budget is a request the block must obey (S2): the verb does not run, the tag names it (held="budget", verb= is the call)
+        rw::emitRaw( stdout, rw::graphSubjectOpenXml( *args, rw::GraphSubjectOpen{ .held = true } ).c_str() );
+        return;
+    }
+    rw::Config sub = cfg;   // the verb runs as its own bare call: its default caps, no page window, no --for shaping
+    sub.forTask    = {};
+    sub.pageLimit  = 0;   // defensive, like the json guard above: a paged --for (--limit/--offset) never reaches this site
+    sub.pageOffset = 0;
+    const auto [ flag, value ] = rw::graphSubjectVerbFlag( *args );
+    switch( args->form )
+    {
+        case rw::GraphSubjectForm::Path: sub.pathSpec = value; break;
+        case rw::GraphSubjectForm::Callers: sub.callers = value; break;
+        case rw::GraphSubjectForm::Common: sub.connectSpec = value; break;
+    }
+    const MainDispatch sd{ sub, d.ing, d.g, d.root, d.multiRoot, d.ws, d.fanIn, d.fanInPtr, d.qmetrics, d.ampPtr, d.cboPtr, d.testedPtr,
+                           d.lcom4Ptr, d.impurePtr, d.forChurn, d.redactCounts, d.redactPtr, d.notesPtr, d.notesDegraded, d.grepPhases, d.valueUses };
+    const auto runVerb = [ & ]
+    {
+        switch( args->form )
+        {
+            case rw::GraphSubjectForm::Path: (void)runPath( sd ); break;
+            case rw::GraphSubjectForm::Callers: (void)runCallHierarchy( sd ); break;
+            case rw::GraphSubjectForm::Common: (void)runConnect( sd ); break;
+        }
+    };
+    // The bare verb's answer is shaped by main.cpp's whole-stdout compact layer (runWithCompactLegend), which skips --for; so
+    // the verb is captured here and compacted by the same applyCompactDialect + compactLegendHint, and the block carries the
+    // bytes the bare call prints. A capture that cannot be set up emits the verb's FULL legend instead (a superset; only cost).
+    std::fflush( stdout );   // everything before the block is out before stdout is pointed at the capture
+    std::FILE* const capture = sub.legend == "compact" ? std::tmpfile() : nullptr;
+    const int        saved   = capture != nullptr ? rw::os::dup( STDOUT_FILENO ) : -1;
+    if( capture == nullptr || saved < 0 || rw::os::dup2( rw::os::fileno( capture ), STDOUT_FILENO ) < 0 )
+    {
+        if( sub.legend == "compact" )
+        {
+            DISCLOSE( Diagnostics::answerUnchanged, "the full legend is a correct superset of the compact one: only the cost grows",
+                      "appendSubjectGraphVerb: no capture buffer — the graph verb's FULL legend is emitted" );
+        }
+        if( saved >= 0 ) { rw::os::close( saved ); }
+        if( capture != nullptr ) { std::fclose( capture ); }
+        rw::emitRaw( stdout, rw::graphSubjectOpenXml( *args ).c_str() );
+        std::fflush( stdout );
+        runVerb();
+    }
+    else
+    {
+        runVerb();
+        std::fflush( stdout );
+        rw::os::dup2( saved, STDOUT_FILENO );
+        rw::os::close( saved );
+        std::string doc;
+        std::rewind( capture );
+        char buf[ 65536 ];
+        for( std::size_t got; ( got = std::fread( buf, 1, sizeof( buf ), capture ) ) > 0; )
+        {
+            doc.append( buf, got );
+        }
+        std::fclose( capture );
+        (void)rw::applyCompactDialect( doc, ::compactLegendHint( sub, doc ) );   // not shaped → the bytes as emitted (the DEFAULT posture's rule)
+        // the open tag goes out after the verb ran: name_test_hops= (S5) is read off the rows it printed
+        const std::size_t nameTest = args->form == rw::GraphSubjectForm::Path ? rw::graphSubjectNameTestHops( doc ) : 0;
+        rw::emitRaw( stdout, rw::graphSubjectOpenXml( *args, rw::GraphSubjectOpen{ .nameTestHops = nameTest } ).c_str() );
+        std::fwrite( doc.data(), 1, doc.size(), stdout );
+    }
+    rw::emitRaw( stdout, std::string( rw::kGraphSubjectCloseXml ).c_str() );
+}
+
 std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, const ForLensPassMode& mode )
 {
     using namespace rw;
@@ -4310,6 +4405,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             rw::emitChargedSection( stdout, graphSection, [ & ]{ packGraphBlock( stdout, ing, lensRank, g.outOff, g.outTargets ); } );
         }
+        appendSubjectGraphVerb( d );   // FOR-ROUTE-DECLINED: "" unless the task is spelled as a graph question that resolves
 
         rw::emitRaw( stdout, "</ctx>" );
         reportRedactions( stderr, redactCounts );

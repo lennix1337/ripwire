@@ -41,6 +41,7 @@
 #include "slice.h"         // lane/tc-sliceat: the shared --slice / MCP slice def-use core (sliceBundleText — ONE emitter, two surfaces)
 #include "fielduses.h"     // the member-variable round: the ONE --uses=Owner.field renderer (renderFieldUses — CLI ≡ MCP)
 #include "testmap.h"       // lane/t10-mcp-coverage: writeAffectedReport — the shared --affected / `affected` verb renderer
+#include "forgraphverb.h"   // FOR-ROUTE-DECLINED: the `for` verb's subject-read graph-verb block (the CLI twin's wrapper)
 #include "pathgaps.h"      // PATH-GAP: the shared gap analysis + clause of --path / path_between
 #include "pathpairs.h"     // TRACE-EP: the reaching definition pairs of --path / path_between
 
@@ -2440,6 +2441,11 @@ inline std::string_view mcpPageRankFlags( bool noRoute )
     return noRoute ? std::string_view( " --no-route" ) : std::string_view();
 }
 
+// defined below; forTaskText's FOR-ROUTE-DECLINED block calls them (the path_between / connect twins)
+inline std::optional<std::string> pathText( const std::string& root, const std::string& from, const std::string& to );
+inline std::string connectText( const std::string& root, const std::vector<std::string>& symbolSpecs, std::uint32_t radius, std::string& err, RedactCounts* redact );
+inline std::string batchCdata( const std::string& s );   // the callers twin's JSON rides as CDATA
+
 inline std::optional<std::string> forTaskText( const std::string& root, const std::string& task, RedactCounts* redact = nullptr,
                                 std::size_t budgetTokens = 0, bool noRoute = false,
                                 McpPageArgs page = {},   // L-W: limit/offset select the FILE PAGE (forpage.h), the CLI --for --limit twin
@@ -2901,6 +2907,40 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     }
     std::string out = std::move( *chosen.doc );
     priceForTaskRoot( out, chosen.cut.rowDropCut && budgetTokens == 0 );   // R1: est_tokens=; over_ceiling="1" only past the runaway guard
+    // FOR-ROUTE-DECLINED (src/forgraphverb.h): the CLI --for's <graph_verb endpoints="subject"> block, the same wrapper around
+    // this surface's twin of the verb (path_between / find_referencing_symbols / connect), before </ctx>; priced like the CLI's (not)
+    if( std::optional<GraphSubjectArgs> gsa = chooseGraphSubjectArgs( ing, task ); gsa && out.ends_with( "</ctx>" ) )
+    {
+        if( budgetTokens > 0 )
+        {
+            // budget_tokens is a request the block must obey (S2): the verb does not run, the tag names it (held="budget", verb= is the call)
+            out.insert( out.size() - 6, graphSubjectOpenXml( *gsa, GraphSubjectOpen{ .held = true } ) );
+            return out;
+        }
+        std::string verb;
+        GraphSubjectOpen opts;
+        if( gsa->form == GraphSubjectForm::Path )
+        {
+            verb              = pathText( root, gsa->endpoints[0], gsa->endpoints[1] ).value_or( std::string() );
+            opts.nameTestHops = graphSubjectNameTestHops( verb );
+        }
+        else if( gsa->form == GraphSubjectForm::Common )
+        {
+            std::string err;
+            verb = connectText( root, gsa->endpoints, connectcfg::kDefaultRadius, err, redact );
+        }
+        else
+        {
+            // the MCP callers twin answers JSON: carried as CDATA text (S1; escaping it cost x1.38 bytes), dialect="json" says why it is not <callers>
+            const std::string json = symbolQueryJson( root, gsa->endpoints[0], /*referencingOnly=*/true );
+            verb                   = json.empty() ? std::string() : batchCdata( json );
+            opts.jsonDialect       = true;
+        }
+        if( !verb.empty() )
+        {
+            out.insert( out.size() - 6, graphSubjectOpenXml( *gsa, opts ) + verb + std::string( kGraphSubjectCloseXml ) );
+        }
+    }
     return out;
 }
 
