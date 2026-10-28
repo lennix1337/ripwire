@@ -103,6 +103,7 @@ inline constexpr CompactLegendSpec kCompactLegendSpecs[] =
     // symbol (a seed), so a test in the reach set lands in radius_untested=; importers= is impactImportTier's one-hop set of
     // files whose include/import resolves to a def's file. shown_importers= is a present-only term: the columnar form omits it.
     { "impact",      "impact",      "transitive blast radius of of=: <s t= n= p=> reach set, <f via= p=> importers; defs= matched, reaches= their transitive callers, radius_tested= non-tests an indexed test reaches, radius_untested= the rest; importers= files that #include/import a def's file" },
+    { "defs",        "defs",        "per <name q= defs=> the parsed definitions the name binds (defs= groups; a prototype with its definition is one): <d n= t= p= sel= lang= class=source|test in=>, sel= binds that one alone in any SYM verb, in= distinct callers (a floor); source first, then in=, then path" },
     { "path",        "path",        "one DIRECTED call path from= to to=, each <s t= n= p=> a hop; reachable=0 hops=0 when none" },
     { "connect",     "connect",     "minimal joining subgraph: <g> groups, <t> terminals, <s connects=> joins, <e f= t=> edges, <unconnected>" },
     { "at",          "at",          "enclosing-definition chain at p=:l=: sym= innermost, chain= outermost-first, <s n= t= l= el=> spans" },
@@ -830,6 +831,12 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "decided", "decided=N: groups whose leading style cleared both the sample and agreement floors", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
     { "flagged", "flagged=N: off-convention names in decided groups (the f rows)", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
     // path: src/verbs_navigate.h (the <path> root emit)
+    { "sel_proven", "d sel_proven=0: no spelling tried binds it alone; sel= names its file and owner and may bind more", true, "d", MapHeaderRead::No, {}, "defs" },
+    { "decl_only", "d decl_only=1: no body: an interface or trait contract, or a declaration no listed definition ties to", true, "d", MapHeaderRead::No, {}, "defs" },
+    { "data_defs", "name data_defs=K: data keys or doc headings of that name (JSON/YAML key, markdown heading), not code, not in defs=", true, "name", MapHeaderRead::No, {}, "defs" },
+    { "unproven_defs", "name unproven_defs=K: same-named definitions a file:name spelling could not tie to that file; not in defs=", true, "name", MapHeaderRead::No, {}, "defs" },
+    { "shown", "name shown=K offset=M: rows M..M+K of defs=; next= pages the rest", true, "name", MapHeaderRead::No, {}, "defs" },   // also defines offset=
+    { "next", "name next=: the next page, or (defs=0) the single-name call whose refusal names near names", true, "name", MapHeaderRead::No, {}, "defs" },
     { "from_p", "from_p=/to_p=: the definitions from= and to= were bound to", false, "path", MapHeaderRead::No, {}, "path" },   // also defines to_p=
     { "from_defs", "from_defs=/to_defs=: definitions of each name, all searched; above 1, qualify file:name", false, "path", MapHeaderRead::No, {}, "path" },   // also defines to_defs=
     // TRACE-EP (src/pathpairs.h kPathPairsLegend), present only when several definition pairs reach: <pair> chains and <alt> rows
