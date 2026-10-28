@@ -184,8 +184,9 @@ inline std::vector<std::string_view> cratesOf( const IngestResult& ing )
 //     path to (this crate's root), never the writing file's own namesake (F-2); `crate::x` the crate root's.
 //   * a path led by an in-tree crate's name (`zed::x`, `use zed::{x}`): that crate's one, outside the writing file.
 //   * a bare name no `use` names: this file's, else its crate's, else the repo's only one — that last tier only when the file
-//     `use`s the defining crate (F-1 iv). A bare name a `use` names while this file defines a namesake too: None (the `use`
-//     sits in an inner scope; which one this reference sees is not read).
+//     `use`s the defining crate (F-1 iv); none of the last two while the file has an OUT-OF-TREE glob (`use extcrate::*`: the
+//     bare name may come from it; a namesake in this file still shadows it). A bare name a `use` names while this file defines a
+//     namesake too: None (the `use` sits in an inner scope; which one this reference sees is not read).
 class RustPaths
 {
 public:
@@ -220,6 +221,11 @@ public:
             {
                 it->second = std::string_view();   // two crates of one name: which one a path means is unknown
             }
+        }
+        m_extGlob.assign( ing.files.size(), 0 );
+        for( std::uint32_t f = 0; f < m_uses.size(); ++f )
+        {
+            m_extGlob[f] = hasOutOfTreeGlob( f ) ? 1 : 0;
         }
     }
     std::string_view crateOf( std::uint32_t f ) const { return m_crates[f]; }
@@ -295,7 +301,8 @@ private:
         std::ranges::replace( n, '-', '_' );
         return n;
     }
-    // Each name one `use` specifier binds: cb( name, module path, renamed ). `a::{b, c::d as e, self}`, `a::b as c`; a glob binds none.
+    // Each name one `use` specifier binds: cb( name, module path, renamed ). `a::{b, c::d as e, self}`, `a::b as c`; a glob reports
+    // the name "*" (it binds none; no identifier equals it) with the module path it opens.
     template<class Cb>
     static void forEachUse( std::string_view t, const std::string& prefix, int depth, const Cb& cb )
     {
@@ -354,8 +361,13 @@ private:
             }
             leaf = own;
         }
-        if( leaf.empty() || leaf == "*" )
+        if( leaf.empty() )
         {
+            return;
+        }
+        if( leaf == "*" )
+        {
+            cb( leaf, module, false );   // a glob binds no name; its module path is what hasOutOfTreeGlob reads
             return;
         }
         cb( alias.empty() ? leaf : alias, module, !alias.empty() && alias != leaf );
@@ -391,6 +403,27 @@ private:
     {
         return std::ranges::any_of( m_uses[ fileId ], [ & ]( std::string_view t ) { return t.starts_with( "mod:" ) && t.substr( 4 ) == seg; } );
     }
+    // The file `use`s a glob of something outside the tree (`use extcrate::*`, `use std::io::prelude::*`): a bare name no `use`
+    // names may be that glob's, so an in-tree namesake of another file is one guess among two. A glob led by `crate` / `self` /
+    // `super`, an in-tree crate or a `mod` this file declares is in the tree (its names are in-tree ones); the crate-less `use *` none.
+    bool hasOutOfTreeGlob( std::uint32_t fileId ) const
+    {
+        bool out = false;
+        for( const std::string_view t : m_uses[ fileId ] )
+        {
+            if( t.starts_with( "mod:" ) || out )
+            {
+                continue;
+            }
+            forEachUse( t, std::string(), 0, [ & ]( std::string_view bound, const std::string& module, bool )
+            {
+                const std::string_view seg = trimmed( firstSegment( module ) );
+                out = out || ( bound == "*" && !seg.empty() && seg != "crate" && seg != "self" && seg != "super"
+                               && !m_crateByName.contains( std::string( seg ) ) && !declaresMod( fileId, seg ) );
+            } );
+        }
+        return out;
+    }
     bool usesCrate( std::uint32_t fileId, std::string_view crate ) const
     {
         const std::string want = crateName( crate );
@@ -400,12 +433,14 @@ private:
             return trimmed( t.substr( 0, std::min( { t.find( "::" ), t.find( '{' ), t.size() } ) ) ) == want;
         } );
     }
-    // The candidate's tier for `at` (-1: out of reach). Near: 0 own file, 1 own crate, 2 another crate the file `use`s.
+    // The candidate's tier for `at` (-1: out of reach). Near: 0 own file, 1 own crate, 2 another crate the file `use`s — tiers 1 and 2
+    // only while the file has no out-of-tree glob (fix 2 L-2: that glob may be where the bare name comes from; a local item shadows it).
     int tierOf( std::uint32_t f, std::uint32_t fileId, const At& at ) const
     {
         switch( at.kind )
         {
-            case Reach::Near:      return f == fileId ? 0 : m_crates[f] == m_crates[fileId] ? 1 : usesCrate( fileId, m_crates[f] ) ? 2 : -1;
+            case Reach::Near:
+                return f == fileId ? 0 : m_extGlob[fileId] ? -1 : m_crates[f] == m_crates[fileId] ? 1 : usesCrate( fileId, m_crates[f] ) ? 2 : -1;
             case Reach::File:      return f == at.file ? 0 : -1;
             case Reach::Crate:     return f != fileId && m_crates[f] == at.crate ? 0 : -1;
             case Reach::InCrate:   return m_crates[f] == at.crate ? 0 : -1;
@@ -530,6 +565,7 @@ private:
     std::vector<std::string_view>                m_crates;       // cratesOf
     std::vector<std::vector<std::string_view>>   m_uses;         // per file: its Rust `use` specifiers and `mod:x` records
     HashMap<std::string, std::string_view>       m_crateByName;  // a crate's path name → the crate ("" two crates share it)
+    std::vector<std::uint8_t>                    m_extGlob;      // per file: 1 when it `use`s an out-of-tree glob (hasOutOfTreeGlob)
     mutable HashMap<std::string, std::uint32_t>  m_fileIndex;    // root-relative normalised path → fileId, built on first anchored path
 };
 // FN-SLOT part 2: a ModuleType (Rust) slot type's key — the in-tree STRUCT symbol the written path reaches (RustPaths: a bare

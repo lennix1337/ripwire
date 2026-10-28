@@ -11,7 +11,8 @@ WRITTEN reaches: a module path (`crate::a::Cfg`, `super::eval::f`, `mod a; a::f`
 file's own namesake; a path led by an in-tree crate's name that crate; a bare name its own file's, else its crate's, else the
 repo's only one in a crate the file `use`s (`Self` is the impl type). `std` / `core` / `alloc`, an out-of-tree crate
 (`use tokio::spawn`, `use extcrate::Hook`), a `use … as` rename or an unknown module reach no in-tree definition: no join. Two
-crates' same-named structs are two slots; a `self.f` call is typed
+crates' same-named structs are two slots; a bare name in a file that `use`s an out-of-tree glob (`use extcrate::*`) is its own
+file's definition only, since another file's namesake is one guess beside the glob's (it joins by the field name, `via="slot-name"`); a `self.f` call is typed
 (`via="slot"`), a call or store through another receiver joins by the field name only (`via="slot-name"`, `~` on `--for`). Not
 joined (floors): a closure stored in a field, a method-call registrar (`r.set( f )`), a value inside a macro, an enum variant's
 field, a value or registrar inside an inline `mod m { … }` (including `#[cfg(test)] mod tests`: its functions are module
