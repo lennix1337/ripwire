@@ -2516,7 +2516,7 @@ std::optional<int> runDefs( const MainDispatch& d )
     looks.reserve( names.size() );
     for( const std::string_view n : names )
     {
-        looks.push_back( lookupDefs( ing, d.g, n ) );
+        looks.push_back( lookupDefs( ing, d.g, n, names.size() == 1 ? std::size_t( std::max( cfg.pageOffset, 0 ) ) : 0, kDefRowsCap ) );
     }
     if( names.size() == 1 && looks[0].matches.empty() && looks[0].dataDefs == 0 )
     {

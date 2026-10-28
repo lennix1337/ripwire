@@ -43,7 +43,7 @@ struct DefRow
 {
     std::uint32_t group     = 0;       // the DefGroups index
     NodeId        rep       = kNoNode; // the group's bodied member (else its first match)
-    std::string   sel;                 // the spelling that picks this group alone (when selProven)
+    std::string   sel;                 // the spelling that picks this group alone (when selProven); filled for the printed window only
     bool          selProven = false;   // re-resolving sel binds this group's members and nothing else
     bool          test      = false;   // pathDefInTests: a test/bench file or a test symbol
     std::size_t   callers   = 0;       // distinct in-graph callers over the group's members (a floor)
@@ -89,8 +89,8 @@ inline bool picksAlone( const IngestResult& ing, std::string_view spell, const s
 }
 }   // namespace defslookup_detail
 
-// THE lookup. `g` supplies the caller counts.
-inline DefLookup lookupDefs( const IngestResult& ing, const Graph& g, std::string_view spec )
+// THE lookup. `g` supplies the caller counts; sel= is proven for the sorted rows [selBegin, selBegin + selCount) only.
+inline DefLookup lookupDefs( const IngestResult& ing, const Graph& g, std::string_view spec, std::size_t selBegin = 0, std::size_t selCount = kDefRowsCap + 1 )
 {
     DefLookup out;
     out.spec    = spec;
@@ -127,35 +127,6 @@ inline DefLookup lookupDefs( const IngestResult& ing, const Graph& g, std::strin
         // a member calling itself (recursion) is no outside caller
         r.callers = std::size_t( std::count_if( callers.begin(), callers.end(), [ & ]( NodeId c )
                                                 { return std::find( members[k].begin(), members[k].end(), c ) == members[k].end(); } ) );
-        // sel=: the shortest spelling the resolver binds to this group alone — the name as given (one group), file:name,
-        // file:Owner.name, then the @file:line seed (one definition starting on that line)
-        const Symbol&          s     = ing.symbols[ r.rep ];
-        const std::string      file( rootRelPath( ing, s.fileId ) );
-        const std::string      owned = qualifiedMemberName( owners, s );
-        std::vector<std::string> tries;
-        if( out.groups.size() == 1 )
-        {
-            tries.emplace_back( spec );
-        }
-        tries.push_back( file + ":" + s.name );
-        if( owned != s.name )
-        {
-            tries.push_back( file + ":" + owned );
-        }
-        tries.push_back( "@" + file + ":" + std::to_string( s.line ) );
-        for( const std::string& t : tries )
-        {
-            if( defslookup_detail::picksAlone( ing, t, members[k] ) )
-            {
-                r.sel       = t;
-                r.selProven = true;
-                break;
-            }
-        }
-        if( !r.selProven )
-        {
-            r.sel = owned == s.name ? file + ":" + s.name : file + ":" + owned;
-        }
     }
     std::stable_sort( out.rows.begin(), out.rows.end(), [ & ]( const DefRow& a, const DefRow& b )
     {
@@ -172,6 +143,42 @@ inline DefLookup lookupDefs( const IngestResult& ing, const Graph& g, std::strin
         const std::string_view pa = rootRelPath( ing, sa.fileId ), pb = rootRelPath( ing, sb.fileId );
         return pa != pb ? pa < pb : sa.line < sb.line;
     } );
+    // sel= only for the rows a page prints (the window [selBegin, selBegin + selCount) of the sorted rows): each try re-resolves a
+    // spelling, and dispose binds 2619 groups on vscode: proving every one measured 69-81 s warm (the callers verb: 30 s) for a 16-row page
+    const std::size_t selEnd = std::min( out.rows.size(), selBegin + selCount );
+    for( std::size_t i = std::min( selBegin, selEnd ); i < selEnd; ++i )
+    {
+        // sel=: the shortest spelling the resolver binds to this group alone — the name as given (one group), file:name,
+        // file:Owner.name, then the @file:line seed (one definition starting on that line)
+        DefRow&                  r     = out.rows[i];
+        const Symbol&            s     = ing.symbols[ r.rep ];
+        const std::string        file( rootRelPath( ing, s.fileId ) );
+        const std::string        owned = qualifiedMemberName( owners, s );
+        std::vector<std::string> tries;
+        if( out.groups.size() == 1 )
+        {
+            tries.emplace_back( spec );
+        }
+        tries.push_back( file + ":" + s.name );
+        if( owned != s.name )
+        {
+            tries.push_back( file + ":" + owned );
+        }
+        tries.push_back( "@" + file + ":" + std::to_string( s.line ) );
+        for( const std::string& t : tries )
+        {
+            if( defslookup_detail::picksAlone( ing, t, members[ r.group ] ) )
+            {
+                r.sel       = t;
+                r.selProven = true;
+                break;
+            }
+        }
+        if( !r.selProven )
+        {
+            r.sel = file + ":" + owned;
+        }
+    }
     return out;
 }
 
