@@ -651,7 +651,8 @@ public:
     // insert may move the memo's storage while a caller (ForwardHops::confirm) still reads the set.
     std::vector<NodeId> targets( std::uint32_t site ) const
     {
-        EXPECTS( any(), "a name-key site comes from this index's own sites" );
+        const bool built = any();   // CR 4396503824: the build runs whether or not contracts are compiled in
+        EXPECTS( built, "a name-key site comes from this index's own sites" );
         const auto it = m_targets.find( site );
         return it != m_targets.end() ? it->second : m_targets.try_emplace( site, m_pix->targets( site ) ).first->second;
     }
