@@ -24,7 +24,7 @@
 #   N1 C++ alias of a CONCRETE class → the typed edge to Codec::encodeFrame, never the namesake Other::encodeFrame
 #   N2 Rust: the inherent namesake CallEval::run is never a candidate (P2's absence check)
 #   N3 Rust: a by-name callee (`s.get_decl` on a generic S) types nothing — base by-name rows unchanged, no iface row
-#   N4 C++ `.` on the alias member reaches the smart pointer, never the pointee (no decodeHeaders row)
+#   N4 C++ `.` on the alias member reaches the smart pointer, never the pointee (`handle_.reset()` with an I::reset: no iface row)
 #   N5 C++ alias of std::shared_ptr<std::string> types nothing (an in-tree text::string keeps its base by-name row)
 #   N6 Rust: a generic `-> R` (R: Command) is never read as a trait object (no iface row)
 set -u
@@ -51,10 +51,10 @@ for f in viaAlias viaTypedef viaChain; do
   say "$( hasnt "$o" 'via="name"' )" "P1 $f: no via=name guess"
 done
 o="$( callees "$CPP" "filter.h::ActiveStreamDecoderFilter::viaConcrete" )"
-say "$( has "$o" '<s t="method" n="Codec::encodeFrame" p="filter.h:18"/>' )" "N1 alias of a concrete class: a typed (not by-name) edge to Codec::encodeFrame"
+say "$( has "$o" '<s t="method" n="Codec::encodeFrame" p="filter.h:19"/>' )" "N1 alias of a concrete class: a typed (not by-name) edge to Codec::encodeFrame"
 say "$( hasnt "$o" 'Other::encodeFrame' )" "N1 the namesake Other::encodeFrame is gone"
 o="$( callees "$CPP" "filter.h::ActiveStreamDecoderFilter::viaDot" )"
-say "$( hasnt "$o" 'decodeHeaders' )" "N4 '.' on the alias member never reaches the pointee"
+say "$( hasnt "$o" 'gate="iface"' )" "N4 '.' on the alias member (handle_.reset(): the smart pointer's own) never types it as the pointee (no iface row)"
 
 for f in eval_call eval_boxed; do
   o="$( callees "$RS" "src/lib.rs:$f" )"
@@ -66,7 +66,7 @@ o="$( callees "$RS" "src/lib.rs:eval_unknown" )"
 say "$( hasnt "$o" 'gate="iface"' )" "N3 a by-name callee types nothing (no iface row)"
 say "$( has "$o" 'n="Ls::run"' )" "N3 base by-name rows unchanged"
 o="$( callees "$CPP" "filter.h:nameLen" )"
-say "$( has "$o" '<s t="method" n="string::size" p="filter.h:21" via="name"/>' )" "N5 an alias of shared_ptr<std::string> types nothing: the in-tree namesake text::string stays a by-name row (base reading)"
+say "$( has "$o" '<s t="method" n="string::size" p="filter.h:22" via="name"/>' )" "N5 an alias of shared_ptr<std::string> types nothing: the in-tree namesake text::string stays a by-name row (base reading)"
 o="$( callees "$RS" "src/lib.rs:eval_generic" )"
 say "$( hasnt "$o" 'gate="iface"' )" "N6 a generic -> R result is not read as a trait object"
 echo "ifacepeelcheck: $npass passed, $nfail failed"
