@@ -807,9 +807,11 @@ inline std::string_view hopsCallsNextLegend( const ForLensHeaderParts& p, bool c
     return presentOnlyClause( p.hopsCallsNextPresent, compact, kForCompactHopsCallsNextClause, kForHopsCallsNextClause );
 }
 // body-fold: the fold's clause in this dialect, present-only (bodyFoldPresent), right after the slot clause
-inline std::string_view bodyFoldLegend( const ForLensHeaderParts& p, bool compact ) noexcept
+// WRAPPER-FOLLOW: the follow_of= clause rides right after it, present-only (foldFollowPresent)
+inline std::string bodyFoldLegend( const ForLensHeaderParts& p, bool compact )
 {
-    return presentOnlyClause( p.bodyFoldPresent, compact, rw::kForCompactBodyFoldLegend, rw::kForBodyFoldLegend );
+    return std::string( presentOnlyClause( p.bodyFoldPresent, compact, rw::kForCompactBodyFoldLegend, rw::kForBodyFoldLegend ) )
+         + std::string( presentOnlyClause( p.foldFollowPresent, compact, rw::kForCompactFoldFollowLegend, rw::kForFoldFollowLegend ) );
 }
 inline constexpr std::string_view kForCompactLegendTail =
     "; t p= file outside sigs (weaker), t sym= its top symbols (a pointer, not the answer), r= rank (gap = trimmed)";
@@ -922,7 +924,6 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
     h += ownerHopLegend( p, /*compact=*/true );   // owner-hop: present-only, right after the hops clause
     h += bodySlotLegend( p, /*compact=*/true );   // for-body-slot: present-only, after the owner clause
     h += bodyFoldLegend( p, /*compact=*/true );   // body-fold: present-only, after the slot clause
-    h += presentOnlyClause( p.foldFollowPresent, /*compact=*/true, rw::kForCompactFoldFollowLegend, rw::kForFoldFollowLegend );   // WRAPPER-FOLLOW
     h += presentOnlyClause( p.memberNamesPresent, /*compact=*/true, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend );   // member-names: after the fold clause
     h += peerRowClauses( p, /*compact=*/true );   // FOR-SLOTS + OWNER-CTOR-HOP: present-only, after mem=
     h += presentOnlyClause( p.callerHopPresent, /*compact=*/true, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend );  // mf1-nx: present-only, after the fold clause
@@ -1071,7 +1072,6 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     h.append( ownerHopLegend( p, /*compact=*/false ) );   // owner-hop: present-only, right after the bundle clause
     h.append( bodySlotLegend( p, /*compact=*/false ) );   // for-body-slot: present-only, after the owner clause
     h.append( bodyFoldLegend( p, /*compact=*/false ) );   // body-fold: present-only, after the slot clause
-    h.append( presentOnlyClause( p.foldFollowPresent, /*compact=*/false, rw::kForCompactFoldFollowLegend, rw::kForFoldFollowLegend ) );   // WRAPPER-FOLLOW
     h.append( presentOnlyClause( p.memberNamesPresent, /*compact=*/false, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend ) );   // member-names
     h.append( peerRowClauses( p, /*compact=*/false ) );   // FOR-SLOTS + OWNER-CTOR-HOP
     h.append( presentOnlyClause( p.callerHopPresent, /*compact=*/false, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend ) );  // mf1-nx: present-only, after the fold clause
@@ -2664,7 +2664,7 @@ std::optional<int> runConnect( const MainDispatch& d );
 // gets that verb's DEFAULT answer inside <graph_verb endpoints="subject">, just before </ctx>, on the graph this run built
 // (no re-index). Every byte before it is the ordinary answer; nothing resolves → nothing is printed. XML only (the
 // --json / columnar dialects keep their single document; the verb is one call away there).
-inline void appendSubjectGraphVerb( const MainDispatch& d, std::span<const rw::NodeId> served )
+inline void appendSubjectGraphVerbBlock( const MainDispatch& d, std::span<const rw::NodeId> served )
 {
     const rw::Config& cfg = d.cfg;
     if( cfg.json || cfg.columnar || cfg.candidates || d.multiRoot )
@@ -2715,7 +2715,7 @@ inline void appendSubjectGraphVerb( const MainDispatch& d, std::span<const rw::N
         if( sub.legend == "compact" )
         {
             DISCLOSE( Diagnostics::answerUnchanged, "the full legend is a correct superset of the compact one: only the cost grows",
-                      "appendSubjectGraphVerb: no capture buffer — the graph verb's FULL legend is emitted" );
+                      "appendSubjectGraphVerbBlock: no capture buffer — the graph verb's FULL legend is emitted" );
         }
         if( saved >= 0 ) { rw::os::close( saved ); }
         if( capture != nullptr ) { std::fclose( capture ); }
@@ -4415,7 +4415,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             rw::emitChargedSection( stdout, graphSection, [ & ]{ packGraphBlock( stdout, ing, lensRank, g.outOff, g.outTargets ); } );
         }
-        appendSubjectGraphVerb( d, servedAnswerBodies().bodies );   // FOR-ROUTE-DECLINED: "" unless the task is spelled as a graph question that resolves; the bodies this answer carries print no second copy in its path hop bodies
+        appendSubjectGraphVerbBlock( d, servedAnswerBodies().bodies );   // FOR-ROUTE-DECLINED: "" unless the task is spelled as a graph question that resolves; the bodies this answer carries print no second copy in its path hop bodies
 
         rw::emitRaw( stdout, "</ctx>" );
         reportRedactions( stderr, redactCounts );

@@ -246,18 +246,19 @@ inline std::string_view pathHopNextLegend( bool on ) noexcept
     return on ? "next=: the chain has more than 2 hops, so no middle hop body prints; the first middle hop's expand. " : "";
 }
 
-// Insert ` attrs` into the first `<b ` open tag of a rendered body element (after its legend comments).
-inline void addBodyAttrs( std::string& bodyXml, std::string_view attrs )
+// Insert `attrs` in front of the '>' of the first open tag that starts with `openPrefix` (the fold's <b follow_of=>, the body slot's
+// <bodies pick=>); an unexpected shape leaves the document as it was.
+inline void insertOpenTagAttrs( std::string& xml, std::string_view openPrefix, std::string_view attrs )
 {
-    const std::size_t at = bodyXml.find( "<b t=\"" );
+    const std::size_t at = xml.find( openPrefix );
     if( at == std::string::npos )
     {
         return;
     }
-    const std::size_t close = bodyXml.find( '>', at );
+    const std::size_t close = xml.find( '>', at );
     if( close != std::string::npos )
     {
-        bodyXml.insert( close, attrs );
+        xml.insert( close, attrs );
     }
 }
 

@@ -383,7 +383,7 @@ inline FollowRender renderFollows( const BodyFoldInputs& in, NodeId from, std::v
         {
             break;
         }
-        addBodyAttrs( *b, " follow_of=\"" + std::string( escapeXml( in.ing.symbols[cur].name, esc ) ) + "\"" );
+        insertOpenTagAttrs( *b, "<b t=\"", " follow_of=\"" + std::string( escapeXml( in.ing.symbols[cur].name, esc ) ) + "\"" );
         out.bytes += b->size();
         ++out.count;
         out.xml += *b;
