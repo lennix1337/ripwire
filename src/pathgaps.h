@@ -442,6 +442,7 @@ struct NearSinkSite
     NodeId        in     = kNoNode;    // its enclosing definition (kNoNode: file scope)
     NearSinkKind  kind   = NearSinkKind::Declined;
     bool          met    = false;      // the forward search reached `in`
+    std::uint32_t cands  = 0;          // a NAME-KEY lookup's width (the definitions its template can name): 0 = not a name-key site
 };
 
 struct NearSinkRow
@@ -755,7 +756,7 @@ inline bool nearSinkSiteBetter( const IngestResult& ing, const NearSinkSite& a, 
 // forward search reached. Deterministic: BFS in in-edge order from the to= definitions in the order given, one pass over the
 // declined records, the value index in reference order, one pass over the name-only edges, and a total order on the rows.
 inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::span<const NodeId> dstDefs, std::span<const NodeId> forwardCone,
-                                  const ValueRefIndex& values )
+                                  const ValueRefIndex& values, const NameKeyHops& names )
 {
     constexpr std::uint32_t kNone = std::numeric_limits<std::uint32_t>::max();
     const std::size_t       S     = ing.symbols.size();
@@ -800,11 +801,11 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
         }
     }
     out.callers = out.rows.size() - std::size_t( std::ranges::count_if( out.rows, []( const NearSinkRow& r ) { return r.depth == 0; } ) );
-    const auto offerAt = [ & ]( std::uint32_t row, NearSinkKind kind, std::uint32_t fileId, std::uint32_t line, std::uint32_t order, NodeId in )
+    const auto offerAt = [ & ]( std::uint32_t row, NearSinkKind kind, std::uint32_t fileId, std::uint32_t line, std::uint32_t order, NodeId in, std::uint32_t cands = 0 )
     {
         NearSinkRow& r = out.rows[row];
         ++r.counts[ std::size_t( kind ) ];
-        const NearSinkSite cand{ true, fileId, line, order, in, kind, in < S && met[in] != 0 };
+        const NearSinkSite cand{ true, fileId, line, order, in, kind, in < S && met[in] != 0, cands };
         if( nearSinkSiteBetter( ing, cand, r.site ) )
         {
             r.site = cand;
@@ -855,6 +856,18 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
             {
                 offer( row, NearSinkKind::Declined, g.declinedSiteRef[site], g.declinedSiteCaller[site] );
             }
+        }
+    }
+
+    // NAME-KEY (string-keyed, the same vocabulary as a declined call: why=declined): a function that looks a method up by a name built
+    // from a template (backhops.h NameKeyHops) which fits the row names it with no edge, whatever the width of its candidate set (the
+    // bridge crosses at most kBridgeFanOut: a wider lookup is a way in the answer would otherwise call external). cands= says the width.
+    for( std::uint32_t row = 0; row < out.rows.size(); ++row )
+    {
+        for( const std::uint32_t site : names.sitesNaming( out.rows[row].id ) )
+        {
+            const Reference& sr = ing.references[site];
+            offerAt( row, NearSinkKind::Declined, sr.fileId, sr.line, site, sr.fromSymbol, std::uint32_t( names.targets( site ).size() ) );
         }
     }
 
@@ -1028,9 +1041,16 @@ inline constexpr std::string_view kNearSinkLegend =
     "fail a name rule (either one): not counted as a way in, and never read as external; in= site= name one such site (its enclosing definition, file:line), met=1 when the forward search reached in= (it met that "
     "hand-off and could not follow it). A row is where the backward search could not see, never a hop and not proof a path exists; "
     "rows= counts them, rows_capped=1 = more than shown; next= on the block lists the first row's callers and declined sites. ";
-inline std::string_view nearSinkLegend( bool on ) noexcept
+// Present-only: rides with a SHOWN <ns> row whose site is a name-key lookup (via="name-key" cands=).
+inline constexpr std::string_view kNearSinkNameKeyLegend =
+    "ns via=name-key cands=K: the declined site is a NAME-KEYED lookup, not a call: in= looks a method up by a name built from a template "
+    "(getattr(o, 'do_' + c), o['on' + e]) that fits this row, a template that can name K definitions including it; matched, never traced; "
+    "the bridge crosses a lookup of at most 16, so a wider one is a way in with no bridge row. ";
+inline std::string nearSinkLegend( const PathNearSink& ns )
 {
-    return on ? kNearSinkLegend : std::string_view();
+    const std::size_t shown = std::min( ns.rows.size(), kNearSinkRows );
+    const bool        nameKey = std::any_of( ns.rows.begin(), ns.rows.begin() + std::ptrdiff_t( shown ), []( const NearSinkRow& r ) { return r.site.valid && r.site.cands > 0; } );
+    return ns.rows.empty() ? std::string() : std::string( kNearSinkLegend ) + ( nameKey ? std::string( kNearSinkNameKeyLegend ) : std::string() );
 }
 
 // The <near_sink> block (empty string when there is no row). `rootPrefix` empty ⇒ p= stays as indexed (multi-root).
@@ -1061,7 +1081,8 @@ inline std::string pathNearSinkXml( const IngestResult& ing, const PathNearSink&
         if( r.site.valid )
         {
             rows += ( r.site.in < ing.symbols.size() ? " in=\"" + ex( ing.symbols[ r.site.in ].name ) + "\"" : std::string() ) + " site=\""
-                  + ex( rel( r.site.fileId ) ) + ":" + std::to_string( r.site.line ) + "\"" + ( r.site.met ? " met=\"1\"" : "" );
+                  + ex( rel( r.site.fileId ) ) + ":" + std::to_string( r.site.line ) + "\"" + ( r.site.met ? " met=\"1\"" : "" )
+                  + ( r.site.cands > 0 ? " via=\"name-key\" cands=\"" + std::to_string( r.site.cands ) + "\"" : std::string() );
         }
         rows += "/>";
     }
@@ -1148,11 +1169,11 @@ inline constexpr std::size_t   kBridgeNarrowFan     = 4;   // composed hops: a d
 static_assert( kImpactRingSlotDepth == kBridgeSlotCrossings, "the --impact ring's field-only depth mirrors the bridge's composable allowance" );
 inline constexpr std::size_t   kBridgeMaxHops       = 8;   // a longer chain is no answer a reader would follow: none is printed
 
-enum class BridgeVia : std::uint8_t { Edge, Declined, Value, Closure, Namesake, Container, Queue, Slot, SlotName };   // Container, Queue before the slot pair
-inline constexpr std::size_t kBridgeViaCount = 9;
+enum class BridgeVia : std::uint8_t { Edge, Declined, Value, Closure, Namesake, Container, Queue, NameKey, Slot, SlotName };   // Container, Queue, NameKey before the slot pair
+inline constexpr std::size_t kBridgeViaCount = 10;
 static_assert( enumCountIsExact<BridgeVia, kBridgeViaCount>(), "kBridgeViaCount must equal the BridgeVia count — raise it with the append" );
 inline constexpr std::array      kBridgeViaNames = { std::string_view( "" ), std::string_view( "declined" ), std::string_view( "value" ), std::string_view( "closure" ),
-                                                     std::string_view( "namesake" ), std::string_view( "container" ), std::string_view( "queue" ), std::string_view( "slot" ),
+                                                     std::string_view( "namesake" ), std::string_view( "container" ), std::string_view( "queue" ), std::string_view( "name-key" ), std::string_view( "slot" ),
                                                      std::string_view( "slot-name" ) };   // indexed by BridgeVia
 static_assert( kBridgeViaNames.size() == kBridgeViaCount, "one name per BridgeVia value (the extent is deduced from the names)" );
 static_assert( std::size_t( BridgeVia::SlotName ) + 1 == kBridgeViaCount && std::size_t( BridgeVia::Slot ) + 2 == kBridgeViaCount, "the two slot crossings close the enum" );
@@ -1164,7 +1185,7 @@ inline bool bridgeViaIsSlot( BridgeVia v ) noexcept
 // container one fanning out to at most kBridgeNarrowFan.
 inline bool bridgeCrossingComposes( BridgeVia v, std::size_t fan ) noexcept
 {
-    return bridgeViaIsSlot( v ) || ( ( v == BridgeVia::Declined || v == BridgeVia::Container || v == BridgeVia::Queue ) && fan <= kBridgeNarrowFan );
+    return bridgeViaIsSlot( v ) || ( ( v == BridgeVia::Declined || v == BridgeVia::Container || v == BridgeVia::Queue || v == BridgeVia::NameKey ) && fan <= kBridgeNarrowFan );
 }
 
 struct PathBridge
@@ -1177,6 +1198,10 @@ struct PathBridge
 
     bool found() const noexcept { return !hops.empty(); }
 };
+
+// The bridge crossing a forward hop of each kind takes, indexed by BackHopVia (a declined hop has no forward twin).
+inline constexpr std::array kBridgeViaOfHop = { BridgeVia::Slot, BridgeVia::SlotName, BridgeVia::Declined, BridgeVia::Container, BridgeVia::Queue, BridgeVia::NameKey };
+static_assert( kBridgeViaOfHop.size() == kBackHopViaCount, "one bridge crossing per hop kind" );
 
 // SLOT and CONTAINER crossings out of `u`: the provider's forward hops (backhops.h forwardHops, each confirmed by the target's own
 // backward hop naming u within the width bound — one copy of the join), fields first. `cross( to, via, width, stored )`
@@ -1191,14 +1216,9 @@ inline void bridgeHopCrossings( const ForwardHops& fwdHops, NodeId u, bool field
         {
             continue;
         }
-        if( fieldCalls )
-        {
-            cross( h.to, h.via == BackHopVia::Slot ? BridgeVia::Slot : BridgeVia::SlotName, h.width, h.stored );
-        }
-        else
-        {
-            cross( h.to, h.via == BackHopVia::Queue ? BridgeVia::Queue : BridgeVia::Container, h.stored, 0 );   // QUEUE-HOP: a queue's readers, as a container's
-        }
+        // a field crossing is bounded on its callers and prints the field's holders; any other (container, queue readers,
+        // a name-key template's definitions) prints its forward width as cands=
+        cross( h.to, kBridgeViaOfHop[ std::size_t( h.via ) ], fieldCalls ? h.width : h.stored, fieldCalls ? h.stored : 0u );
     }
 }
 
@@ -1470,14 +1490,16 @@ inline constexpr std::string_view kPathBridgeLegend =
     "(a wide table is still crossed: K says how wide), container = the previous row calls through a container element (or a parameter's default) "
     "this row may be held in (cands= the functions it may hold) (via=name rows are proven edges bound by name). Fewest crossings first. It is NOT a path: reachable= and "
     "hops= on the root stay 0, no count includes it, and every crossing is a hedge. ";
-// The bridge clause rides with a bridge; the queue clause (present-only) when it crosses a queue hand-off.
+// The bridge clause rides with a bridge; the queue clause (present-only) when it crosses a queue hand-off, the name-key clause
+// (present-only) when it crosses a name-keyed lookup.
 inline std::string pathBridgeLegend( const PathBridge& br )
 {
     if( !br.found() )
     {
         return {};
     }
-    return std::string( kPathBridgeLegend ) + std::string( std::ranges::contains( br.via, BridgeVia::Queue ) ? kQueueHopLegend : std::string_view() );
+    return std::string( kPathBridgeLegend ) + std::string( std::ranges::contains( br.via, BridgeVia::Queue ) ? kQueueHopLegend : std::string_view() )
+           + std::string( std::ranges::contains( br.via, BridgeVia::NameKey ) ? kNameKeyHopLegend : std::string_view() );
 }
 
 inline std::string pathBridgeXml( const IngestResult& ing, const Graph& g, const PathBridge& br, bool singleRoot, std::string_view rootPrefix )

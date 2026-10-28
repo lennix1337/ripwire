@@ -35,6 +35,29 @@
 #   (N) five to= definition groups no chain reaches (past the 4 bridge searches): bridges_unsearched="1" says one was not searched;
 #       a 4-group control carries no bridges_unsearched= (CodeRabbit 4387143972: the cap was silent).
 #   (M) MCP path_between prints the CLI's <pair>/<alt>/<s> rows on A, B, C, J.
+#   P1 PATH-ORDER (fzf-14 / zed-03):
+#   (Q) question words: Terminal.Loop (1 hop) and Matcher.Loop (2 hops) reach matcher.go:extendedMatch; the argv's own word
+#       `matcher` equals Matcher.Loop's owner, so that pair prints FIRST with qword="matcher" and the qword legend clause rides.
+#       (QN) near miss: `--path=Loop,extendedMatch` (no owner word in the argv) keeps the reach order, no qword=, no clause.
+#   (QA) a word every listed pair's owner carries orders nothing: no qword= (zed `Editor::backspace,Buffer::edit`).
+#   (QH) a question word never lifts a hedged chain over a proven one: Gold.go (owner word, via=name) stays after Wrong.go.
+#   (Z) test twin: the bound from= backspace is fixtures/copy/before.py's (the shorter chain) while src/core.py:backspace exists:
+#       from_test="1" + next= naming src/core.py's; next= replays as that one definition. (ZS) the same when only the fixture
+#       copy reaches (one pair, no pairs_reaching=). (ZT) to= side: to_test="1" for a tests/ copy of the to= name (no source edit reaches from the tests/ backspace: no next=).
+#       (ZN) near misses: the bound def is a source one (a fixture copy also reaches, another source def exists) -> none;
+#       every def in tests -> none.
+#   (ZM) MCP path_between prints the same from_test= / next= root attributes.
+#   P1 PATH-ORDER fix 1 (rv-path-order F1-F3):
+#   (QM) the from= owner is read first: Terminal.Loop and Matcher.Loop both reach matcher.go:scan, whose OWNER (Matcher) is a word
+#       too; the to= owner fallback marked EVERY pair (all-marked clear, no reorder). Now only Matcher.Loop is marked and leads.
+#   (QT) the to= owner is read only when no pair's from= owner carries a word: `matcher.go:start,scan`, to= Matcher.scan (2 hops)
+#       and Other.scan (1 hop): Matcher's leads. (Mutant: drop the to= fallback -> red.)
+#   (ZF) the twin's next= names a definition that REACHES: an unrelated source Foo.backspace sorted first is skipped. (ZS) when no
+#       source definition reaches, from_test=1 prints with NO next=.
+#   (ZD) a C declaration is never the source twin (tests/x.c defines backspace, src/core.h declares it: no disclosure); (ZE) a real
+#       definition beside the declaration is named. (ZP) a twin next= beside alt=: the alt continuation is alt_next=, not lost.
+#   (ZX) the same beside pairs_unlisted=: a bound tests/ `start` with 17 to= groups: unlisted_next= keeps the cap's continuation, next= is the source
+#       twin's (cr-prepass-39; the alt= arm above never reached the unlisted_next= branch).
 #
 # Usage: test/pathpaircheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -116,6 +139,83 @@ run two  Run,leaf     > "$TMP/A.out"; run hedge go,target > "$TMP/B.out"; run ma
 run one  go,target    > "$TMP/D.out"; run none  go,target > "$TMP/E.out"; run join go,target > "$TMP/J.out"
 run min start,render > "$TMP/V.out"; run site start,compile > "$TMP/T.out"; run capd start,target > "$TMP/U.out"; run capok start,target > "$TMP/UK.out"
 run many 'g*,target'  > "$TMP/G.out"; run wide go,target > "$TMP/W.out"
+mkdir -p "$TMP/twu/src" "$TMP/twu/tests"
+printf 'def edit():\n    return 1\n\ndef helper():\n    return edit()\n\ndef backspace():\n    return helper()\n' > "$TMP/twu/src/core.py"
+printf 'def edit():\n    return 1\n\ndef backspace():\n    return edit()\n' > "$TMP/twu/tests/fake.py"
+mkdir -p "$TMP/zp/src" "$TMP/zp/tests"
+cp "$TMP/many/k.py" "$TMP/zp/src/k.py"; printf 'from src.k import target\n\ndef go():\n    return target()\n' > "$TMP/zp/tests/t.py"
+mkdir -p "$TMP/zx/src" "$TMP/zx/tests"
+python3 - "$TMP" <<'PY'
+import sys
+t = sys.argv[1]
+open( t + "/zx/src/k.py", "w" ).write( "".join( "class C%d:\n    def target(self):\n        return 1\n\n" % i for i in range( 17 ) ) + "def helper():\n    return C0().target()\n\ndef start():\n    return helper()\n" )
+open( t + "/zx/tests/t.py", "w" ).write( "from src.k import C0\n\ndef start():\n    return C0().target()\n" )
+PY
+mkdir -p "$TMP/qm" "$TMP/qt" "$TMP/twf/src" "$TMP/twf/fixtures/copy" "$TMP/cd/src" "$TMP/cd/tests" "$TMP/ce/src" "$TMP/ce/tests"
+printf 'package m\n\ntype Matcher struct{}\n\nfunc (m *Matcher) helper() int { return m.scan() }\nfunc (m *Matcher) Loop() int   { return m.helper() }\nfunc (m *Matcher) scan() int   { return 1 }\n' > "$TMP/qm/matcher.go"
+printf 'package m\n\ntype Terminal struct{ m *Matcher }\n\nfunc (t Terminal) Loop() int { return t.m.scan() }\n' > "$TMP/qm/terminal.go"
+printf 'package m\n\ntype Other struct{}\ntype Matcher struct{}\n\nfunc (o Other) scan() int { return 2 }\nfunc (m Matcher) scan() int { return 1 }\nfunc helper(m Matcher) int { return m.scan() }\nfunc start(m Matcher, o Other) int { return o.scan() + helper(m) }\n' > "$TMP/qt/matcher.go"
+printf 'def edit():\n    return 1\n\ndef helper():\n    return edit()\n\ndef backspace():\n    return helper()\n' > "$TMP/twf/src/core.py"
+printf 'from src.core import edit\n\ndef backspace():\n    return edit()\n' > "$TMP/twf/fixtures/copy/before.py"
+printf 'class Foo:\n    def backspace(self):\n        return 0\n' > "$TMP/twf/src/aaa.py"
+for d in cd ce; do printf 'int edit(void);\nint backspace(void);\n' > "$TMP/$d/src/core.h"; printf '#include "core.h"\nint edit(void) { return 1; }\n' > "$TMP/$d/src/edit.c"
+                   printf '#include "../src/core.h"\nint backspace(void) { return edit(); }\n' > "$TMP/$d/tests/x.c"; done
+printf '#include "core.h"\nstatic int helper(void) { return edit(); }\nint backspace(void) { return helper(); }\n' > "$TMP/ce/src/impl.c"
+mkdir -p "$TMP/qw" "$TMP/qh" "$TMP/tw/src" "$TMP/tw/fixtures/copy" "$TMP/tws/src" "$TMP/tws/fixtures/copy" "$TMP/twt/src" "$TMP/twt/tests" \
+         "$TMP/twn/src" "$TMP/twn/fixtures/copy" "$TMP/twa/tests"
+cat > "$TMP/qw/terminal.go" <<'EOF'
+package m
+
+type Terminal struct{}
+
+func (t Terminal) Loop() int { return extendedMatch() }
+EOF
+cat > "$TMP/qw/matcher.go" <<'EOF'
+package m
+
+type Matcher struct{}
+
+func extendedMatch() int { return 1 }
+func scan() int { return extendedMatch() }
+func (m Matcher) Loop() int { return scan() }
+EOF
+cat > "$TMP/qh/gold.py" <<'EOF'
+class Relay:
+    def relay(self):
+        return target()
+
+def target():
+    return 1
+
+class Wrong:
+    def go(self):
+        return target()
+
+class Gold:
+    def go(self, x):
+        return x.relay()
+EOF
+mkdir -p "$TMP/qa"; for f in a b; do printf 'def edit():\n    return 1\n\nclass Edit:\n    def backspace(self):\n        return edit()\n' > "$TMP/qa/$f.py"; done
+printf 'def edit():\n    return 1\n\ndef helper():\n    return edit()\n\ndef backspace():\n    return helper()\n' > "$TMP/tw/src/core.py"
+printf 'from src.core import edit\n\ndef backspace():\n    return edit()\n' > "$TMP/tw/fixtures/copy/before.py"
+printf 'def edit():\n    return 1\n\ndef backspace():\n    return 0\n' > "$TMP/tws/src/core.py"
+printf 'from src.core import edit\n\ndef backspace():\n    return edit()\n' > "$TMP/tws/fixtures/copy/before.py"
+printf 'def backspace():\n    return edit()\n\ndef edit():\n    return 1\n' > "$TMP/twt/tests/fake.py"
+printf 'def edit():\n    return 1\n\ndef helper():\n    return edit()\n' > "$TMP/twt/src/core.py"
+printf 'def edit():\n    return 1\n\ndef backspace():\n    return edit()\n' > "$TMP/twn/src/core.py"
+printf 'from src.core import edit\n\ndef helper():\n    return edit()\n\ndef backspace():\n    return helper()\n' > "$TMP/twn/fixtures/copy/before.py"
+printf 'def backspace():\n    return 0\n' > "$TMP/twn/src/other.py"   # a second SOURCE def: the bound one is not in tests, so none
+printf 'def edit():\n    return 1\n\ndef backspace():\n    return edit()\n' > "$TMP/twa/tests/a_test.py"
+printf 'def edit():\n    return 2\n\ndef helper():\n    return edit()\n\ndef backspace():\n    return helper()\n' > "$TMP/twa/tests/b_test.py"
+run qw Loop,matcher.go:extendedMatch > "$TMP/Q.out"; run qw Loop,extendedMatch > "$TMP/QN.out"
+run qw Loop,matcher.go:extendedMatch --legend=full > "$TMP/QL.out"; run qw Loop,extendedMatch --legend=full > "$TMP/QNL.out"
+run qh go,gold.py:target > "$TMP/QH.out"; run qa backspace,edit > "$TMP/QA.out"
+run qm Loop,matcher.go:scan > "$TMP/QM.out"; run qt matcher.go:start,scan > "$TMP/QT.out"
+run zx start,target > "$TMP/ZX.out"; run zx start,target --legend=full > "$TMP/ZXL.out"
+run zp go,target > "$TMP/ZP.out"; run zp go,target --legend=full > "$TMP/ZPL.out"; run twu backspace,edit > "$TMP/ZU.out"; run twf backspace,edit > "$TMP/ZF.out"; run cd backspace,edit > "$TMP/ZD.out"; run ce backspace,edit > "$TMP/ZE.out"
+run tw backspace,edit > "$TMP/Z.out"; run tws backspace,edit > "$TMP/ZS.out"; run twt backspace,edit > "$TMP/ZT.out"
+run twn backspace,edit > "$TMP/ZN.out"; run twa backspace,edit > "$TMP/ZA.out"
+run tw backspace,edit --legend=full > "$TMP/ZL.out"; run twn backspace,edit --legend=full > "$TMP/ZNL.out"
 run bcap go,target > "$TMP/BC.out"; run bok go,target > "$TMP/BK.out"
 
 python3 - "$TMP" "$BIN" <<'PY'
@@ -191,6 +291,70 @@ for k in ( "A", "B", "C", "J" ):
         marked = sum( 1 for s in re.findall( r'<s [^>]*/>', body )[1:] if re.search( r'via="|prov="split"|anchor="missing"', s ) )
         if str( marked ) != h.get( "hedged" ): xbad.append( ( k, at ) )
 check( "X", not xbad, "hedged= equals the marked rows of every whole printed chain: %r" % xbad )
+q = rd( "Q" ); pq = [ attrs( p[0] ) for p in pairs( q ) ]
+check( "Q", len( pq ) == 2 and "matcher.go" in pq[0].get( "from_p", "" ) and pq[0].get( "qword" ) == "matcher" and "qword" not in pq[1]
+       and "terminal.go" in pq[1].get( "from_p", "" ) and "matcher.go" in root( q ).get( "from_p", "" ) and "qword=WORD:" in rd( "QL" ),
+       "the owner-word pair (Matcher.Loop, 2 hops) prints first with qword=matcher, the root binds it: %r" % pq )
+qn = rd( "QN" ); pqn = [ attrs( p[0] ) for p in pairs( qn ) ]
+check( "QN", len( pqn ) == 2 and "terminal.go" in pqn[0].get( "from_p", "" ) and not any( "qword" in a for a in pqn ) and "qword=WORD:" not in rd( "QNL" ),
+       "no owner word in the argv: reach order (1 hop first), no qword=, no clause: %r" % pqn )
+qa = rd( "QA" )
+check( "QA", "qword=" not in qa and len( pairs( qa ) ) == 2 and root( qa ).get( "pairs_reaching" ) == "2", "no pair told apart by the word: no qword= (%d pairs)" % len( pairs( qa ) ) )
+pqh = [ attrs( p[0] ) for p in pairs( rd( "QH" ) ) ]
+check( "QH", len( pqh ) == 2 and pqh[0].get( "hedged" ) == "0" and pqh[1].get( "hedged" ) == "1" and pqh[1].get( "qword" ) == "gold"
+       and "gold.py:13" in pqh[1].get( "from_p", "" ), "a hedged owner-word pair stays after the proven one: %r" % pqh )
+z = rd( "Z" ); rz = root( z )
+check( "Z", rz.get( "from_test" ) == "1" and "fixtures/copy/before.py" in rz.get( "from_p", "" ) and rz.get( "next", "" ).startswith( "--path=src/core.py:backspace," )
+       and "from_test=1 / to_test=1:" in rd( "ZL" ) and "to_test" not in rz,
+       "bound fixture copy disclosed, next= names src/core.py's def: %r" % { k: rz.get( k ) for k in ( "from_p", "from_test", "next", "pairs_reaching" ) } )
+if rz.get( "next" ):
+    o = subprocess.run( [ binp, tmp + "/tw", "--no-cache" ] + shlex.split( rz[ "next" ].replace( "&apos;", "'" ) ), capture_output = True, text = True, cwd = tmp + "/tw", stdin = subprocess.DEVNULL ).stdout
+    r2 = root( o )
+    check( "Z", r2.get( "from_defs" ) == "1" and "src/core.py" in r2.get( "from_p", "" ) and r2.get( "reachable" ) == "1" and "from_test" not in r2,
+           "next= replays from the source def: %r" % { k: r2.get( k ) for k in ( "from_defs", "from_p", "reachable" ) } )
+rzs = root( rd( "ZS" ) )
+check( "ZS", rzs.get( "from_test" ) == "1" and "pairs_reaching" not in rzs and "next" not in rzs,
+       "only the fixture copy reaches (one pair): still disclosed, and no next= (the source def reaches nothing): %r" % { k: rzs.get( k ) for k in ( "from_test", "next", "pairs_reaching" ) } )
+rzt = root( rd( "ZT" ) )
+check( "ZT", rzt.get( "to_test" ) == "1" and "from_test" not in rzt and "tests/fake.py" in rzt.get( "to_p", "" ) and "next" not in rzt,
+       "to= side: a tests/ copy bound is disclosed; no source edit is reached, so no next=: %r" % { k: rzt.get( k ) for k in ( "to_p", "to_test", "next" ) } )
+# CR 4392937862: the compact legend reads an attribute only when THAT attribute is on the answer, so from_test= and to_test= (independent:
+# ZT carries to_test= alone) each own a self-contained reading. A to_test-only page must define to_test=; a from_test-only page must not carry
+# the other side's reading; both sides carry both.
+check( "ZT", "to_test=1: the bound to= definition" in rd( "ZT" ) and "from_test=1:" not in rd( "ZT" ) and "from_test=1 / to_test=1:" not in rd( "ZT" ),
+       "compact legend of a to_test-only answer defines to_test= (and not the other side)" )
+check( "Z", "from_test=1: the bound from= definition" in z and "to_test=1:" not in z, "compact legend of a from_test-only answer defines from_test= alone" )
+zn = rd( "ZN" ); rzn = root( zn ); rza = root( rd( "ZA" ) )
+check( "ZN", "from_test" not in rzn and "src/core.py" in rzn.get( "from_p", "" ) and "from_test=1 / to_test=1:" not in rd( "ZNL" ),
+       "bound source def (a fixture copy also reaches): no disclosure: %r" % { k: rzn.get( k ) for k in ( "from_p", "from_test" ) } )
+check( "ZN", "from_test" not in rza and "to_test" not in rza and rza.get( "reachable" ) == "1", "every def in tests: no source twin, no disclosure: %r" % rza )
+pqm = [ attrs( p[0] ) for p in pairs( rd( "QM" ) ) ]
+check( "QM", len( pqm ) == 2 and "matcher.go:6" in pqm[0].get( "from_p", "" ) and pqm[0].get( "qword" ) == "matcher" and "qword" not in pqm[1]
+       and "terminal.go" in pqm[1].get( "from_p", "" ), "from= owner first: only Matcher.Loop is marked and leads (the to= owner Matcher marks none): %r" % pqm )
+pqt = [ attrs( p[0] ) for p in pairs( rd( "QT" ) ) ]
+check( "QT", len( pqt ) == 2 and pqt[0].get( "qword" ) == "matcher" and "qword" not in pqt[1] and pqt[0].get( "hops" ) == "2" and pqt[1].get( "hops" ) == "1",
+       "no from= owner word: the to= owner's word orders (Matcher.scan, 2 hops, before Other.scan, 1 hop): %r" % pqt )
+rzf = root( rd( "ZF" ) )
+check( "ZF", rzf.get( "from_test" ) == "1" and rzf.get( "next", "" ).startswith( "--path=src/core.py:backspace," ) and "aaa.py" not in rzf.get( "next", "" ),
+       "next= names the source def that reaches, not the unrelated Foo.backspace sorted first: %r" % { k: rzf.get( k ) for k in ( "from_test", "next" ) } )
+rzu = root( rd( "ZU" ) )
+check( "ZU", rzu.get( "from_test" ) == "1" and rzu.get( "to_test" ) == "1" and rzu.get( "next", "" ) == "--path=src/core.py:backspace,src/core.py:edit",
+       "both sides in tests/: each names the source def that reaches: %r" % { k: rzu.get( k ) for k in ( "from_test", "to_test", "next" ) } )
+check( "ZU", "from_test=1: the bound from= definition" in rd( "ZU" ) and "to_test=1: the bound to= definition" in rd( "ZU" ), "compact legend of a both-sides answer defines both attributes" )
+rzp = root( rd( "ZP" ) )
+check( "ZP", rzp.get( "from_test" ) == "1" and rzp.get( "alt" ) == "3" and rzp.get( "next", "" ).startswith( "--path=src/k.py::C" ) and rzp.get( "alt_next", "" ).startswith( "--path=src/k.py::C" )
+       and rzp.get( "next" ) != rzp.get( "alt_next" ) and "alt_next=" in rd( "ZPL" ),
+       "twin next= and the alt continuation each on their own attribute: %r" % { k: rzp.get( k ) for k in ( "alt", "next", "alt_next" ) } )
+rzx = root( rd( "ZX" ) )
+check( "ZX", rzx.get( "from_test" ) == "1" and rzx.get( "pairs_unlisted" ) == "17" and rzx.get( "next", "" ).startswith( "--path=src/k.py:start," )
+       and rzx.get( "unlisted_next", "" ).startswith( "--path=tests/t.py:start," ) and "alt_next" not in rzx and "alt" not in rzx and "unlisted_next=" in rd( "ZXL" ),
+       "17 to= groups + a tests/ copy bound: unlisted_next= keeps the cap's continuation, next= is the source twin's: %r" % { k: rzx.get( k ) for k in ( "pairs_unlisted", "next", "unlisted_next", "alt_next" ) } )
+rzd = root( rd( "ZD" ) )
+check( "ZD", "from_test" not in rzd and "next" not in rzd and "tests/x.c" in rzd.get( "from_p", "" ) and rzd.get( "from_defs" ) == "2",
+       "a C header declaration is not a source twin (no disclosure): %r" % { k: rzd.get( k ) for k in ( "from_p", "from_defs", "from_test", "next" ) } )
+rze = root( rd( "ZE" ) )
+check( "ZE", rze.get( "from_test" ) == "1" and rze.get( "next", "" ).startswith( "--path=src/impl.c:backspace," ),
+       "a real definition beside the declaration is the twin: %r" % { k: rze.get( k ) for k in ( "from_p", "from_test", "next" ) } )
 sys.exit( 1 if bad else 0 )
 PY
 [ $? -eq 0 ] || fail=1
@@ -215,7 +379,7 @@ else
     no "(L) the bridge-search cap is not stated in the pairs legend"
 fi
 if command -v xmllint >/dev/null 2>&1; then
-    xb=0; for k in A B C J CL T V U UL BL; do xmllint --noout "$TMP/$k.out" 2>/dev/null || { xb=1; echo "    $k.out is not well-formed"; }; done
+    xb=0; for k in A B C J CL T V U UL Q QL Z ZL ZT ZP ZU ZX BL; do xmllint --noout "$TMP/$k.out" 2>/dev/null || { xb=1; echo "    $k.out is not well-formed"; }; done
     if [ $xb -eq 0 ]; then ok "(L) A B C J and the full-legend answer parse as XML"; else no "(L) malformed answer"; fi
 else
     echo "  SKIP  (L) xmllint absent"
@@ -225,7 +389,7 @@ echo "(M) MCP path_between serves the CLI's pair rows"
 python3 - "$BIN" "$TMP" <<'PY'
 import json, re, subprocess, sys
 binp, tmp = sys.argv[1], sys.argv[2]
-cases = [ ( "two", "Run", "leaf" ), ( "hedge", "go", "target" ), ( "many", "go", "target" ), ( "join", "go", "target" ) ]
+cases = [ ( "two", "Run", "leaf" ), ( "hedge", "go", "target" ), ( "many", "go", "target" ), ( "join", "go", "target" ), ( "tw", "backspace", "edit" ), ( "qw", "Loop", "matcher.go:extendedMatch" ) ]
 reqs = [ { "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "g", "version": "1" } } } ]
 for i, ( d, a, b ) in enumerate( cases ):
     reqs.append( { "jsonrpc": "2.0", "id": i + 1, "method": "tools/call", "params": { "name": "path_between", "arguments": { "path": tmp + "/" + d, "from": a, "to": b } } } )
@@ -242,7 +406,7 @@ bad = 0
 rows = lambda x: re.findall( r'<pair [^>]*>|<alt [^>]*/>|<s [^>]*/>|</pair>', x )
 for i, ( d, a, b ) in enumerate( cases ):
     mcp = resp.get( i + 1, "" )
-    cli = open( "%s/%s.out" % ( tmp, { "two": "A", "hedge": "B", "many": "C", "join": "J" }[ d ] ) ).read()
+    cli = open( "%s/%s.out" % ( tmp, { "two": "A", "hedge": "B", "many": "C", "join": "J", "tw": "Z", "qw": "Q" }[ d ] ) ).read()
     mr, cr = rows( mcp ), rows( cli )
     if not any( r.startswith( "<pair" ) for r in cr ):
         print( "  %s: CLI premise: no <pair> rows" % d ); bad = 1
@@ -251,10 +415,14 @@ for i, ( d, a, b ) in enumerate( cases ):
     m = re.search( r'pairs_reaching="(\d+)"', mcp ); c = re.search( r'pairs_reaching="(\d+)"', cli )
     if not m or not c or m.group( 1 ) != c.group( 1 ):
         print( "  %s: pairs_reaching= differs MCP vs CLI" % d ); bad = 1
+    for k in ( "from_test", "to_test", "next" ):   # ZM: the test-twin disclosure, both transports
+        m = re.search( r'<path [^>]*\b%s="([^"]*)"' % k, mcp ); c = re.search( r'<path [^>]*\b%s="([^"]*)"' % k, cli )
+        if ( m.group( 1 ) if m else None ) != ( c.group( 1 ) if c else None ):
+            print( "  %s: root %s= differs MCP %r vs CLI %r" % ( d, k, m and m.group( 1 ), c and c.group( 1 ) ) ); bad = 1
 sys.exit( bad )
 PY
 mrc=$?
-if [ "$mrc" -eq 0 ]; then ok "(M) path_between pair rows and pairs_reaching= equal the CLI's on A B C J"; else no "(M) MCP path_between disagrees with the CLI (rc=$mrc, details above)"; fi
+if [ "$mrc" -eq 0 ]; then ok "(M) path_between pair rows, pairs_reaching=, from_test=/to_test=/next= equal the CLI's on A B C J Z Q"; else no "(M) MCP path_between disagrees with the CLI (rc=$mrc, details above)"; fi
 
 if [ "$fail" -eq 0 ]; then echo "pathpaircheck: PASS"; exit 0; fi
 echo "pathpaircheck: FAIL"; exit 1

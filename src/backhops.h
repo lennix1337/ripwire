@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <array>
+#include <optional>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -62,9 +63,13 @@ inline bool builtinSpelledCall( const Reference& call ) noexcept
 // #11 (HOP1 Stage 0, hono `this.router.match( method, path )`): builtinSpelledCall reads the NAME alone, so a declined call on a
 // receiver the source TYPES as an in-tree class was dropped as "probably String.prototype.match". DeclinedCrossRule keeps the
 // name rule and lifts it for exactly one shape, all of whose facts the index holds:
-//   (1) the record is a Ladder decline (graph.h DeclinedSiteKind::Ladder): the resolver's own builtin-method gate ran on this call
-//       and ADMITTED in-tree candidates — it did not decline it as the builtin (that is DeclinedSiteKind::Builtin);
-//   (2) its stored candidate list is complete: kept, two or more candidates, at most kBackHopWidth;
+//   (1) the record is a Ladder or an Iface decline (graph.h DeclinedSiteKind): the resolver's own builtin-method gate ran on this
+//       call and ADMITTED in-tree candidates — it did not decline it as the builtin (that is DeclinedSiteKind::Builtin). A field
+//       the class states as an in-tree interface reaches the dispatch tier (gate="iface"), whose list is the implementors';
+//   (2) its candidate list is stored (the graph stores a declined set whole), of any width: a consumer applies its own bound
+//       (kBackHopWidth, the bridge's kBridgeFanOut), so a 17-wide interface is no longer read as the builtin (--path near_sink said
+//       "external" for its sink) and an interface with ONE in-tree implementor counts too: the same hedge a non-builtin name
+//       already crosses as cands=1 (never proven: an open interface may have out-of-tree implementors);
 //   (3) the receiver is ONE field `f` of an object whose class the index knows: the enclosing class's own instance — `this.f`
 //       (JS/TS) or `self.f` (Python, Ruby), the language's keyword only (checklist 37: a local named `self` in JS is an ordinary
 //       name) — or a parameter or local of the calling function whose class the source states (`app: Hono<E>`, a
@@ -163,7 +168,7 @@ private:
 
     bool receiverTypedInTree( std::uint32_t site, const Reference& r ) const
     {
-        if( m_g.declinedSiteKind[ site ] != DeclinedSiteKind::Ladder )
+        if( const DeclinedSiteKind kind = m_g.declinedSiteKind[ site ]; kind != DeclinedSiteKind::Ladder && kind != DeclinedSiteKind::Iface )
         {
             return false;   // (1) the gate declined it as the builtin, or another rule declined it
         }
@@ -171,11 +176,6 @@ private:
         if( list == kNoDeclinedList || list + 1 >= m_g.declinedListOff.size() )
         {
             return false;   // (2) no stored list: nothing says the set is complete
-        }
-        const std::size_t fan = m_g.declinedListOff[ list + 1 ] - m_g.declinedListOff[ list ];
-        if( fan < 2 || fan > kBackHopWidth )
-        {
-            return false;   // (2) a single or too-wide set
         }
         const ReceiverEvidence::Chain ch     = ReceiverEvidence::chainOf( r );
         const NodeId                  caller = m_g.declinedSiteCaller[ site ];
@@ -266,7 +266,11 @@ private:
 //   queue      (QUEUE-HOP) a hand-off, not a call: the producer puts onto a queue field of its own object (`self.q.put( v )`) that
 //              the sink reads (`self.q.get()`) in the same class or a base/subclass of it (QueueHops below); width = the producing
 //              functions. It has no <vr> row of its own, so the --impact ring LISTS it at d=1 (`atOne`).
-enum class BackHopVia : std::uint8_t { Slot, SlotName, Declined, Container, Queue };
+//   name-key   (STRING-KEYED, issue #375 slice 7a) a NAME-KEYED lookup, not a call: the function looks a method up by a name
+//              built from a template with a literal side (valuerefindex.h PatternIndex, the IX-3 <pd> rows: `getattr( self,
+//              'do_' + cmd )`, `X.__dict__.get( f"on_{n}" )`, `o[ `on${e}` ]`) and the sink's name fits it (NameKeyHops below);
+//              width = the definitions that template can name. Its d=1 hops are the --callers / --impact <pd> rows.
+enum class BackHopVia : std::uint8_t { Slot, SlotName, Declined, Container, Queue, NameKey };
 
 struct HopKindInfo
 {
@@ -277,8 +281,8 @@ struct HopKindInfo
 };
 inline constexpr std::array kHopKinds = { HopKindInfo{ "slot", true, true, false }, HopKindInfo{ "slot-name", true, true, false },
                                           HopKindInfo{ "declined", false, false, false }, HopKindInfo{ "container", false, true, false },
-                                          HopKindInfo{ "queue", false, true, true } };   // indexed by BackHopVia
-inline constexpr std::size_t kBackHopViaCount = 5;
+                                          HopKindInfo{ "queue", false, true, true }, HopKindInfo{ "name-key", false, true, false } };   // indexed by BackHopVia
+inline constexpr std::size_t kBackHopViaCount = 6;
 static_assert( enumCountIsExact<BackHopVia, kBackHopViaCount>(), "kBackHopViaCount must equal the BackHopVia count — raise it with the append" );
 static_assert( kHopKinds.size() == kBackHopViaCount, "one kHopKinds row per BackHopVia value (the extent is deduced from the rows)" );
 inline constexpr const HopKindInfo& hopKind( BackHopVia v ) noexcept { return kHopKinds[ std::size_t( v ) ]; }
@@ -287,7 +291,7 @@ struct BackHop
 {
     NodeId        from  = kNoNode;   // the function that may call the sink without a graph edge
     BackHopVia    via   = BackHopVia::Slot;
-    std::uint32_t width = 0;         // slot / container: the calling functions that row names; declined: the stored candidates
+    std::uint32_t width = 0;         // slot / container: the calling functions that row names; declined: the stored candidates; name-key: the template's definitions
     std::uint32_t ref   = 0;         // the call's reference: the slot call through the field, the container call, or the declined call
 };
 
@@ -593,13 +597,102 @@ private:
     mutable std::vector<std::pair<NodeId, std::uint32_t>> m_putsByFn;   // (function, put reference), sorted
 };
 
+// STRING-KEYED (issue #375 slice 7a): a hop through a NAME-KEYED lookup. The sites are IX-3's template lookups (valuerefindex.h
+// PatternIndex: `getattr( o, 'do_' + cmd )`, `hasattr`, `X.__dict__.get( f"on_{n}" )` in Python, `o[ 'on' + e ]` / o[ `on${e}` ]
+// in JavaScript/TypeScript; a template whose literal side is under kVrPatternMinLiteral identifier characters is too wide and
+// names nothing), so the rule is one place for every language the capture table arms (ingest_valuerefs.h kVrPatternLookups).
+// A site in function f HOPS to definition d when the template can name d (PatternIndex::targets: same value-ref family, d's name
+// holds the literal prefix and suffix around a non-empty hole, a self/this/cls receiver keeps only the site's class family);
+// width = how many definitions that template can name (cands=), the forward width the same count.
+// What it does NOT mean: no call edge and never proven: the name is matched, not traced — the hole's runtime values are unknown,
+// so a fitting definition may never be looked up, and a lookup by a plain variable or a literal name records no site at all.
+class NameKeyHops
+{
+public:
+    NameKeyHops( const IngestResult& ing, const ValueRefIndex& values ) : m_ing( ing ), m_values( values ) {}
+
+    // The sink's NAME-KEY hops: one per function holding a template lookup that can name the sink (the sink's own lookups excluded).
+    void backHops( NodeId sink, std::vector<BackHop>& out ) const
+    {
+        std::vector<BackHop> rows;
+        for( const std::uint32_t site : sitesNaming( sink ) )
+        {
+            rows.push_back( BackHop{ m_ing.references[ site ].fromSymbol, BackHopVia::NameKey, std::uint32_t( targets( site ).size() ), site } );
+        }
+        keepOneHopPerCaller( rows );
+        out.insert( out.end(), rows.begin(), rows.end() );
+    }
+    // The call-making template lookups (not a presence test, not a store) in other functions that can name `d`, in reference
+    // order: each one a way into d by name, whatever the width of its candidate set.
+    std::vector<std::uint32_t> sitesNaming( NodeId d ) const
+    {
+        std::vector<std::uint32_t> out;
+        if( any() )
+        {
+            std::ranges::copy_if( m_pix->sitesTo( std::span<const NodeId>( &d, 1 ) ), std::back_inserter( out ), [ & ]( std::uint32_t site )
+            {
+                const NodeId from = m_ing.references[ site ].fromSymbol;
+                return isCall( m_ing.references[ site ] ) && from != d && from < m_ing.symbols.size();
+            } );
+        }
+        return out;
+    }
+    // The template lookups made in u that make a call, in reference order.
+    std::vector<std::uint32_t> sitesIn( NodeId u ) const
+    {
+        std::vector<std::uint32_t> out;
+        if( any() )
+        {
+            std::ranges::copy_if( m_pix->sitesIn( std::span<const NodeId>( &u, 1 ) ), std::back_inserter( out ), [ & ]( std::uint32_t site ) { return isCall( m_ing.references[ site ] ); } );
+        }
+        return out;
+    }
+    // The definitions template lookup `site` can name, in symbol order (memoised: a walk asks once per site). A COPY: a later
+    // insert may move the memo's storage while a caller (ForwardHops::confirm) still reads the set.
+    std::vector<NodeId> targets( std::uint32_t site ) const
+    {
+        const bool built = any();   // CR 4396503824: the build runs whether or not contracts are compiled in
+        EXPECTS( built, "a name-key site comes from this index's own sites" );
+        const auto it = m_targets.find( site );
+        return it != m_targets.end() ? it->second : m_targets.try_emplace( site, m_pix->targets( site ) ).first->second;
+    }
+
+private:
+    // A usable template lookup that makes a call through the name: not too wide ("w"), not a presence test or a store ("t": hasattr,
+    // `o[ 'p' + e ] = fn`; both are still <pd> clues, ingest_valuerefs.h emitPattern).
+    static bool isCall( const Reference& r ) noexcept
+    {
+        return r.role == RefRole::Pattern && ValueRefIndex::scopeOf( r ) == 'x';
+    }
+    // Built on first use, and only when the tree holds a usable template lookup: every other tree pays one reference scan.
+    bool any() const
+    {
+        if( !m_built )
+        {
+            m_built = true;
+            if( std::ranges::any_of( m_ing.references, [ ]( const Reference& r ) { return isCall( r ); } ) )
+            {
+                m_pix.emplace( m_ing, m_values );
+            }
+        }
+        return m_pix.has_value();
+    }
+
+    const IngestResult&                           m_ing;
+    const ValueRefIndex&                          m_values;
+    mutable bool                                  m_built = false;
+    mutable std::optional<PatternIndex>           m_pix;
+    mutable HashMap<std::uint32_t, std::vector<NodeId>> m_targets;   // site → the definitions it can name
+};
+
 class BackwardHops
 {
 public:
-    BackwardHops( const IngestResult& ing, const Graph& g, const ValueRefIndex& values ) : m_ing( ing ), m_g( g ), m_values( values ), m_rule( ing, g ), m_queue( ing, g, m_rule ) {}
+    BackwardHops( const IngestResult& ing, const Graph& g, const ValueRefIndex& values ) : m_ing( ing ), m_g( g ), m_values( values ), m_rule( ing, g ), m_queue( ing, g, m_rule ), m_names( ing, values ) {}
 
     const DeclinedCrossRule& declinedRule() const noexcept { return m_rule; }
     const QueueHops&         queue() const noexcept { return m_queue; }
+    const NameKeyHops&       names() const noexcept { return m_names; }
     const Graph&             graph() const noexcept { return m_g; }
     const ValueRefIndex&     values() const noexcept { return m_values; }
 
@@ -620,6 +713,7 @@ public:
         declinedHops( sink, out );
         containerBackHops( m_ing, m_values, sink, out );
         m_queue.backHops( sink, out );
+        m_names.backHops( sink, out );   // STRING-KEYED: after every older kind
         return m_memo.try_emplace( sink, std::move( out ) ).first->second;
     }
 
@@ -664,11 +758,12 @@ private:
     const ValueRefIndex&                         m_values;
     DeclinedCrossRule                            m_rule;
     QueueHops                                    m_queue;   // after m_rule: it holds a reference to it
+    NameKeyHops                                  m_names;
     mutable HashMap<NodeId, std::vector<BackHop>> m_memo;
 };
 
 // The forward width of a backward hop's call: the functions that field (slot) or container may hold, the readers of a queue
-// put; 0 for a declined hop.
+// put, the definitions a name-key template can name; 0 for a declined hop.
 inline std::uint32_t backHopStoredWidth( const IngestResult& ing, const BackwardHops& hops, const BackHop& h )
 {
     if( hopKind( h.via ).fieldCall )
@@ -678,6 +773,10 @@ inline std::uint32_t backHopStoredWidth( const IngestResult& ing, const Backward
     if( h.via == BackHopVia::Queue )
     {
         return std::uint32_t( hops.queue().readersOf( h.ref ).size() );
+    }
+    if( h.via == BackHopVia::NameKey )
+    {
+        return std::uint32_t( hops.names().targets( h.ref ).size() );
     }
     return h.via == BackHopVia::Container ? std::uint32_t( containerHolds( hops.values(), h.ref ).size() ) : 0u;
 }
@@ -715,6 +814,11 @@ public:
         for( const std::uint32_t put : m_back.queue().putsIn( u ) )
         {
             confirm( u, m_back.queue().readersOf( put ), put, BackHopVia::Queue, out );   // QUEUE-HOP: after every older kind
+        }
+        const std::vector<std::uint32_t> lookups = m_back.names().sitesIn( u );   // named first (hazardpatterncheck #7)
+        for( const std::uint32_t site : lookups )
+        {
+            confirm( u, m_back.names().targets( site ), site, BackHopVia::NameKey, out );   // STRING-KEYED: after the queue
         }
         return m_memo.try_emplace( u, std::move( out ) ).first->second;
     }
@@ -837,6 +941,7 @@ inline constexpr std::size_t kImpactHubSample = 3;
 struct ImpactRing
 {
     std::size_t                hedged = 0;    // reaches_hedged=
+    bool                       nameKey = false;   // reaches_hedged_via="name-key": some counted function joined through a NAME-KEY hop (it has a <rh> row only at d>=2)
     std::vector<ImpactRingRow> rows;          // ring order (impactRingLess): certainty tier, width narrow first, then the node lens
     std::vector<ImpactHubRow>  hubs;          // widest first
     std::size_t                hubbed    = 0; // reaches_hedged_hubs=: distinct functions behind some hub
@@ -992,6 +1097,14 @@ public:
         out.hubbed = hubbed;
     }
     std::size_t hedged() const noexcept { return m_hedged; }
+    // Whether a counted ring member joined through a hop of kind `v` (the hop that first brought it in; a d=1 NAME-KEY hop has no row of its own).
+    bool joinedBy( BackHopVia v ) const
+    {
+        return std::ranges::any_of( std::array{ &m_d1, &m_d2, &m_d3 }, [ & ]( const std::vector<NodeId>* members )
+        {
+            return std::ranges::any_of( *members, [ & ]( NodeId n ) { return m_counted[ n ] != 0 && m_via[ n ] == v; } );
+        } );
+    }
 
 private:
     void count( NodeId n )
@@ -1091,7 +1204,8 @@ inline ImpactRing impactSlotRing( const IngestResult& ing, const BackwardHops& h
     walk.depthTwo( out );
     walk.depthThree( out );
     walk.tail();
-    out.hedged = walk.hedged();
+    out.hedged  = walk.hedged();
+    out.nameKey = walk.joinedBy( BackHopVia::NameKey ) || std::ranges::contains( out.rows, BackHopVia::NameKey, &ImpactRingRow::via );
     for( ImpactRingRow& row : out.rows )
     {
         row.stored = backHopStoredWidth( ing, hops, BackHop{ row.fn, row.via, 0, row.ref } );
@@ -1132,16 +1246,18 @@ inline void sizeImpactRing( ImpactRing& ring, int pageLimit, std::size_t provenS
     ring.cutNext   = ring.cut == 0 ? std::string() : nextFlag( "--impact=", sym ) + " --limit=" + std::to_string( provenTotal + rowsDefault + ring.hubs.size() );
 }
 
-inline std::string impactRingAttrXml( const ImpactRing& ring )
+// The ring's root fields (XML attributes, or JSON members): reaches_hedged=, reaches_hedged_via="name-key" (present only when a counted
+// function joined through a name-key hop: a d=1 hop has no row of its own, so the count could not otherwise say what it holds),
+// reaches_hedged_hubs=, ring_cut=.
+inline std::string impactRingFields( const ImpactRing& ring, bool json )
 {
-    return countFieldOrEmpty( "reaches_hedged", ring.hedged, /*json=*/false ) + countFieldOrEmpty( "reaches_hedged_hubs", ring.hubbed, /*json=*/false )
-         + countFieldOrEmpty( "ring_cut", ring.cut, /*json=*/false );
+    const bool        via = ring.hedged > 0 && ring.nameKey;
+    const std::string viaField = !via ? std::string() : json ? std::string( ",\"reaches_hedged_via\":\"name-key\"" ) : std::string( " reaches_hedged_via=\"name-key\"" );
+    return countFieldOrEmpty( "reaches_hedged", ring.hedged, json ) + viaField + countFieldOrEmpty( "reaches_hedged_hubs", ring.hubbed, json )
+         + countFieldOrEmpty( "ring_cut", ring.cut, json );
 }
-inline std::string impactRingKeyJson( const ImpactRing& ring )
-{
-    return countFieldOrEmpty( "reaches_hedged", ring.hedged, /*json=*/true ) + countFieldOrEmpty( "reaches_hedged_hubs", ring.hubbed, /*json=*/true )
-         + countFieldOrEmpty( "ring_cut", ring.cut, /*json=*/true );
-}
+inline std::string impactRingAttrXml( const ImpactRing& ring ) { return impactRingFields( ring, /*json=*/false ); }
+inline std::string impactRingKeyJson( const ImpactRing& ring ) { return impactRingFields( ring, /*json=*/true ); }
 
 // A hub's selector: file:name, so a namesake in another file is never the one --impact lists (checklist 16).
 inline std::string impactHubSelector( const IngestResult& ing, const ImpactHubRow& hub, const VrRender& rr )
@@ -1287,6 +1403,14 @@ inline constexpr std::string_view kQueueHopLegend =
     "such a function (one level); cands=K the readers of that put, a floor (a queue handed out of the class has readers not seen). Python only. "
     "In a path bridge, s via=queue is the same crossing: the previous row puts, this row takes. "
     "<ring d=1 total= shown=> lists only such hand-offs: the root d= is the deepest row, and 1 means only queue hand-offs. ";
+// STRING-KEYED, present-only: rides beside the rows legend when a row is a name-key hop (the --path bridge reads it too).
+inline constexpr std::string_view kNameKeyHopLegend =
+    "name-key (reaches_hedged_via=name-key: reaches_hedged= counts it; rh via=name-key: a row lists it): a NAME-KEYED lookup, not a call: called_by= (a function "
+    "with no row at d=1) looks a method up by a name built from a template with a literal side "
+    "(getattr(o, 'do_' + cmd), X.__dict__.get(f'on_{n}'), o['on' + e], o[`on${e}`]) that calls= (of= at d=1) fits (prefix and suffix around a non-empty "
+    "hole; a self/this/cls receiver keeps the site's class family: the same class definition, its ancestors and its subclasses); cands=K the definitions that template can name. "
+    "A presence test (hasattr) or a store (o['on' + e] = fn) is no lookup. The name is matched, never traced. "
+    "Python, JavaScript, TypeScript. In a path bridge, s via=name-key is the same crossing: the previous row looks this row up by name. ";
 // Whether any ring row is a queue hop: the queue clause rides.
 inline bool impactRingHasQueue( const ImpactRing& ring ) noexcept
 {
@@ -1303,6 +1427,7 @@ inline std::string impactRingLegend( const ImpactRing& ring, bool rowsForm )
         out.append( rowsForm && ring.rowsShown > 0 ? kImpactRingRowsLegend : std::string_view() );
         out.append( ring.hubbed > 0 || ring.cut > 0 ? kImpactHubLegend : std::string_view() );
         out.append( rowsForm && ring.rowsShown > 0 && impactRingHasQueue( ring ) ? kQueueHopLegend : std::string_view() );
+        out.append( ring.nameKey ? kNameKeyHopLegend : std::string_view() );   // exactly when reaches_hedged_via= rides, in every form (a d=1 hop has no row)
     }
     return out;
 }

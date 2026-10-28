@@ -179,28 +179,20 @@ struct VrPatternLookup
     std::uint8_t     nameArg        = 0;
     bool             dictGet        = false;
     bool             computedMember = false;
+    bool             testOnly       = false;   // a capability test (hasattr): the name is looked up for its presence, never to call it
 };
 inline constexpr VrPatternLookup kVrPatternLookups[] = {
-    { VrFam::Py, "getattr", 1, false, false },
-    { VrFam::Py, "hasattr", 1, false, false },
-    { VrFam::Py, "__dict__", 0, true, false },
-    { VrFam::Js, "", 0, false, true },
+    { VrFam::Py, "getattr", 1, false, false, false },
+    { VrFam::Py, "hasattr", 1, false, false, true },
+    { VrFam::Py, "__dict__", 0, true, false, false },
+    { VrFam::Js, "", 0, false, true, false },
 };
-// IX-1 SLOT-TYPE JOIN: which field calls are calls through a stored function, per language, as data (lang-specific-layer
-// §2: a family-owned row; a language with no row records no slot call and no slot fact). C has no member functions, so
-// EVERY field call `x->f( … )` calls through a function-pointer field (or a macro the grammar reads as one). A C++ field
-// call is mostly a member-function call: there the receiver must be declared with the `struct` / `union` keyword, or be
-// declared with a struct type whose body in this same file declares the callee as a function-pointer field. Go func-typed fields, Rust `fn` / `Box<dyn Fn>`
-// fields and TS function-typed properties are later rows.
-struct VrSlotLang
-{
-    Lang lang;
-    bool everyFieldCall;
-};
-inline constexpr VrSlotLang kVrSlotLangs[] = {
-    { Lang::C, true },
-    { Lang::Cpp, false },
-};
+// IX-1 SLOT-TYPE JOIN: which field calls are calls through a stored function, per language, as data: model.h kVrSlotLangs (shared
+// with the join). C has no member functions, so EVERY field call `x->f( … )` calls through a function-pointer field (or a macro
+// the grammar reads as one). A C++ field call is mostly a member-function call: there the receiver must be declared with the
+// `struct` / `union` keyword, or be declared with a struct type whose body in this same file declares the callee as a
+// function-pointer field. Go (byFieldName): this walk records only the STORE side (a keyed composite-literal field, a field
+// assignment, a parameter stored into one); the call side is the ordinary member call, joined by field name in valuerefindex.h.
 
 // A template's literal side must hold this many identifier characters to be matched (`f"_{m}"` is too wide).
 inline constexpr std::size_t kVrPatternMinLiteral = 3;
@@ -539,7 +531,10 @@ public:
         m_fAlias       = ts_language_field_id_for_name( tl, "alias", 5 );
         m_fArguments   = fieldIdFor( tl, NodeField::Arguments );
         m_fSource      = ts_language_field_id_for_name( tl, "source", 6 );
-        m_slot         = findByField( kVrSlotLangs, &VrSlotLang::lang, m_lang );
+        m_fReceiver    = ts_language_field_id_for_name( tl, "receiver", 8 );
+        const VrSlotLang* slotRow = findByField( kVrSlotLangs, &VrSlotLang::lang, m_lang );
+        m_slot         = slotRow != nullptr && !slotRow->byFieldName ? slotRow : nullptr;
+        m_slotByName   = slotRow != nullptr && slotRow->byFieldName;
         m_fwd          = callForwardersOf( m_lang );
         m_fwdArmed     = !m_fwd.empty();
 
@@ -1216,6 +1211,10 @@ private:
         {
             valueRefAt( i );
         }
+        else if( m_slotByName && kindIs( a.kind, "selector_expression" ) )
+        {
+            methodValueAt( i );   // IX1-V2: Go `f = b.opPlan` (a method value of the enclosing method's own receiver)
+        }
         else if( isCallKind( a.kind ) )
         {
             slotThroughAt( n );   // IX-1 (inert without a slot row)
@@ -1715,8 +1714,9 @@ private:
         }
         // The shadow test FIRST: most identifiers in a value position are a parameter or local (`f(x)`), and the
         // position's slot text (callee, container) is only worth building for a name that can still be a function.
-        if( declaringScope( name ) != 0 )
+        if( const std::size_t d = declaringScope( name ); d != 0 )
         {
+            paramSlotFact( i, d, name );   // IX1-V2: a parameter stored into a field slot is a fact, never a row
             return;   // a parameter or local of that name hides the function
         }
         if( m_fwdArmed && forwardCallAt( i, name ) )
@@ -1734,7 +1734,13 @@ private:
             return;
         }
         const bool fileShadow = std::ranges::find( m_scopes.front().decls, name ) != std::ranges::end( m_scopes.front().decls );
+        landValue( i, j, name, s, fileShadow, {} );
+    }
 
+    // The classified value `name` at anc[i] (effective position anc[j]): a container it fills is marked fed (its scope's, or
+    // the file's), then its Value row. `owner` non-empty: a method value of that receiver type (methodValueAt).
+    void landValue( std::size_t i, std::size_t j, std::string_view name, Slot& s, bool fileShadow, std::string_view owner )
+    {
         if( !s.container.empty() && ( s.scope == 'f' || s.scope == 'l' ) )
         {
             const std::size_t d = declaringScope( s.container );
@@ -1750,11 +1756,100 @@ private:
             }
         }
 
-        emitValueRef( i, j, name, s, fileShadow );
+        emitValueRef( i, j, name, s, fileShadow, owner );
+    }
+
+    // IX1-V2 (Go): `recv.m` in a value position, where recv is the enclosing METHOD's own receiver (no closer scope redeclares
+    // it): a Value row naming m with memberRoot = the receiver's type name, so the join resolves it to that type's method m
+    // only (valuerefindex.h resolveName), never to a same-named method of another type. Any other `x.m` stays a floor (x's
+    // type is not read here).
+    void methodValueAt( std::size_t i )
+    {
+        const TSNode n   = m_anc[i].node;
+        const TSNode op  = child( n, m_fOperand );
+        const TSNode fld = child( n, m_fField );
+        if( ts_node_is_null( op ) || ts_node_is_null( fld ) || !kindIs( ts_node_type( op ), "identifier" ) || i < 2 )
+        {
+            return;
+        }
+        const std::size_t d = declaringScope( text( op ) );
+        if( d == 0 || !kindIs( ts_node_type( m_scopes[d].node ), "method_declaration" ) )
+        {
+            return;
+        }
+        const TSNode rl = child( m_scopes[d].node, m_fReceiver );
+        const TSNode rp = ts_node_is_null( rl ) ? TSNode{} : ts_node_named_child( rl, 0 );
+        if( ts_node_is_null( rp ) || text( child( rp, m_fName ) ) != text( op ) )
+        {
+            return;   // a parameter or local of the method, not its receiver
+        }
+        TSNode rt = child( rp, m_fType );
+        if( !ts_node_is_null( rt ) && kindIs( ts_node_type( rt ), "pointer_type" ) )
+        {
+            rt = ts_node_named_child( rt, 0 );
+        }
+        const std::string_view owner = goTypeName( rt );
+        if( owner.empty() )
+        {
+            return;
+        }
+        std::size_t j = i;
+        while( j > 1 && transparent( j ) )
+        {
+            --j;
+        }
+        Slot s;
+        if( !classify( i, j, s ) )
+        {
+            return;   // the callee of a call (`b.opPlan( x )`), an operand: not a value use
+        }
+        landValue( i, j, text( fld ), s, false, owner );
+    }
+
+    // IX1-V2: a PARAMETER (`impl`, position k of the function `fnName` declared at scope d) stored into a field slot
+    // (goValueSlot: `Command{ EvalRW: impl }`, `x.F = impl`) — a slot fact (model.h kValueRefSlotParamScope), no row.
+    void paramSlotFact( std::size_t i, std::size_t d, std::string_view name )
+    {
+        const VrScope& sc = m_scopes[d];
+        if( !m_slotByName || !sc.isFunction || sc.fnName.empty() || i < 2 )
+        {
+            return;
+        }
+        const auto at = std::ranges::find( sc.params, name );
+        if( at == sc.params.end() || std::ranges::count( sc.params, name ) != 1 )
+        {
+            return;
+        }
+        std::size_t j = i;
+        while( j > 1 && transparent( j ) )
+        {
+            --j;
+        }
+        Slot   s;
+        RawRef r;
+        if( !classify( i, j, s ) )
+        {
+            return;
+        }
+        goValueSlot( j, r );
+        if( r.memberPath.empty() )
+        {
+            return;
+        }
+        r.fileId        = m_fileId;
+        r.startByte     = ts_node_start_byte( m_anc[i].node );
+        r.line          = ts_node_start_point( m_anc[i].node ).row + 1;
+        r.lang          = m_lang;
+        r.role          = RefRole::Value;
+        r.qualifier     = std::string( 1, kValueRefSlotParamScope );   // name stays "": no identifier is empty, so no row
+        r.recvVar       = std::string( sc.fnName );
+        r.argCount      = static_cast<std::uint16_t>( std::min<std::ptrdiff_t>( at - sc.params.begin(), 0xFFFF ) );
+        r.argCountKnown = true;
+        m_out.push_back( std::move( r ) );
     }
 
     // The Value row of identifier anc[i] (effective position anc[j]) landing in slot `s`.
-    void emitValueRef( std::size_t i, std::size_t j, std::string_view name, Slot& s, bool fileShadow )
+    void emitValueRef( std::size_t i, std::size_t j, std::string_view name, Slot& s, bool fileShadow, std::string_view owner )
     {
         RawRef r;
         r.fileId        = m_fileId;
@@ -1770,6 +1865,7 @@ private:
         r.argCount      = s.argIndex;
         r.argCountKnown = s.isArg;
         valueSlot( j, r );   // IX-1: a struct-field slot's type and field (inert without a slot row)
+        r.memberRoot = std::string( owner );   // IX1-V2: a method value's receiver type (methodValueAt), "" otherwise
         m_out.push_back( std::move( r ) );
     }
 
@@ -1939,6 +2035,21 @@ private:
                 {
                     idx = m_anc[k].namedIndex;
                     break;
+                }
+            }
+            if( m_slotByName && kindIs( pt, "assignment_statement" ) )
+            {
+                // IX1-V2: Go `x.F = fn` / `x.a.F = fn` — the slot is the field as written (goValueSlot types it), the container x
+                const TSNode lhsList = child( p.node, m_fLeft );
+                const TSNode lhs     = ts_node_is_null( lhsList ) ? TSNode{} : ts_node_named_child( lhsList, idx );
+                if( !ts_node_is_null( lhs ) && kindIs( ts_node_type( lhs ), "selector_expression" ) )
+                {
+                    const TSNode obj = child( lhs, m_fOperand );
+                    s.into = vrClean( text( lhs ) );
+                    s.key  = "." + std::string( text( child( lhs, m_fField ) ) );
+                    s.container = !ts_node_is_null( obj ) && kindIs( ts_node_type( obj ), "identifier" ) ? std::string( text( obj ) ) : std::string();
+                    s.scope = s.container.empty() ? 'x' : 'f';
+                    return true;
                 }
             }
             const std::string nm( nthName( p.node, kindIs( pt, "var_spec" ), idx ) );
@@ -2551,10 +2662,78 @@ private:
         return !ts_node_is_null( x ) && kindIs( ts_node_type( x ), "identifier" ) ? x : TSNode{};
     }
 
+    // IX1-V2 (Go): the type NAME a composite literal's or receiver's type node spells — `Command`, `batcheval.Command` (its final
+    // segment; goValueSlot keeps a qualified literal type whole), by ingest_relations.h aliasTargetName. "" for every other type (a map, a slice, an inline struct, a generic
+    // instantiation `Box[T]` — a floor): a value stored there lands in a container slot, which the container join answers.
+    std::string_view goTypeName( TSNode ty ) const noexcept
+    {
+        return aliasTargetName( ty, m_src );
+    }
+    // IX1-V2 (Go): the struct-field slot a Value row (effective position anc[j]) lands in — a keyed element of a composite
+    // literal of a NAMED type (`Command{ EvalRW: fn }`: memberPath "EvalRW", memberCtor "Command"), or a field assignment
+    // `x.F = fn` / `x.a.F = fn` (memberPath "F", memberCtor "": the receiver's type is not read here, so it joins by the field
+    // name alone). A map key, a positional element, a nested literal without its own type, a slice or map literal: no slot.
+    void goValueSlot( std::size_t j, RawRef& r ) const
+    {
+        if( j < 4 )
+        {
+            return;
+        }
+        const VrAnc& p = m_anc[j - 1];
+        if( kindIs( p.kind, "keyed_element" ) )
+        {
+            TSNode k = ts_node_named_child( p.node, 0 );
+            if( !ts_node_is_null( k ) && kindIs( ts_node_type( k ), "literal_element" ) )
+            {
+                k = ts_node_named_child( k, 0 );
+            }
+            if( ts_node_is_null( k ) || !( kindIs( ts_node_type( k ), "identifier" ) || kindIs( ts_node_type( k ), "field_identifier" ) ) )
+            {
+                return;   // a map key (a string, a constant expression): a container slot, not a field
+            }
+            if( !kindIs( m_anc[j - 2].kind, "literal_value" ) || !kindIs( m_anc[j - 3].kind, "composite_literal" ) )
+            {
+                return;   // a nested literal whose type is the outer literal's element type: not read (a floor)
+            }
+            const TSNode           tyNode = child( m_anc[j - 3].node, m_fType );
+            const std::string_view ty     = goTypeName( tyNode );
+            if( ty.empty() )
+            {
+                return;   // a map / slice / inline struct literal: the key is not a field of a named struct type
+            }
+            r.memberPath = std::string( text( k ) );
+            // fix1 F-2: `pkg.T` kept WHOLE (the join maps pkg through the file's import to its directory); a bare `T` is the
+            // file's own package's
+            r.memberCtor = kindIs( ts_node_type( tyNode ), "qualified_type" ) ? std::string( text( tyNode ) ) : std::string( ty );
+            return;
+        }
+        if( kindIs( p.kind, "assignment_statement" ) && m_anc[j].field == m_fRight && kindIs( m_anc[j].kind, "expression_list" ) && j + 1 < m_anc.size() )
+        {
+            const TSNode lhsList = child( p.node, m_fLeft );
+            const TSNode lhs     = ts_node_is_null( lhsList ) ? TSNode{} : ts_node_named_child( lhsList, m_anc[j + 1].namedIndex );
+            if( ts_node_is_null( lhs ) || !kindIs( ts_node_type( lhs ), "selector_expression" ) || opText( p.node ) != "=" )
+            {
+                return;   // a plain variable (the container join's), or a compound assignment
+            }
+            const TSNode fld = child( lhs, m_fField );
+            if( ts_node_is_null( fld ) || ts_node_named_child_count( lhsList ) != ts_node_named_child_count( m_anc[j].node ) )
+            {
+                return;   // `a, b.F = f()`: a multi-value call, no position maps one value to one field
+            }
+            r.memberPath = std::string( text( fld ) );
+            r.memberCtor.clear();
+        }
+    }
+
     // The slot a Value row (`r`, effective position anc[j]) lands in, when it is a struct field: memberPath = the chain,
     // memberCtor = the declared struct type of the object ("" unknown). Left empty for every other slot.
     void valueSlot( std::size_t j, RawRef& r ) const
     {
+        if( m_slotByName )
+        {
+            goValueSlot( j, r );
+            return;
+        }
         if( m_slot == nullptr || j < 1 )
         {
             return;
@@ -2681,6 +2860,7 @@ private:
         bool        isTemplate = false;
         std::string prefix;
         std::string suffix;
+        bool        callable = true;   // false: the name is tested or stored, never called through (hasattr, `o[ 'p' + e ] = fn`)
     };
     bool isPlainStringNode( TSNode n ) const noexcept
     {
@@ -2794,7 +2974,9 @@ private:
         r.line       = ts_node_start_point( site ).row + 1;
         r.lang       = m_lang;
         r.role       = RefRole::Pattern;
-        r.qualifier  = pre || suf ? "" : "w";   // too wide: counted, never matched
+        // "" = a lookup the name-key hop may follow; "t" = a presence test or a store (no call is made through it: still a <pd> clue,
+        // never a name-key hop); "w" = too wide: counted, never matched
+        r.qualifier  = !( pre || suf ) ? "w" : t.callable ? "" : "t";
         // an unusable side is no constraint: a template `x_{a}.{b}` keeps only its usable prefix; a too-wide one keeps
         // both sides as written (valuerefindex.h counts the members they could name, pattern_too_wide=)
         r.fieldName  = pre || !suf ? t.prefix : std::string();
@@ -2857,7 +3039,9 @@ private:
             {
                 recv = pos[0];
             }
-            emitPattern( call, recv, templateOf( pos[ form.nameArg ] ) );
+            VrTemplate t = templateOf( pos[ form.nameArg ] );
+            t.callable   = !form.testOnly;
+            emitPattern( call, recv, t );
             return;
         }
     }
@@ -2867,7 +3051,16 @@ private:
         {
             return;
         }
-        emitPattern( sub, child( sub, m_fObject ), templateOf( child( sub, m_fIndex ) ) );
+        // `o[ 'on' + e ] = fn` stores a function under the name (an assignment target, `++`, `delete`): no lookup, so no call
+        const TSNode parent = ts_node_parent( sub );
+        const char*  pk     = ts_node_is_null( parent ) ? "" : ts_node_type( parent );
+        const bool   store  = ( ( kindIs( pk, "assignment_expression" ) || kindIs( pk, "augmented_assignment_expression" ) )
+                                && ts_node_eq( child( parent, m_fLeft ), sub ) )
+                           || kindIs( pk, "update_expression" )
+                           || ( kindIs( pk, "unary_expression" ) && text( child( parent, m_fOperator ) ) == "delete" );
+        VrTemplate t = templateOf( child( sub, m_fIndex ) );
+        t.callable   = !store;
+        emitPattern( sub, child( sub, m_fObject ), t );
     }
 
     // Record one call through the container `obj` (written callee `f`), routed by where `obj` is declared.
@@ -2920,6 +3113,7 @@ private:
     VrFam                          m_fam;
     Lang                           m_lang;
     const VrSlotLang*              m_slot = nullptr;    // IX-1: this language's slot row (nullptr: no slot capture)
+    bool                           m_slotByName = false;   // IX1-V2: a byFieldName row (Go): the store side only (goValueSlot)
     std::vector<VrStructFields>    m_structs;           // IX-1: this file's struct bodies so far
     std::vector<std::pair<std::string, std::string_view>> m_callableFields;   // IX-1: (struct, function-pointer field) this file declares
     VrAliases                                             m_aliases;          // IX-1: this file's typedef / using alias → struct type key
@@ -2940,7 +3134,7 @@ private:
     std::vector<RawRef>            m_fwdSites;
     std::vector<std::string_view>  m_fnDeclNames;
     std::vector<std::string_view>  m_relImportNames;
-    TSFieldId m_fArguments = 0, m_fSource = 0;
+    TSFieldId m_fArguments = 0, m_fSource = 0, m_fReceiver = 0;
     TSFieldId m_fValue = 0, m_fKey = 0, m_fLeft = 0, m_fRight = 0, m_fFunction = 0, m_fName = 0, m_fDeclarator = 0;
     TSFieldId m_fConsequence = 0, m_fAlternative = 0, m_fParameters = 0, m_fParameter = 0, m_fObject = 0, m_fProperty = 0, m_fField = 0;
     TSFieldId m_fArgument = 0, m_fOperand = 0, m_fAttribute = 0, m_fOperator = 0, m_fPattern = 0, m_fDefinition = 0;
