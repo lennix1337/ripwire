@@ -299,14 +299,14 @@ private:
         const std::size_t at = path.rfind( "::" );
         return at == std::string_view::npos ? path : path.substr( at + 2 );
     }
-    // `Box::new` / `Rc::new` / `Arc::new`: a wrapper that hands its one argument on (the value, not a registrar).
+    // `Box::new` / `Rc::new` / `Arc::new` (any module path before the type): a wrapper that hands its one argument on (the value, not a registrar).
     bool wrapperCallee( TSNode fn ) const noexcept
     {
         if( !is( fn, "scoped_identifier" ) || text( field( fn, "name" ) ) != "new" )
         {
             return false;
         }
-        const std::string_view path = text( field( fn, "path" ) );
+        const std::string_view path = lastSegment( text( field( fn, "path" ) ) );   // `std::sync::Arc` as `Arc`
         return path == "Box" || path == "Rc" || path == "Arc";
     }
     // A value as written, through `( v )`, `Box::new( v )`, `Rc::new( v )`, `Arc::new( v )`.
