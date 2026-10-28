@@ -47,6 +47,21 @@
 #   R7 [G] a registrar's owner type decides it: `Hooks::new` (stores into Hooks.eval) never feeds CallEval.eval, nor the reverse
 #   X2 [G] a Go field of the same name (gox Box.eval) never joins a Rust slot (family guard), nor the reverse
 #   F3 [P] --for: slot_fields= per struct (eval=4@CallEval::run, the twin's eval=1@CallEval::twin_run), slot_by= on eval_block
+# fix round 1 (review rv-fn-slot-2 F-1..F-4; fixture test/fnslotrust2/, its own root: crates app, lib, qual):
+#   E1 [P] `use extcrate::Hook; Hook { cb: f }` is an out-of-tree struct: never the in-tree Hook.cb (F-1)
+#   E2 [P] `use tokio::spawn; spawn( f )` is an out-of-tree registrar: never the in-tree `spawn` that stores into Hook.cb (F-1)
+#   E3 [P] `std::thread::spawn( f )` is std's: never the in-tree `spawn` (F-1);  E4 [G] the in-tree Hook keeps its own store
+#   Q1 [P] `crate::a::Cfg { cb: f }` written in c.rs (which declares its own Cfg) is a.rs's Cfg: called_by="go" (F-2)
+#   Q1b [G] the twin: c.rs's bare `Cfg { cb: f }` is its own Cfg (called_by="local_go")
+#   Q2 [P] `crate::other::register( f )` beside a local storing `register` is other.rs's (stores nothing): no called_by= (F-2)
+#   Q3 [P] `S::new( crate::other::target )` is other.rs's target, never here.rs's namesake (F-2);  Q3b [G] the bare twin
+#          `register( local_t )` still lands in S.f
+#   Q4 [P] `crate::p::Amb { f }` with two Amb in the crate is p.rs's (the path names the module file): called_by="go_p", typed
+#   N14 [G] a BARE `Amb { f }` with two Amb in the crate (neither in the writing file) is never typed: via="slot-name" — kills
+#          the source mutant "nearestOf guesses within an ambiguous tier" (review MG1)
+#   N15 [G] `(self.inner.f)( … )` is never typed as Self's field: in_t keeps its caller, out_t (Outer.f) is never via="slot" —
+#          kills the source mutant "slotCallAt types any self.… chain" (review MG2)
+#   W1 [P] `std::sync::Arc::new( f )` is the wrapper by its LAST path segment: the value lands in Dyn.g (F-4)
 #
 # Usage: bash test/fnslotcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -190,5 +205,41 @@ has   "F3 slot_fields= on the crate's CallEval" "$( row "$o" CallEval src/engine
 has   "F3b slot_fields= on the twin crate's CallEval" "$( row "$o" CallEval crates/twin/src/lib.rs )" 'slot_fields="eval=1@CallEval::twin_run"'
 has   "F3c slot_by= on the stored function (typed: no ~)" "$( row "$o" eval_block src/engine/eval.rs )" 'slot_by="CallEval::run"'
 has   "X2b the Go struct row keeps its own name-tier caller" "$( row "$o" Box gox/g.go )" 'slot_fields="eval=1@~Box.fire"'
+FIX="$ROOT/test/fnslotrust2"
+[ -d "$FIX" ] || { echo "  FAIL  fixture dir missing: $FIX"; exit 2; }
+o="$( run --callers=worker_ext_struct )"
+has   "E1a the out-of-tree struct store still prints" "$o" 'into="Hook.cb"'
+hasnt "E1 an out-of-tree struct is never the in-tree Hook" "$o" 'called_by='
+o="$( run --callers=worker_bare_ext )"
+has   "E2a the argument row still prints" "$o" 'into="spawn#arg0"'
+hasnt "E2 a used out-of-tree registrar is never the in-tree spawn" "$o" 'called_by='
+o="$( run --callers=worker_path_ext )"
+hasnt "E3 std::thread::spawn is never the in-tree spawn" "$o" 'called_by='
+o="$( run --callers=lib_target )"
+has   "E4 the in-tree Hook keeps its own store" "$o" 'into="Hook.cb" called_by="fire" called_at="crates/lib/src/lib.rs:3" via="slot"'
+o="$( run --callers=fc_qualified )"
+has   "Q1 a crate:: path to a struct is the module file's struct" "$o" 'called_by="go" called_at="crates/qual/src/a.rs:3" via="slot"'
+hasnt "Q1c never the writing file's own namesake" "$o" 'local_go'
+o="$( run --callers=fc_local )"
+has   "Q1b the bare twin is the file's own struct" "$o" 'called_by="local_go" called_at="crates/qual/src/c.rs:3" via="slot"'
+o="$( run --callers=qual_t )"
+has   "Q2a the argument row still prints" "$o" 'into="register#arg0"'
+hasnt "Q2 a crate:: registrar path is never the local namesake" "$o" 'called_by='
+o="$( run --callees=S::go )"
+has   "Q3 a crate:: value path is the module file's function" "$o" '<t n="target" p="crates/qual/src/other.rs:1"/>'
+hasnt "Q3c never the writing file's own namesake" "$o" '<t n="target" p="crates/qual/src/here.rs:3"/>'
+has   "Q3b the bare registrar twin still lands in S.f" "$o" '<t n="local_t" p="crates/qual/src/here.rs:5"/>'
+o="$( run --callers=amb_t )"
+has   "Q4 crate::p::Amb is p.rs's Amb, typed" "$o" 'into="Amb.f" called_by="go_p" called_at="crates/qual/src/p.rs:2" via="slot"'
+o="$( run --callers=amb_bare_t )"
+has   "N14a the bare store joins by the field name" "$o" 'via="slot-name"'
+hasnt "N14 an ambiguous crate tier is never typed" "$o" 'via="slot"'
+o="$( run --callers=in_t )"
+has   "N15a (self.inner.f)( … ) keeps Inner.f's caller" "$o" 'into="Inner.f" called_by="go_inner"'
+o="$( run --callers=out_t )"
+hasnt "N15 (self.inner.f)( … ) is never typed as Self's field" "$o" 'via="slot"'
+o="$( run --callers=arc_t )"
+has   "W1 std::sync::Arc::new( f ) hands the value to the field" "$o" 'into="Dyn.g" called_by="go" called_at="crates/qual/src/wrap.rs:2" via="slot"'
+hasnt "W1b no argument row into the Arc::new wrapper" "$o" 'into="Arc::new'
 if [ "$fail" -eq 0 ]; then echo "fnslotcheck: PASS"; else echo "fnslotcheck: FAIL"; fi
 exit "$fail"
