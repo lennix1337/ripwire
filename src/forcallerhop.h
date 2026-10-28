@@ -193,16 +193,6 @@ inline std::vector<std::string> forTaskIdentWords( std::string_view task )
     return out;
 }
 
-inline std::string forLowerAscii( std::string_view w )
-{
-    std::string out( w );
-    for( char& c : out )
-    {
-        c = ( c >= 'A' && c <= 'Z' ) ? char( c - 'A' + 'a' ) : c;
-    }
-    return out;
-}
-
 // "How does …", "Explain …", "Describe …": a question about a mechanism (the first word, case-folded).
 inline bool forTaskExplains( std::string_view task )
 {
@@ -211,7 +201,7 @@ inline bool forTaskExplains( std::string_view task )
     {
         return false;
     }
-    const std::string first = forLowerAscii( w.front() );
+    const std::string first = routeLower( w.front() );
     return first == "how" || first == "explain" || first == "describe";
 }
 
@@ -227,7 +217,7 @@ inline bool forTaskIsQuestion( std::string_view task )
     {
         return false;
     }
-    const std::string first = forLowerAscii( w.front() );
+    const std::string first = routeLower( w.front() );
     static constexpr std::string_view kOpeners[] = { "how", "what", "why", "where", "which", "when", "who", "explain", "describe", "does", "do", "is", "are", "can" };
     return std::ranges::find( kOpeners, std::string_view( first ) ) != std::end( kOpeners );
 }
@@ -241,7 +231,7 @@ inline bool forRankedCallerHopTask( std::string_view task )
     std::vector<std::string> parts;
     for( const std::string& w : forTaskIdentWords( task ) )
     {
-        const std::string lower = forLowerAscii( w );
+        const std::string lower = routeLower( w );
         if( std::ranges::find( kForErrorWords, std::string_view( lower ) ) != std::end( kForErrorWords ) )
         {
             return true;
@@ -282,117 +272,134 @@ inline std::vector<std::string> forTaskContentWords( std::string_view task )
 
 inline constexpr std::size_t kForRankedMessageWords = 2;   // task content words ONE string literal of the seed's own body must hold
 
-// Does [sigStartByte, endByte) of `s` in `src` hold ONE string literal with >= kForRankedMessageWords distinct task content words?
-// Read with THE one code scanner (clones.h scanCodeTokens: comments dropped, per-language quote rules); a backtick raw string is not
-// read (a floor: such a seed falls to the statement-only fallback).
+// Does ONE string-literal token hold >= kForRankedMessageWords distinct task content words (identifier runs split into subtokens)?
+inline bool forLiteralHoldsTaskWords( std::string_view token, const std::vector<std::string>& words )
+{
+    std::vector<std::string> parts;
+    std::vector<char>        hit( words.size(), 0 );
+    std::size_t              distinct = 0;
+    std::size_t              at       = 0;
+    while( at < token.size() )
+    {
+        while( at < token.size() && !namesplit::isIdentChar( token[at] ) )
+        {
+            ++at;
+        }
+        const std::size_t begin = at;
+        while( at < token.size() && namesplit::isIdentChar( token[at] ) )
+        {
+            ++at;
+        }
+        parts.clear();
+        subtokens( token.substr( begin, at - begin ), parts );
+        for( const std::string& p : parts )
+        {
+            const auto it = std::ranges::find( words, p );
+            const auto ix = std::size_t( it - words.begin() );
+            if( it != words.end() && hit[ix] == 0 )
+            {
+                hit[ix] = 1;
+                if( ++distinct >= kForRankedMessageWords )
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// Does [sigStartByte, endByte) of `s` in `src` hold such a literal? Read with THE one code scanner (clones.h scanCodeTokens: comments
+// dropped, per-language quote rules); a backtick raw string is not read (a floor: such a seed falls to the statement-only fallback).
 inline bool forBodyHoldsTaskMessage( const std::string& src, const Symbol& s, const std::vector<std::string>& words )
 {
-    bool                     found = false;
-    std::vector<std::string> parts;
-    std::vector<char>        hit;
+    bool found = false;
     scanCodeTokens( src, s.sigStartByte, s.endByte, stringAwareScanOptions( s.lang, /*munchMultiByteOperators=*/false ),
                     [ & ]( std::string_view token, CodeTokenKind kind )
-                    {
-                        if( found || kind != CodeTokenKind::String )
-                        {
-                            return;
-                        }
-                        hit.assign( words.size(), 0 );
-                        std::size_t distinct = 0;
-                        std::size_t at       = 0;
-                        while( at < token.size() && !found )
-                        {
-                            while( at < token.size() && !namesplit::isIdentChar( token[at] ) )
-                            {
-                                ++at;
-                            }
-                            const std::size_t begin = at;
-                            while( at < token.size() && namesplit::isIdentChar( token[at] ) )
-                            {
-                                ++at;
-                            }
-                            parts.clear();
-                            subtokens( token.substr( begin, at - begin ), parts );
-                            for( const std::string& p : parts )
-                            {
-                                const auto it = std::ranges::find( words, p );
-                                if( it != words.end() && hit[ std::size_t( it - words.begin() ) ] == 0 )
-                                {
-                                    hit[ std::size_t( it - words.begin() ) ] = 1;
-                                    found = found || ++distinct >= kForRankedMessageWords;
-                                }
-                            }
-                        }
-                    } );
+                    { found = found || ( kind == CodeTokenKind::String && forLiteralHoldsTaskWords( token, words ) ); } );
     return found;
 }
 
-// The seed: the first of the rows <sigs> emitted at r=1..kForRankedHopHeadRows that is ONE function by the callers verb's own
-// resolution (forCallerHopTargets) with 1..kForRankedHopMaxCallers first-hop rows, not every one a test or bench path, and not
-// every one matched by name alone (F2: the d=2 rows would inherit an unproven receiver — a Go interface method, a duck-typed
-// Python call) — and, among those, PREFERRING the first whose own body holds a string literal with >= 2 task words (F5: the
-// function that raises the message). With none, today's first eligible row, but only for a statement, never a question.
+// The files the seed's bodies are read from: each file once (at most kForRankedHopHeadRows), "" when unreadable (no message found there).
+struct ForRankedSources
+{
+    std::vector<std::pair<std::uint32_t, std::string>> files;
+
+    const std::string& of( const IngestResult& ing, std::uint32_t fileId )
+    {
+        auto f = std::ranges::find( files, fileId, &std::pair<std::uint32_t, std::string>::first );
+        if( f == files.end() )
+        {
+            files.emplace_back( fileId, docparse::detail::readWholeFile( diskPath( ing, fileId ) ).value_or( std::string() ) );
+            f = std::prev( files.end() );
+        }
+        return f->second;
+    }
+};
+
+// One r=1..3 head row as a seed: the row's targets (ONE function by the callers verb's own resolution) when it has 1..kForRankedHopMaxCallers
+// first-hop rows, not every one a test or bench path (the chain already ends there), not every one matched by name alone (F2: the d=2 rows
+// would inherit an unproven receiver — a Go interface method, a duck-typed Python call); else empty.
+inline std::vector<NodeId> forRankedSeedAt( const IngestResult& ing, const Graph& g, NodeId id )
+{
+    if( id >= ing.symbols.size() || !ReceiverEvidence::callableKind( ing.symbols[id].kind ) )
+    {
+        return {};
+    }
+    const NodeId              one[]   = { id };
+    std::vector<NodeId>       targets = forCallerHopTargets( ing, g, one );
+    if( targets.empty() )
+    {
+        return {};
+    }
+    const std::vector<NodeId> first = oneHopCallerRows( ing, g, targets );
+    if( first.empty() || first.size() > kForRankedHopMaxCallers )
+    {
+        return {};
+    }
+    const bool allTests = std::all_of( first.begin(), first.end(), [ & ]( NodeId c )
+                                       { return pathTierOf( rootRelPath( ing, ing.symbols[c].fileId ) ) == PathTier::TestOrBench; } );
+    if( allTests )
+    {
+        return {};
+    }
+    const OneHopAttribution attr = attributeOneHopAnswer( ing, g, targets, first, /*towardMatches=*/true );
+    for( std::size_t k = 0; k < first.size(); ++k )
+    {
+        if( !attr.nameOnly( k ) )
+        {
+            return targets;
+        }
+    }
+    return {};
+}
+
+// The seed: among the eligible rows (forRankedSeedAt) of the rows <sigs> emitted at r=1..kForRankedHopHeadRows, the first whose own
+// body holds a string literal with >= 2 task words (F5: the function that raises the message); with none, the first eligible row,
+// but only for a statement, never a question.
 inline std::vector<NodeId> forRankedCallerHopTargets( const IngestResult& ing, const Graph& g, std::span<const NodeId> rankedHead,
                                                       std::string_view task )
 {
     const std::vector<std::string> words = forTaskContentWords( task );
     std::vector<NodeId>            fallback;
-    std::vector<std::pair<std::uint32_t, std::string>> files;   // at most kForRankedHopHeadRows files read, once each
+    ForRankedSources               sources;
     for( std::size_t i = 0; i < rankedHead.size() && i < kForRankedHopHeadRows; ++i )
     {
-        const NodeId id = rankedHead[i];
-        if( id >= ing.symbols.size() || !ReceiverEvidence::callableKind( ing.symbols[id].kind ) )
-        {
-            continue;
-        }
-        const NodeId              one[]   = { id };
-        const std::vector<NodeId> targets = forCallerHopTargets( ing, g, one );
+        std::vector<NodeId> targets = forRankedSeedAt( ing, g, rankedHead[i] );
         if( targets.empty() )
         {
             continue;
         }
-        const std::vector<NodeId> first = oneHopCallerRows( ing, g, targets );
-        if( first.empty() || first.size() > kForRankedHopMaxCallers )
+        const bool holds = words.size() >= kForRankedMessageWords
+                        && std::ranges::any_of( targets, [ & ]( NodeId t )
+                                                { return forBodyHoldsTaskMessage( sources.of( ing, ing.symbols[t].fileId ), ing.symbols[t], words ); } );
+        if( holds )
         {
-            continue;
-        }
-        const bool allTests = std::all_of( first.begin(), first.end(), [ & ]( NodeId c )
-                                           { return pathTierOf( rootRelPath( ing, ing.symbols[c].fileId ) ) == PathTier::TestOrBench; } );
-        if( allTests )
-        {
-            continue;
-        }
-        const OneHopAttribution attr = attributeOneHopAnswer( ing, g, targets, first, /*towardMatches=*/true );
-        bool                    allByName = true;
-        for( std::size_t k = 0; k < first.size() && allByName; ++k )
-        {
-            allByName = attr.nameOnly( k );
-        }
-        if( allByName )
-        {
-            continue;
+            return targets;
         }
         if( fallback.empty() )
         {
-            fallback = targets;
-        }
-        if( words.size() < kForRankedMessageWords )
-        {
-            continue;
-        }
-        for( const NodeId t : targets )
-        {
-            const Symbol& s = ing.symbols[t];
-            auto          f = std::ranges::find( files, s.fileId, &std::pair<std::uint32_t, std::string>::first );
-            if( f == files.end() )
-            {
-                files.emplace_back( s.fileId, docparse::detail::readWholeFile( diskPath( ing, s.fileId ) ).value_or( std::string() ) );
-                f = std::prev( files.end() );
-            }
-            if( forBodyHoldsTaskMessage( f->second, s, words ) )
-            {
-                return targets;
-            }
+            fallback = std::move( targets );
         }
     }
     return forTaskIsQuestion( task ) ? std::vector<NodeId>{} : fallback;

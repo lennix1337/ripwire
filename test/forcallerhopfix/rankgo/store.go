@@ -23,13 +23,11 @@ type diskStore struct{}
 
 func (d *diskStore) Put(key string) error { return nil }
 
-func saveAll(s Store, keys []string) error {
-	for _, k := range keys {
-		if err := s.Put(k); err != nil {
-			return err
-		}
+func saveAll(s Store, keys []string) (err error) {
+	for i := 0; i < len(keys) && err == nil; i++ {
+		err = s.Put(keys[i])
 	}
-	return nil
+	return err
 }
 
 func Import(keys []string) error {
