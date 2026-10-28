@@ -139,17 +139,52 @@ inline std::vector<NodeId> forCallerHopTargets( const IngestResult& ing, const G
     return matches;
 }
 
-// UPWARD-2HOP — THE RANKED SEED (the ranked routes, subtoken+body): a question that does not NAME a function (an error string, a
-// behaviour) still often ranks the function it is about near the head, and when that function is a narrow funnel (one to three
-// callers) the answer needs the chain above it — the callers and the callers of the callers (measured, reports/upward-2hop.md
-// Stage 0: cockroach-01 execStmtInAbortedState -> execStmt -> ..., terraform-07 Module.appendFile -> NewModule ->
-// Parser.LoadConfigDir, ninja-06 VerifyDAG -> RecomputeNodeDirty -> RecomputeDirty). The seed is the FIRST of the top
-// kForRankedHopHeadRows ranked rows that is ONE function by the callers verb's own resolution (forCallerHopTargets, the same
-// exact-or-no-row rule) and whose 1-hop caller rows number 1..kForRankedHopMaxCallers; the element is renderForCallerHop's, marked
-// by="rank". NOISE GATE (the brief's lens): no element when every first-hop caller is a test or bench path — the chain already
-// ends there and the rows add nothing the question asks.
-inline constexpr std::size_t kForRankedHopHeadRows  = 3;   // ranked head rows scanned for the seed
+// UPWARD-2HOP — THE RANKED SEED (the ranked routes, subtoken+body): a task that names an ERROR (an error string, "X fails") but no
+// function still often ranks the function that raises or detects it near the head, and when that function is a narrow funnel (one
+// to three callers) the answer needs the chain above it: its callers and their callers — who reaches the error. Measured
+// (ORCH reports/upward-2hop.md Stage 0): cockroach-01 execStmtInAbortedState (r=3) -> execStmt, ninja-06 VerifyDAG (r=2) ->
+// RecomputeNodeDirty -> RecomputeDirty; on the 60 S1 --for questions the same seed without the error gate fired on 35 rows, mostly
+// on a narrow-funnel row the question was not about (noise), so the task gate is part of the rule, not a tuning.
+// The seed is the FIRST of the rows <sigs> emitted at r=1..kForRankedHopHeadRows that is ONE function by the callers verb's own
+// resolution (forCallerHopTargets, the same exact-or-no-row rule) with 1..kForRankedHopMaxCallers 1-hop caller rows; the element is
+// renderForCallerHop's, marked by="rank". NOISE GATE: no element when every first-hop caller is a test or bench path (the chain
+// already ends there).
+inline constexpr std::size_t kForRankedHopHeadRows  = 3;   // r=1..3: the emitted head the seed is read from
 inline constexpr std::size_t kForRankedHopMaxCallers = 3;  // the narrow-funnel bar: a wider fan-in is the callers verb's page, not a chain
+
+// The task names an error: a whole word error(s) / exception(s) / panic(s) / fail(s|ed|ure|ures) / crash(es), ASCII case-folded.
+inline bool forRankedCallerHopTask( std::string_view task ) noexcept
+{
+    static constexpr std::string_view kWords[] = { "error", "errors", "exception", "exceptions", "panic", "panics", "fail",
+                                                   "fails", "failed", "failure", "failures", "crash", "crashes" };
+    const auto wordByte = []( char c ) noexcept { return ( c >= 'a' && c <= 'z' ) || ( c >= 'A' && c <= 'Z' ) || ( c >= '0' && c <= '9' ) || c == '_'; };
+    for( std::size_t at = 0; at < task.size(); )
+    {
+        if( !wordByte( task[at] ) )
+        {
+            ++at;
+            continue;
+        }
+        std::size_t end = at;
+        while( end < task.size() && wordByte( task[end] ) ) { ++end; }
+        const std::string_view w = task.substr( at, end - at );
+        for( const std::string_view k : kWords )
+        {
+            bool same = w.size() == k.size();
+            for( std::size_t i = 0; same && i < k.size(); ++i )
+            {
+                const char c = w[i] >= 'A' && w[i] <= 'Z' ? char( w[i] - 'A' + 'a' ) : w[i];
+                same         = c == k[i];
+            }
+            if( same )
+            {
+                return true;
+            }
+        }
+        at = end;
+    }
+    return false;
+}
 
 inline std::vector<NodeId> forRankedCallerHopTargets( const IngestResult& ing, const Graph& g, std::span<const NodeId> rankedHead )
 {
@@ -195,14 +230,14 @@ inline constexpr std::string_view kForCompactCallerHopLegend =
 
 // UPWARD-2HOP: the ranked seed's clauses (by="rank" on the element). Self-contained — the named-route clause never rides with them.
 inline constexpr std::string_view kForRankedCallerHopLegend =
-    "; callers by=rank of=: of= is the first of the top 3 ranked rows that is one function with 1 to 3 callers (a narrow funnel the "
-    "ranking found; the task did not name it), so the chain above it follows: s t= n= sc= p=file:line rows are its 1-hop callers "
+    "; callers by=rank of=: the task names an error, not a function, so of= is the first r=1..3 row that is one function with 1 to "
+    "3 callers (found by rank, a lead to check), and the chain above it follows: s t= n= sc= p=file:line rows are its 1-hop callers "
     "(n=Owner.name with no sc= on a member whose owner the index defines; sites_at= their calls of it as file:line, sites_total= when "
     "that list was cut; via=name: matched by name alone, the receiver unproven), shown= of total=; then d=2 rows, callers of the "
     "shown callers by rank, d2_shown= of d2=; capped=1 when either hop was cut; counts are floors (resolved calls only); next= lists "
     "the whole caller radius";
 inline constexpr std::string_view kForCompactRankedCallerHopLegend =
-    "; callers by=rank of=: the first top-3 ranked one function with 1-3 callers (not named by the task): its 1-hop callers, s t= n= "
+    "; callers by=rank of=: an error task's first r=1..3 row that is one function with 1-3 callers (a lead by rank): its callers, s t= n= "
     "sc= p=file:line (n=Owner.name folds sc= on a member; sites_at= its call sites, sites_total= if cut; via=name by name only), "
     "shown= of total=; d=2 rows: their callers, d2_shown= of d2=; capped=1 if cut; floors; next= the radius";
 

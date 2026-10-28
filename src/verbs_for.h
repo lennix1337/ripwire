@@ -2566,21 +2566,6 @@ ForAutoBodiesResult buildForEnrichment( const rw::Config& cfg, const rw::IngestR
     return out;
 }
 
-// UPWARD-2HOP: the ranked head the seed is read from — the surface rows the ranking scored (rank > 0), in order, at most
-// rw::kForRankedHopHeadRows (the ep-manifest head's rule)
-inline std::vector<rw::NodeId> rankedHeadIds( const std::vector<rw::NodeId>& lensSurfaceIds, const std::vector<float>& lensRank )
-{
-    std::vector<rw::NodeId> head;
-    for( std::size_t i = 0; i < lensSurfaceIds.size() && head.size() < rw::kForRankedHopHeadRows; ++i )
-    {
-        if( lensSurfaceIds[i] < lensRank.size() && lensRank[ lensSurfaceIds[i] ] > 0.0f )
-        {
-            head.push_back( lensSurfaceIds[i] );
-        }
-    }
-    return head;
-}
-
 // mf1-nx (forcallerhop.h): the ONE function whose callers ride — `nameExactBodies` is the posture runForLensPass knows (the auto
 // <bodies> bundle on the name-exact route); this adds the regime (XML, no explicit --token-budget, the A/B switch) and the target rule.
 inline std::vector<rw::NodeId> forCallerHopIds( const rw::Config& cfg, const rw::IngestResult& ing, const rw::Graph& g, const std::vector<rw::NodeId>& lensSurfaceIds,
@@ -3286,16 +3271,8 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // clause reads it. The name-exact route's auto-bodies XML answer in the DEFAULT regime only, as the fold: an explicit
         // --token-budget is a size the caller named (that answer stays byte-identical), and autoBundleMode excludes --detail,
         // --signatures-only and --auto-bodies on the compact route (plan.autoBodies is the name-exact route's bundle).
-        std::vector<rw::NodeId> callerHopIds = forCallerHopIds( cfg, ing, g, lensSurfaceIds, lensRank, routeAnchorDefs,
-                                                                autoBundleMode && plan.autoBodies && isNameExactRouteTag( lr.routeTag ) );
-        // UPWARD-2HOP (forcallerhop.h forRankedCallerHopTargets): a ranked route's answer whose head holds a narrow-funnel function
-        // carries the same element, seeded by rank (by="rank") — the same regime as the named hop (XML, default, the A/B switch)
-        if( callerHopIds.empty() && autoBundleMode && plan.compact && !isNameExactRouteTag( lr.routeTag ) && !cfg.json && cfg.tokenBudget <= 0
-            && rw::forCallerHopOn() )
-        {
-            callerHopIds                = rw::forRankedCallerHopTargets( ing, g, rankedHeadIds( lensSurfaceIds, lensRank ) );
-            headerParts.callerHopRanked = !callerHopIds.empty();
-        }
+        const std::vector<rw::NodeId> callerHopIds = forCallerHopIds( cfg, ing, g, lensSurfaceIds, lensRank, routeAnchorDefs,
+                                                                      autoBundleMode && plan.autoBodies && isNameExactRouteTag( lr.routeTag ) );
         headerParts.callerHopPresent = !callerHopIds.empty();
         // ep-manifest (epmanifest.h): the manifest entry-point groups that register a row of the ranked head — rendered here
         // because the header's clause reads it. The default regime and XML only, as the fold and the caller hop.
@@ -4111,12 +4088,11 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             if( sigsPreRendered && !enrich.surfaceOff )
             {
-                callerHop = rw::renderForCallerHop( ing, g, callerHopIds, flRootArg, headerParts.callerHopRanked );
+                callerHop = rw::renderForCallerHop( ing, g, callerHopIds, flRootArg );
             }
             if( callerHop.xml.empty() )
             {
                 headerParts.callerHopPresent = false;   // its clause goes with it
-                headerParts.callerHopRanked  = false;
                 headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, enrich.surfaceOff ? std::string_view() : kForDegradedBundleNote );
             }
         }
@@ -4307,6 +4283,25 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             if( rw::spliceCtorHop( sigsStr, ing, g, shownSigIds, answerBodies ) > 0 )
             {
                 headerParts.ctorHopPresent = true;   // the clause rides beside the attributes it defines
+                headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+            }
+        }
+        // ── UPWARD-2HOP (forcallerhop.h forRankedCallerHopTargets): an error-shaped task on a ranked route whose r=1..3 rows hold a
+        // narrow-funnel function carries that function's <callers by="rank"> — seeded from the rows <sigs> EMITTED (r= order), so its
+        // clause's "r=1..3" holds; the same posture as the late splices above, and never beside the name-exact hop
+        if( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forCallerHopOn() && sigsPreRendered
+            && !enrich.surfaceOff && !enrich.hopsCutMarker && !headerParts.callerHopPresent && !isNameExactRouteTag( lr.routeTag )
+            && rw::forRankedCallerHopTask( cfg.forTask ) )
+        {
+            const std::vector<rw::NodeId> rankedIds = rw::forRankedCallerHopTargets( ing, g, shownSigIds );
+            if( !rankedIds.empty() )
+            {
+                callerHop = rw::renderForCallerHop( ing, g, rankedIds, flRootArg, /*ranked=*/true );
+            }
+            if( !callerHop.xml.empty() )
+            {
+                headerParts.callerHopPresent = true;   // the ranked clause rides beside the element it defines
+                headerParts.callerHopRanked  = true;
                 headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
             }
         }
