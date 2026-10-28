@@ -1,1 +1,1 @@
-void orphan( int x ) { (void)x; }
+void orphan( int x ) { x = 1; }

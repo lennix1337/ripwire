@@ -1,1 +1,1 @@
-void twin( int x ) { (void)x; }
+void twin( int x ) { x = 1; }
