@@ -106,7 +106,7 @@ public:
         }
         for( const Symbol& sym : ing.symbols )
         {
-            if( sym.kind == SymKind::Struct && slotTypeKey( sym.lang ) == VrSlotTypeKey::PackageDir )
+            if( sym.kind == SymKind::Struct && slotTypeKeyOf( sym.lang ) == VrSlotTypeKey::PackageDir )
             {
                 m_structs.try_emplace( keyOfSymbol( sym ), char( 1 ) );
             }
@@ -538,7 +538,7 @@ public:
         for( NodeId id = 0; id < ing.symbols.size(); ++id )
         {
             const Symbol& sym = ing.symbols[id];
-            if( ( sym.kind == SymKind::Struct || sym.kind == SymKind::Class ) && slotTypeKey( sym.lang ) == VrSlotTypeKey::ModuleType )   // a Rust struct is a class row
+            if( ( sym.kind == SymKind::Struct || sym.kind == SymKind::Class ) && slotTypeKeyOf( sym.lang ) == VrSlotTypeKey::ModuleType )   // a Rust struct is a class row
             {
                 m_structs[ sym.name ].push_back( id );
             }
@@ -593,14 +593,28 @@ public:
         m_go.build( ing );
         m_rust.build( ing );
     }
+    // A switch with no default (rv-fn-slot-2 F-8): a new VrSlotTypeKey fails -Wswitch here instead of keying as a Go directory.
+    // TypedefFacts keys nothing here (its slots key through SlotIndex's typedef facts; endOf and forslots never ask).
     std::string keyOf( const Reference& r )
     {
-        return slotTypeKey( r.lang ) == VrSlotTypeKey::ModuleType ? m_rust.keyOf( *m_ing, r ) : m_go.keyOf( r );
+        switch( slotTypeKeyOf( r.lang ) )
+        {
+            case VrSlotTypeKey::PackageDir:   return m_go.keyOf( r );
+            case VrSlotTypeKey::ModuleType:   return m_rust.keyOf( *m_ing, r );
+            case VrSlotTypeKey::TypedefFacts: return {};
+        }
+        return {};
     }
     std::string keyOfSymbol( NodeId id ) const
     {
         const Symbol& s = m_ing->symbols[id];
-        return slotTypeKey( s.lang ) == VrSlotTypeKey::ModuleType ? RustTypeKeys::keyOfSymbol( s, id ) : m_go.keyOfSymbol( s );
+        switch( slotTypeKeyOf( s.lang ) )
+        {
+            case VrSlotTypeKey::PackageDir:   return m_go.keyOfSymbol( s );
+            case VrSlotTypeKey::ModuleType:   return RustTypeKeys::keyOfSymbol( s, id );
+            case VrSlotTypeKey::TypedefFacts: return {};
+        }
+        return {};
     }
 
 private:

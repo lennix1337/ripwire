@@ -633,7 +633,7 @@ inline bool slotJoinsByFieldName( Lang l ) noexcept
     return row != nullptr && row->callSide == VrSlotCallSide::MemberCallByName;
 }
 // How language `l` keys a slot type (TypedefFacts for a language with no slot row: it keys nothing of its own).
-inline VrSlotTypeKey slotTypeKey( Lang l ) noexcept
+inline VrSlotTypeKey slotTypeKeyOf( Lang l ) noexcept
 {
     const VrSlotLang* row = vrSlotLang( l );
     return row == nullptr ? VrSlotTypeKey::TypedefFacts : row->typeKey;
@@ -647,7 +647,7 @@ inline std::string_view slotPathSep( Lang l ) noexcept
 // A language whose slot types key by its own rule (valuerefindex.h slot_join), not through the C family's typedef facts.
 inline bool slotKeysOwnTypes( Lang l ) noexcept
 {
-    return slotTypeKey( l ) != VrSlotTypeKey::TypedefFacts;
+    return slotTypeKeyOf( l ) != VrSlotTypeKey::TypedefFacts;
 }
 // A slot type key written with the `struct` / `union` keyword (`struct thandle`) leads with this mark: a C tag is no typedef
 // name, so the join never reads it through an alias. A slot fact whose composeRel is kValueRefSlotBodyRel declares that its
