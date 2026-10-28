@@ -2201,7 +2201,9 @@ inline bool isPythonSourcePath( std::string_view path ) noexcept
 // or `setattr(...)` call anywhere in the file (`globals()['a'] = x`, `setattr(sys.modules[__name__], ...)`), a write no static table
 // can see, so the file may rebind ANY name. pythonFileBindsOnlyByImport and pythonPackageMayBind read either as unknown
 // (pythonDynamicNamespace); pythonRenamedImportPin lets `__getattr__` withhold only a name that may be unbound (kPythonCondDefPrefix).
-// `sys.modules[__name__].a = x` is not a call and stays a floor.
+// KNOWN FLOOR (not detected, not markers): zero-argument `vars()[...] =` / `locals()[...] =` at module scope, `exec('a = x')`,
+// `sys.modules[__name__].__dict__[...] =` and `sys.modules[__name__].a = x` also rebind a module name; a pin in a file that uses one
+// of them can be wrong (the same old floor the base has in files without a `__getattr__`). Extending the marker is a carded change.
 inline constexpr std::string_view kPythonDynamicBind  = "__getattr__";
 inline constexpr std::string_view kPythonDynamicWrite = "(globals)";
 
