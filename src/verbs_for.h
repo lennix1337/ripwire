@@ -2701,9 +2701,10 @@ inline void appendSubjectGraphVerb( const MainDispatch& d )
     };
     // The bare verb's answer is shaped by main.cpp's whole-stdout compact layer (runWithCompactLegend), which skips --for; so
     // the verb is captured here and compacted by the same applyCompactDialect + compactLegendHint, and the block carries the
-    // bytes the bare call prints. A capture that cannot be set up emits the verb's FULL legend instead (a superset; only cost).
+    // bytes the bare call prints. CR 4396503866: the verb is captured under EVERY legend, because the open tag's name_test_hops= is
+    // read off the rows it printed. A capture that cannot be set up emits the verb's FULL legend and an open tag without it.
     std::fflush( stdout );   // everything before the block is out before stdout is pointed at the capture
-    std::FILE* const capture = sub.legend == "compact" ? std::tmpfile() : nullptr;
+    std::FILE* const capture = std::tmpfile();
     const int        saved   = capture != nullptr ? rw::os::dup( STDOUT_FILENO ) : -1;
     if( capture == nullptr || saved < 0 || rw::os::dup2( rw::os::fileno( capture ), STDOUT_FILENO ) < 0 )
     {
@@ -2711,6 +2712,10 @@ inline void appendSubjectGraphVerb( const MainDispatch& d )
         {
             DISCLOSE( Diagnostics::answerUnchanged, "the full legend is a correct superset of the compact one: only the cost grows",
                       "appendSubjectGraphVerb: no capture buffer — the graph verb's FULL legend is emitted" );
+        }
+        if( args->form == rw::GraphSubjectForm::Path )   // CR 4396503866: the open tag cannot read the rows, so a by-name hop into a test file goes unmarked
+        {
+            rw::emitTo( stderr, "ripwire: --for: no capture buffer for the graph verb — the graph_verb block omits name_test_hops= (a path hop matched by name into a test file is not marked)\n" );
         }
         if( saved >= 0 ) { rw::os::close( saved ); }
         if( capture != nullptr ) { std::fclose( capture ); }
@@ -2732,7 +2737,10 @@ inline void appendSubjectGraphVerb( const MainDispatch& d )
             doc.append( buf, got );
         }
         std::fclose( capture );
-        (void)rw::applyCompactDialect( doc, ::compactLegendHint( sub, doc ) );   // not shaped → the bytes as emitted (the DEFAULT posture's rule)
+        if( sub.legend == "compact" )
+        {
+            (void)rw::applyCompactDialect( doc, ::compactLegendHint( sub, doc ) );   // not shaped → the bytes as emitted (the DEFAULT posture's rule)
+        }
         // the open tag goes out after the verb ran: name_test_hops= (S5) is read off the rows it printed
         const std::size_t nameTest = args->form == rw::GraphSubjectForm::Path ? rw::graphSubjectNameTestHops( doc ) : 0;
         rw::emitRaw( stdout, rw::graphSubjectOpenXml( *args, rw::GraphSubjectOpen{ .nameTestHops = nameTest } ).c_str() );

@@ -218,6 +218,11 @@ then ok "(h1) a by-name hop into tests/fake.test.ts: name_test_hops=1"
 else no "(h1) name_test_hops=[$( attr "$TMP/h1.xml" name_test_hops )] $( facts "$TMP/h1.xml" )"; fi
 mcp_call "path from startOne to endOne" >"$TMP/h3.xml"
 if [ "$( attr "$TMP/h3.xml" name_test_hops )" = "1" ]; then ok "(h3) MCP for: the same name_test_hops=1"; else no "(h3) MCP name_test_hops=[$( attr "$TMP/h3.xml" name_test_hops )]"; fi
+# CR 4396503866 (train 40): the CLI block reads name_test_hops= off the verb's rows under EVERY legend, as the MCP twin does
+run --for="path from startOne to endOne" --legend=full >"$TMP/h4.xml"
+if [ "$( attr "$TMP/h4.xml" name_test_hops )" = "1" ] && grep -q 'via="name"' "$TMP/h4.xml" && xmlok "$TMP/h4.xml"
+then ok "(h4) --legend=full: the same by-name hop into a test file still says name_test_hops=1"
+else no "(h4) --legend=full name_test_hops=[$( attr "$TMP/h4.xml" name_test_hops )] $( facts "$TMP/h4.xml" )"; fi
 run --for="path from startTwo to endTwo" >"$TMP/h2.xml"
 if [ "$( attr "$TMP/h2.xml" name_test_hops )" = "-" ] && grep -q 'via="name"' "$TMP/h2.xml" && grep -q '<graph_verb ' "$TMP/h2.xml"
 then ok "(h2) the same shape through a source file: no name_test_hops"
