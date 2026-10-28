@@ -312,6 +312,10 @@ t = run( d, "--path=emit,when_saved" )
 hr = root( t, "handler_rule" )
 check( 'base="Event"' in hr and '<hrd n="Bus.emit"' in ( t or "" ) and "Pump._on_message" not in ( t or "" ) and 'posts="1"' in hr, f"R5 the Event block lists Bus.emit only; one post (self.post_message(Saved()) is not an Event post) ({hr[:160]})" )
 
+t1, t2 = run( d, "--path=emit,on_tick" ), run( d, "--path=post_message,when_saved" )
+check( t1 is not None and t2 is not None and "<handler_rule" not in t1 and "<handler_rule" not in t2 and hedged( d, "on_tick" ) == "1" and hedged( d, "when_saved" ) == "1",
+       "R5 bus.emit(Tick()) and self.post_message(Saved()) are no post sites (each poster posts its own rule's classes only); the real posts still hedge" )
+
 # R7: self.X names the caller's class family only (kills a mutant that takes any owner)
 FAM = "class Input(Pump):\n    class Changed(Message):\n        pass\n\n    def edit(self):\n        self.post_message(self.Changed())\n\n\nclass MaskedInput(Input):\n    class Changed(Message):\n        pass\n\n\nclass Select(Pump):\n    class Changed(Message):\n        pass\n\n\nclass Form(Pump):\n    def on_input_changed(self, m):\n        return leaf(m)\n\n    def on_masked_input_changed(self, m):\n        return m\n\n    def on_select_changed(self, m):\n        return m\n"
 d = fixture( "r7", msg, FAM )

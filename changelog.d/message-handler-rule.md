@@ -13,11 +13,14 @@ spelling, the functions that read the handler-name attribute with the method eac
 first. The handler definitions are listed only when there are at most 16 of them. Above that, the answer gives a count and
 `next=`, never a cut list. This is the post-site half of the name-keyed dispatch that lane string-keyed declined at the lookup.
 
-The rule is read from the repo's own source, never from a framework list. It needs a Python `__init_subclass__` that has a
-`cls.A = f"P{v}"` line and calls a camel-to-snake converter (a body holding the `[a-z][A-Z]` regex and `.lower()`) on
-`__qualname__`'s last two parts or on `cls.__name__`. A `{namespace}_` branch reads a `namespace="x"` class keyword. A post
-site is a call to a method of a class that reads `.A` outside test paths, with a first argument that constructs a subclass:
-`X( … )`, `self.X( … )`, `Owner.X( … )` or `module.X( … )`.
+The rule is read from the repo's own source, never from a framework list. It needs a Python `__init_subclass__` with ONE
+top-level write `cls.A = f"P{v}"` (not under an `if`/`else`/`for`/`while`/`try`/`match`), where every assignment of the local
+`v` calls a camel-to-snake converter (a body holding the `[a-z][A-Z]` regex and `.lower()`) on `__qualname__`'s last two parts
+or on `cls.__name__`. A `{namespace}_` branch reads a `namespace="x"` class keyword. A class takes the NEAREST rule base (the
+most derived one); a class below an intermediate class whose own `__init_subclass__` also writes `cls.A` is not named, and two
+unrelated rule bases decline. A base written by name that several classes carry binds only through the deriving file's own
+import. Readers and posters are kept per rule. A post site is a call to a method of a class that reads `.A` outside test
+paths, with a first argument that constructs a subclass: `X( … )`, `self.X( … )`, `Owner.X( … )` or `module.X( … )`.
 
 What it does NOT mean: the name is matched, not traced. Which candidate runs depends on the receiving object's class, and the
 index does not decide that. A hop is never counted in `reaches=`, `reachable=` or `hops=`. The floors are: a variable
