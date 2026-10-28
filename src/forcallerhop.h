@@ -278,25 +278,14 @@ inline bool forLiteralHoldsTaskWords( std::string_view token, const std::vector<
     std::vector<std::string> parts;
     std::vector<char>        hit( words.size(), 0 );
     std::size_t              distinct = 0;
-    std::size_t              at       = 0;
-    while( at < token.size() )
+    for( const std::string& run : forTaskIdentWords( token ) )   // the same ident-run split the task's words come through
     {
-        while( at < token.size() && !namesplit::isIdentChar( token[at] ) )
-        {
-            ++at;
-        }
-        const std::size_t begin = at;
-        while( at < token.size() && namesplit::isIdentChar( token[at] ) )
-        {
-            ++at;
-        }
         parts.clear();
-        subtokens( token.substr( begin, at - begin ), parts );
+        subtokens( run, parts );
         for( const std::string& p : parts )
         {
-            const auto it = std::ranges::find( words, p );
-            const auto ix = std::size_t( it - words.begin() );
-            if( it != words.end() && hit[ix] == 0 )
+            const auto ix = std::size_t( std::ranges::find( words, p ) - words.begin() );
+            if( ix < words.size() && hit[ix] == 0 )
             {
                 hit[ix] = 1;
                 if( ++distinct >= kForRankedMessageWords )
