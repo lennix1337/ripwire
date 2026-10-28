@@ -346,7 +346,7 @@ inline std::string defAltsLegend( const PathAlts& alts )
     {
         return {};
     }
-    return std::string( "<alts side= of=> lists the definitions the endpoint's name binds that this answer does not already print (the pick is "
+    return std::string( "<alts side= of=> lists further definitions the endpoint's name binds, not printed above (the pick is "
                         "not provably unique): sel= pastes as that endpoint to bind one alone" )
          + ( alts.unproven ? ", except on a sel_proven=0 row: no spelling tried binds that one alone, its sel= names the file and owner and may bind more" : "" )
          + ", p= where it is, class=source|test; alts_shown=K defs=N: K of the other rows shown, next= pages the rest. "
