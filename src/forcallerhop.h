@@ -28,6 +28,7 @@
 
 #include "callhierarchy.h"   // oneHopCallerRows — the callers verb's rows; rowCallSites / callSitesAttrXml via editcheck.h
 #include "defattrib.h"       // attributeOneHopAnswer — via="name" on a row, as the callers verb decides it
+#include "filter.h"          // pathTierOf — the ranked seed's noise gate (every first-hop caller a test or bench path)
 #include "graph.h"           // viaNameAttr
 #include "memberowner.h"     // MemberOwners / qualifiedMemberName — n= as the callers verb prints it (QUALNAME-1, train 33)
 #include "model.h"
@@ -138,6 +139,49 @@ inline std::vector<NodeId> forCallerHopTargets( const IngestResult& ing, const G
     return matches;
 }
 
+// UPWARD-2HOP — THE RANKED SEED (the ranked routes, subtoken+body): a question that does not NAME a function (an error string, a
+// behaviour) still often ranks the function it is about near the head, and when that function is a narrow funnel (one to three
+// callers) the answer needs the chain above it — the callers and the callers of the callers (measured, reports/upward-2hop.md
+// Stage 0: cockroach-01 execStmtInAbortedState -> execStmt -> ..., terraform-07 Module.appendFile -> NewModule ->
+// Parser.LoadConfigDir, ninja-06 VerifyDAG -> RecomputeNodeDirty -> RecomputeDirty). The seed is the FIRST of the top
+// kForRankedHopHeadRows ranked rows that is ONE function by the callers verb's own resolution (forCallerHopTargets, the same
+// exact-or-no-row rule) and whose 1-hop caller rows number 1..kForRankedHopMaxCallers; the element is renderForCallerHop's, marked
+// by="rank". NOISE GATE (the brief's lens): no element when every first-hop caller is a test or bench path — the chain already
+// ends there and the rows add nothing the question asks.
+inline constexpr std::size_t kForRankedHopHeadRows  = 3;   // ranked head rows scanned for the seed
+inline constexpr std::size_t kForRankedHopMaxCallers = 3;  // the narrow-funnel bar: a wider fan-in is the callers verb's page, not a chain
+
+inline std::vector<NodeId> forRankedCallerHopTargets( const IngestResult& ing, const Graph& g, std::span<const NodeId> rankedHead )
+{
+    for( std::size_t i = 0; i < rankedHead.size() && i < kForRankedHopHeadRows; ++i )
+    {
+        const NodeId id = rankedHead[i];
+        if( id >= ing.symbols.size() || !ReceiverEvidence::callableKind( ing.symbols[id].kind ) )
+        {
+            continue;
+        }
+        const NodeId              one[]   = { id };
+        const std::vector<NodeId> targets = forCallerHopTargets( ing, g, one );
+        if( targets.empty() )
+        {
+            continue;
+        }
+        const std::vector<NodeId> first = oneHopCallerRows( ing, g, targets );
+        if( first.empty() || first.size() > kForRankedHopMaxCallers )
+        {
+            continue;
+        }
+        const bool allTests = std::all_of( first.begin(), first.end(), [ & ]( NodeId c )
+                                           { return pathTierOf( rootRelPath( ing, ing.symbols[c].fileId ) ) == PathTier::TestOrBench; } );
+        if( allTests )
+        {
+            continue;
+        }
+        return targets;
+    }
+    return {};
+}
+
 // The hop's legend clauses, present-only beside the element: the full dialect's and the compact dialect's. No "--": they ride
 // inside an XML comment.
 inline constexpr std::string_view kForCallerHopLegend =
@@ -148,6 +192,19 @@ inline constexpr std::string_view kForCallerHopLegend =
 inline constexpr std::string_view kForCompactCallerHopLegend =
     "; callers of=: the one function's 1-hop callers, s t= n= sc= p=file:line (n=Owner.name folds sc= on a member; sites_at= its call sites, sites_total= if cut; "
     "via=name by name only), shown= of total=; d=2 rows: their callers, d2_shown= of d2=; capped=1 if cut; floors; next= the radius";
+
+// UPWARD-2HOP: the ranked seed's clauses (by="rank" on the element). Self-contained — the named-route clause never rides with them.
+inline constexpr std::string_view kForRankedCallerHopLegend =
+    "; callers by=rank of=: of= is the first of the top 3 ranked rows that is one function with 1 to 3 callers (a narrow funnel the "
+    "ranking found; the task did not name it), so the chain above it follows: s t= n= sc= p=file:line rows are its 1-hop callers "
+    "(n=Owner.name with no sc= on a member whose owner the index defines; sites_at= their calls of it as file:line, sites_total= when "
+    "that list was cut; via=name: matched by name alone, the receiver unproven), shown= of total=; then d=2 rows, callers of the "
+    "shown callers by rank, d2_shown= of d2=; capped=1 when either hop was cut; counts are floors (resolved calls only); next= lists "
+    "the whole caller radius";
+inline constexpr std::string_view kForCompactRankedCallerHopLegend =
+    "; callers by=rank of=: the first top-3 ranked one function with 1-3 callers (not named by the task): its 1-hop callers, s t= n= "
+    "sc= p=file:line (n=Owner.name folds sc= on a member; sites_at= its call sites, sites_total= if cut; via=name by name only), "
+    "shown= of total=; d=2 rows: their callers, d2_shown= of d2=; capped=1 if cut; floors; next= the radius";
 
 struct CallerHopRender
 {
@@ -217,7 +274,9 @@ inline std::vector<NodeId> callerHopSecondRows( const IngestResult& ing, const G
 }
 
 // The element. `rootArg` is the single-root run's own root (empty under multi-root: p= keeps ingest's spelling), as every --for row.
-inline CallerHopRender renderForCallerHop( const IngestResult& ing, const Graph& g, std::span<const NodeId> targets, std::string_view rootArg )
+// `ranked` (UPWARD-2HOP): the seed came from forRankedCallerHopTargets, and the element says so (by="rank", its own clause).
+inline CallerHopRender renderForCallerHop( const IngestResult& ing, const Graph& g, std::span<const NodeId> targets, std::string_view rootArg,
+                                           bool ranked = false )
 {
     CallerHopRender out;
     if( targets.empty() )
@@ -245,7 +304,7 @@ inline CallerHopRender renderForCallerHop( const IngestResult& ing, const Graph&
     const CallerHopRowCtx rc{ ing, owners, rootArg, esc };
     std::string&          x = out.xml;
     x.reserve( 160 + ( firstShown + secondShown ) * 112 );
-    x += "<callers of=\"";
+    x += ranked ? "<callers by=\"rank\" of=\"" : "<callers of=\"";
     x += escapeXml( sel, esc );
     x += "\" shown=\"" + std::to_string( firstShown ) + "\" total=\"" + std::to_string( first.size() ) + "\" capped=\"";
     x += ( firstShown < first.size() || secondShown < second.size() ) ? "1" : "0";

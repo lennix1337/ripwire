@@ -588,6 +588,7 @@ struct ForLensHeaderParts
     bool             callerHopPresent = false; // mf1-nx: a name-exact answer whose body candidates are ONE function in the default
                                             // regime (forcallerhop.h forCallerHopTargets), so a <callers> rides and its clause
                                             // defines it; set after construction, cleared with the section
+    bool             callerHopRanked = false;  // UPWARD-2HOP: that <callers> is the ranked seed's (by="rank"), so ITS clause rides instead
     bool             epPresent = false;        // ep-manifest (epmanifest.h): a manifest entry-point group registers a shown row in
                                             // the default regime, so an <ep> rides and its clause defines it; cleared with it
 };
@@ -790,6 +791,13 @@ inline constexpr std::string_view presentOnlyClause( bool present, bool compact,
 {
     return !present ? std::string_view() : ( compact ? compactClause : fullClause );
 }
+
+// mf1-nx / UPWARD-2HOP: the caller hop's present-only clause — the named-route one, or the ranked seed's (by="rank")
+inline constexpr std::string_view callerHopClause( const ForLensHeaderParts& p, bool compact ) noexcept
+{
+    return p.callerHopRanked ? presentOnlyClause( p.callerHopPresent, compact, rw::kForCompactRankedCallerHopLegend, rw::kForRankedCallerHopLegend )
+                             : presentOnlyClause( p.callerHopPresent, compact, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend );
+}
 // FOR-SLOTS (slots=) and OWNER-CTOR-HOP (ctor_l=/ctor_calls=): the two <sigs>-row splices' clauses, then ep-manifest's <ep> clause (epmanifest.h), each present-only, in that order
 inline std::string peerRowClauses( const ForLensHeaderParts& p, bool compact )
 {
@@ -922,7 +930,7 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
     h += bodyFoldLegend( p, /*compact=*/true );   // body-fold: present-only, after the slot clause
     h += presentOnlyClause( p.memberNamesPresent, /*compact=*/true, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend );   // member-names: after the fold clause
     h += peerRowClauses( p, /*compact=*/true );   // FOR-SLOTS + OWNER-CTOR-HOP: present-only, after mem=
-    h += presentOnlyClause( p.callerHopPresent, /*compact=*/true, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend );  // mf1-nx: present-only, after the fold clause
+    h += callerHopClause( p, /*compact=*/true );  // mf1-nx: present-only, after the fold clause
     // The unconditionally-droppable-free tail of this dialect: five clauses that ride exactly when the bit beside
     // them is set, in THIS order, which is the contract a reader and every byte pin depend on. A table rather than
     // five identical ifs — the list has grown once per lane (hdr, compose, then train 9's lego and layer) and the
@@ -1070,7 +1078,7 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     h.append( bodyFoldLegend( p, /*compact=*/false ) );   // body-fold: present-only, after the slot clause
     h.append( presentOnlyClause( p.memberNamesPresent, /*compact=*/false, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend ) );   // member-names
     h.append( peerRowClauses( p, /*compact=*/false ) );   // FOR-SLOTS + OWNER-CTOR-HOP
-    h.append( presentOnlyClause( p.callerHopPresent, /*compact=*/false, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend ) );  // mf1-nx: present-only, after the fold clause
+    h.append( callerHopClause( p, /*compact=*/false ) );  // mf1-nx: present-only, after the fold clause
     if( p.tailLegend )
     {
         h.append( rw::kForFileTailLegend );   // deep-tail: defines r= and the <tail> element (sigs-charge-exempt, serialize.h)
@@ -2558,6 +2566,21 @@ ForAutoBodiesResult buildForEnrichment( const rw::Config& cfg, const rw::IngestR
     return out;
 }
 
+// UPWARD-2HOP: the ranked head the seed is read from — the surface rows the ranking scored (rank > 0), in order, at most
+// rw::kForRankedHopHeadRows (the ep-manifest head's rule)
+inline std::vector<rw::NodeId> rankedHeadIds( const std::vector<rw::NodeId>& lensSurfaceIds, const std::vector<float>& lensRank )
+{
+    std::vector<rw::NodeId> head;
+    for( std::size_t i = 0; i < lensSurfaceIds.size() && head.size() < rw::kForRankedHopHeadRows; ++i )
+    {
+        if( lensSurfaceIds[i] < lensRank.size() && lensRank[ lensSurfaceIds[i] ] > 0.0f )
+        {
+            head.push_back( lensSurfaceIds[i] );
+        }
+    }
+    return head;
+}
+
 // mf1-nx (forcallerhop.h): the ONE function whose callers ride — `nameExactBodies` is the posture runForLensPass knows (the auto
 // <bodies> bundle on the name-exact route); this adds the regime (XML, no explicit --token-budget, the A/B switch) and the target rule.
 inline std::vector<rw::NodeId> forCallerHopIds( const rw::Config& cfg, const rw::IngestResult& ing, const rw::Graph& g, const std::vector<rw::NodeId>& lensSurfaceIds,
@@ -3263,8 +3286,16 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // clause reads it. The name-exact route's auto-bodies XML answer in the DEFAULT regime only, as the fold: an explicit
         // --token-budget is a size the caller named (that answer stays byte-identical), and autoBundleMode excludes --detail,
         // --signatures-only and --auto-bodies on the compact route (plan.autoBodies is the name-exact route's bundle).
-        const std::vector<rw::NodeId> callerHopIds = forCallerHopIds( cfg, ing, g, lensSurfaceIds, lensRank, routeAnchorDefs,
-                                                                      autoBundleMode && plan.autoBodies && isNameExactRouteTag( lr.routeTag ) );
+        std::vector<rw::NodeId> callerHopIds = forCallerHopIds( cfg, ing, g, lensSurfaceIds, lensRank, routeAnchorDefs,
+                                                                autoBundleMode && plan.autoBodies && isNameExactRouteTag( lr.routeTag ) );
+        // UPWARD-2HOP (forcallerhop.h forRankedCallerHopTargets): a ranked route's answer whose head holds a narrow-funnel function
+        // carries the same element, seeded by rank (by="rank") — the same regime as the named hop (XML, default, the A/B switch)
+        if( callerHopIds.empty() && autoBundleMode && plan.compact && !isNameExactRouteTag( lr.routeTag ) && !cfg.json && cfg.tokenBudget <= 0
+            && rw::forCallerHopOn() )
+        {
+            callerHopIds                = rw::forRankedCallerHopTargets( ing, g, rankedHeadIds( lensSurfaceIds, lensRank ) );
+            headerParts.callerHopRanked = !callerHopIds.empty();
+        }
         headerParts.callerHopPresent = !callerHopIds.empty();
         // ep-manifest (epmanifest.h): the manifest entry-point groups that register a row of the ranked head — rendered here
         // because the header's clause reads it. The default regime and XML only, as the fold and the caller hop.
@@ -3564,7 +3595,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         const std::size_t bodyFoldLegendEmitted = bodyFoldLegend( headerParts, compactLegendOn ).size();
         // mf1-nx: the caller hop's clause on the same contract — the hop rides on top of the complete answer (<sigs>, the tail and
         // the bodies byte-identical with RIPWIRE_NO_CALLER_HOP=1), so its reading never costs a signature row
-        const std::size_t callerHopLegendEmitted = presentOnlyClause( headerParts.callerHopPresent, compactLegendOn, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend ).size()
+        const std::size_t callerHopLegendEmitted = callerHopClause( headerParts, compactLegendOn ).size()
                                                  + presentOnlyClause( headerParts.epPresent, compactLegendOn, rw::kForCompactEpManifestLegend, rw::kForEpManifestLegend ).size();   // ep-manifest: same contract
         // attrib-multidef Q1: the prov="split" clause is a disclosure on the same contract — exempt, as e= is, so <sigs> (rows and
         // its continuation's budget) is byte-identical with and without it (fordisclosurecheck #2: auto vs --signatures-only)
@@ -3602,7 +3633,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                               + ownerLegendExemptBytes( headerParts, /*compact=*/false )
                                               + bodySlotLegend( headerParts, /*compact=*/false ).size()
                                               + bodyFoldLegend( headerParts, /*compact=*/false ).size()   // body-fold
-                                              + presentOnlyClause( headerParts.callerHopPresent, /*compact=*/false, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend ).size()  // mf1-nx
+                                              + callerHopClause( headerParts, /*compact=*/false ).size()  // mf1-nx
                                               + presentOnlyClause( headerParts.epPresent, /*compact=*/false, rw::kForCompactEpManifestLegend, rw::kForEpManifestLegend ).size()  // ep-manifest
                                               + ( headerParts.splitPresent ? rw::kForSplitClause.size() : 0u );   // attrib-multidef Q1
             std::size_t       fullCharged     = fullExempt > fullHeaderBytes ? fullHeaderBytes : fullHeaderBytes - fullExempt;
@@ -4080,11 +4111,12 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             if( sigsPreRendered && !enrich.surfaceOff )
             {
-                callerHop = rw::renderForCallerHop( ing, g, callerHopIds, flRootArg );
+                callerHop = rw::renderForCallerHop( ing, g, callerHopIds, flRootArg, headerParts.callerHopRanked );
             }
             if( callerHop.xml.empty() )
             {
                 headerParts.callerHopPresent = false;   // its clause goes with it
+                headerParts.callerHopRanked  = false;
                 headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, enrich.surfaceOff ? std::string_view() : kForDegradedBundleNote );
             }
         }
