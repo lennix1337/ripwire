@@ -1828,7 +1828,7 @@ inline RouteBodiesXml pathRouteBodies( const IngestResult& ing, const Graph& g, 
             if( i > 0 && br.via[i] != BridgeVia::Edge )
             {
                 hedge = " via=\"" + std::string( kBridgeViaNames[ std::size_t( br.via[i] ) ] ) + ( bridgeViaIsSlot( br.via[i] ) ? "\" slot_callers=\"" : "\" cands=\"" )
-                      + std::to_string( br.fan[i] ) + "\"";
+                      + std::to_string( br.fan[i] ) + "\"" + ( bridgeViaIsSlot( br.via[i] ) ? " slot_fns=\"" + std::to_string( br.fwd[i] ) + "\"" : std::string() );   // the bridge row's own widths
             }
             else if( i > 0 )
             {

@@ -461,7 +461,8 @@ inline std::string_view pathHopBodiesLegend( bool on ) noexcept
 inline std::string_view routeBodyHedgeLegend( bool on ) noexcept
 {
     return on ? "b via= cands= prov=: the hop into this body is no proven call (by name: one of cands= same-named definitions; a link; a "
-                "split arm; a bridge crossing; a handler_rule reader), so the body is a hedge, never the proven callee. "
+                "split arm; a bridge crossing, slot_fns= the functions that field holds; a handler_rule reader), so the body is a hedge, never the proven callee; "
+                "a b with none of these is a proven call from the row above it, inside a route that stays proven=0. "
               : "";
 }
 inline std::string_view pathHopNextLegend( bool on ) noexcept

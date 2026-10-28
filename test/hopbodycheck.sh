@@ -55,6 +55,9 @@
 #   R2 [M] the route spew guard: a fifth route body is cut, capped="1" next="--expand=pump.py:45:_trace_message"
 #   R3 [M] the hop bound: the 4-hop bridge press -> on_event prints its rows 0..2 only (press, post_message, the loop)
 #   H4b[M] three `*p =` stores before the one call: 4 statement lines, never followed (pins the * comment rule alone)
+#   R6-R9 [M] FIX2 (review rv-phbf1): R6 a by-name bridge edge row's body carries via=name cands=2 (G1); R7 a > 4000 B route body is cut,
+#          truncated=1 lines= next= (G2); R8 a reader that is also a bridge row prints once (G3); R9 a slot crossing's body carries slot_fns=
+#          and the bare-b reading rides (S1, S4)
 #   R5 [G] the gain gate: inside a --for answer's graph-verb block the unreached path prints no route bodies
 #   R4 [G] RIPWIRE_NO_HOP_BODY=1: no route element; MCP path_between prints the CLI's route element byte for byte
 #
@@ -111,7 +114,7 @@ run "$LOO" --callees=handleLooseRequest >"$TMP/f4c"
 
 # FIX1 fixtures (the route ones run from a copy outside test/: a reader under a test path is not a handler_rule reader)
 HB="test/hopbodyfix"
-cp -R "$HB/route" "$HB/routecap" "$TMP/"
+cp -R "$HB/route" "$HB/routecap" "$HB/routename" "$HB/routebig" "$HB/routededupe" "$HB/routeslot" "$TMP/"
 run "$HB/byname" --path=startJ,sinkJ >"$TMP/h1"
 run "$HB/byname" --path=startJ,sinkJ --legend=full >"$TMP/h1f"
 run "$HB/declined" --for="how does relayWorkItem relay a work item" >"$TMP/h2a"
@@ -136,6 +139,11 @@ rrun route '--path=post_message,on_*' --legend=full >"$TMP/r1f"
 rrun routecap '--path=post_message,on_*' >"$TMP/r2"
 rrun route '--path=press,on_event' >"$TMP/r3"
 rrun route --for="Trace the path from post_message() to on_event()" >"$TMP/r5"
+rrun routename '--path=post_message,on_*' >"$TMP/r6"
+rrun routebig '--path=post_message,on_*' >"$TMP/r7"
+rrun routededupe '--path=post_message,on_*' >"$TMP/r8"
+rrun routeslot '--path=start_job,sink_write' >"$TMP/r9"
+rrun routeslot '--path=start_job,sink_write' --legend=full >"$TMP/r9f"
 ( cd "$TMP/route" && RIPWIRE_NO_HOP_BODY=1 "$BIN" "$TMP/route" --no-cache '--path=post_message,on_*' 2>/dev/null ) >"$TMP/r1.off"
 
 cat > "$TMP/chk.py" <<'PY'
@@ -270,6 +278,17 @@ check(b3 == ["press", "post_message", "_process_messages_loop"], "(R3) a 4-hop b
 g5 = (re.search(r'<graph_verb .*?</graph_verb>', rd("r5"), re.S) or re.search(r'$', rd("r5"))).group(0)
 check(g5 != "" and 'reachable="0"' in g5 and routel(g5) == "" and "bodies of=route" not in legend(rd("r5")), "(R5) a --for graph-verb path block prints no route bodies (the gain gate)")
 check(routel(rd("r1.off")) == "" and "bodies of=route" not in legend(rd("r1.off")), "(R4) RIPWIRE_NO_HOP_BODY=1: no route element, no clause")
+# FIX2 R6-R9 (lane path-hop-body-fix1, review rv-phbf1 G1/G2/G3/S1/S4: each arm is RED on its review mutant)
+rb = lambda f: {b[0].get("n"): b[0] for b in bodies(routel(rd(f)))}
+b6 = rb("r6")
+check(b6.get("dispatch_message", {}).get("via") == "name" and b6.get("dispatch_message", {}).get("cands") == "2", "(R6) a by-name edge row inside the bridge: its route body carries via=name cands=2, never bare (the edge-row hedge): %r" % b6.get("dispatch_message"))
+b7 = bodies(routel(rd("r7")))
+check(len(b7) == 4 and all(b[0].get("truncated") == "1" and re.fullmatch(r'1-\d+/\d+', b[0].get("lines", "")) and b[0].get("next", "").startswith("--expand=pump.py:") and len(b[1].encode()) <= 4000 for b in b7) and routel(rd("r7")).startswith('<bodies of="route" proven="0" shown="4" total="4" capped="1">'), "(R7) a route body over 4000 B is cut: truncated=1 lines= next=, <= 4000 B each, capped=1")
+b8 = bodies(routel(rd("r8"))); n8 = [b[0].get("n") for b in b8]
+check(n8 == ["post_message", "_process_messages_loop", "_dispatch_message", "_on_message"] and len(set(n8)) == len(n8), "(R8) a reader that is also a bridge row prints once and the true reader _on_message is still shown: %r" % n8)
+b9 = rb("r9")
+check(b9.get("run_fast", {}).get("via") == "slot" and b9.get("run_fast", {}).get("slot_callers") == "1" and b9.get("run_fast", {}).get("slot_fns") == "3", "(R9) a slot-crossing route body carries slot_fns= beside slot_callers= (S1): %r" % b9.get("run_fast"))
+check("proven call from the row above" in legend(rd("r9")) and "proven call from the row above" in legend(rd("r9f")), "(R9) the bare-b reading rides beside a hedged route, compact and full (S4)")
 for f in ("h1", "r1", "r2", "r3"):
     check(subprocess.run(["xmllint", "--noout", os.path.join(T, f)], capture_output=True).returncode == 0, "(X2) %s well-formed" % f)
 # X3
