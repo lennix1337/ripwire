@@ -2679,25 +2679,41 @@ inline bool spelledOutsideOwnSignature( const rw::IngestResult& ing, std::string
 }
 
 // D1: the text a library file contributes to the name vetting, or nullopt when it contributes none: a test file, a prose file
-// (markdown, .txt: a mention there is documentation, not a use) or an unreadable one (`unreadable` set: CR 4396503875, a failed
-// read is not an exclusion). A notebook is CODE in a JSON container, so its code and markdown cells are read as text
-// (docparse::extractIpynb) — a def only a notebook calls is in use.
-inline std::optional<std::string> libraryFileText( const rw::IngestResult& ing, std::uint32_t fileId, bool& unreadable )
+// (markdown, .txt: a mention there is documentation, not a use) or an unreadable one. A notebook is CODE in a JSON container,
+// so its code and markdown cells are read as text (docparse::extractIpynb) — a def only a notebook calls is in use.
+// CR 4396503875: an EXCLUDED file (libraryFileExcluded: a test or a prose file) and an UNREADABLE one both return nullopt here,
+// and the vetting tells them apart through libraryFileExcluded — a failed read is not an exclusion.
+inline bool libraryFileExcluded( const rw::IngestResult& ing, std::uint32_t fileId )
 {
     using namespace rw;
     const std::string_view rel = rootRelPath( ing, fileId );
     const std::string      ext = docparse::lowerExtOf( rel );
-    if( isTestPath( rel ) || ( ext != ".ipynb" && docparse::isProseExtension( ext ) ) )
+    return isTestPath( rel ) || ( ext != ".ipynb" && docparse::isProseExtension( ext ) );
+}
+inline std::optional<std::string> libraryFileText( const rw::IngestResult& ing, std::uint32_t fileId )
+{
+    using namespace rw;
+    if( libraryFileExcluded( ing, fileId ) )
     {
         return std::nullopt;
     }
+    const std::string          ext   = docparse::lowerExtOf( rootRelPath( ing, fileId ) );
     std::optional<std::string> bytes = docparse::detail::readWholeFile( diskPath( ing, fileId ) );
-    unreadable = !bytes;
     if( bytes && ext == ".ipynb" )
     {
         return docparse::extractIpynb( *bytes );
     }
     return bytes;
+}
+
+// CR 4396503875: the stderr lines of a vetting that could not read every library file (each file, then the consequence).
+inline void reportUnreadLibraryFiles( const rw::IngestResult& ing, const std::vector<std::uint32_t>& unread )
+{
+    for( const std::uint32_t fileId : unread )
+    {
+        rw::emitTo( stderr, "ripwire: --dead-code: cannot read {} — its uses of the test-only candidates are unknown\n", rw::rootRelPath( ing, fileId ) );
+    }
+    rw::emitTo( stderr, "ripwire: --dead-code: {} library file(s) could not be read, so no test-only row is listed (a row fewer, never a use missed)\n", unread.size() );
 }
 
 // D1 name vetting: drop every row whose name a NON-test, non-prose indexed file spells whole-word outside the def's own
@@ -2715,18 +2731,17 @@ inline void dropTestOnlySpelledInLibrary( const rw::IngestResult& ing, std::vect
     names.erase( std::ranges::unique( names ).begin(), names.end() );
     std::vector<std::string_view> spelled;
     std::vector<std::string>      globbed;   // module tails a library file glob-imports (owned: the file text is gone after its turn)
-    std::size_t                   unread = 0;   // library files the index lists that this vetting could not read
+    std::vector<std::uint32_t>    unread;   // library files the index lists that this vetting could not read
     for( std::uint32_t fileId = 0; fileId < ing.files.size(); ++fileId )
     {
-        bool                             unreadable = false;
-        const std::optional<std::string> text       = libraryFileText( ing, fileId, unreadable );
-        if( !text )
+        if( libraryFileExcluded( ing, fileId ) )
         {
-            if( unreadable )
-            {   // CR 4396503875: a file whose uses are unknown vets nothing, so no test-only claim is made on its behalf
-                ++unread;
-                rw::emitTo( stderr, "ripwire: --dead-code: cannot read {} — its uses of the test-only candidates are unknown\n", rootRelPath( ing, fileId ) );
-            }
+            continue;
+        }
+        const std::optional<std::string> text = libraryFileText( ing, fileId );
+        if( !text )
+        {   // CR 4396503875: a file whose uses are unknown vets nothing, so no test-only claim is made on its behalf
+            unread.push_back( fileId );
             continue;
         }
         for( std::string_view name : names )
@@ -2741,9 +2756,9 @@ inline void dropTestOnlySpelledInLibrary( const rw::IngestResult& ing, std::vect
             globbed.emplace_back( tail );
         }
     }
-    if( unread > 0 )
+    if( !unread.empty() )
     {
-        rw::emitTo( stderr, "ripwire: --dead-code: {} library file(s) could not be read, so no test-only row is listed (a row fewer, never a use missed)\n", unread );
+        reportUnreadLibraryFiles( ing, unread );
         testOnly.clear();
         return;
     }

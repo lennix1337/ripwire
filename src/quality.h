@@ -10280,6 +10280,25 @@ inline std::string_view pythonModuleTail( std::string_view relPath ) noexcept
     return namesplit::afterLast( relPath, "/" );
 }
 
+// CR 4396503848: the offset of the `import` keyword of a `from <module> import …` line, or npos for any other line. Any run of
+// spaces or tabs may stand around the keyword (`from ._impl  import *`); the keyword is a whole word between two of them.
+inline std::size_t pythonImportKeywordAt( std::string_view line ) noexcept
+{
+    const auto blank = [ & ]( std::size_t at ) noexcept { return at < line.size() && ( line[ at ] == ' ' || line[ at ] == '\t' ); };
+    if( !line.starts_with( "from" ) || !blank( 4 ) )
+    {
+        return std::string_view::npos;
+    }
+    for( std::size_t imp = line.find( "import" ); imp != std::string_view::npos; imp = line.find( "import", imp + 1 ) )
+    {
+        if( blank( imp - 1 ) && blank( imp + 6 ) )
+        {
+            return imp;
+        }
+    }
+    return std::string_view::npos;
+}
+
 // D1 fix round 1 (F3): the tail of every module a `from <module> import *` line in `text` names (`from ._impl import *` and
 // `from pkg._impl import *` both give "_impl"). A glob re-exports the module's public names through the importing package, so a
 // def in that module is part of the package's public surface even when no other file spells its name. Line-based text, not
@@ -10293,14 +10312,8 @@ inline std::vector<std::string_view> pythonGlobImportTails( std::string_view tex
         std::string_view  line = text.substr( at, eol - at );
         at                     = eol + 1;
         line.remove_prefix( std::min( line.find_first_not_of( " \t" ), line.size() ) );
-        // CR 4396503848: any run of spaces or tabs may stand around `import` (`from ._impl  import *`)
-        std::size_t imp = line.find( "import" );
-        while( imp != std::string_view::npos && !( imp > 0 && ( line[ imp - 1 ] == ' ' || line[ imp - 1 ] == '\t' )
-                                                   && imp + 6 < line.size() && ( line[ imp + 6 ] == ' ' || line[ imp + 6 ] == '\t' ) ) )
-        {
-            imp = line.find( "import", imp + 1 );
-        }
-        if( !( line.starts_with( "from " ) || line.starts_with( "from\t" ) ) || imp == std::string_view::npos )
+        const std::size_t imp = pythonImportKeywordAt( line );
+        if( imp == std::string_view::npos )
         {
             continue;
         }
