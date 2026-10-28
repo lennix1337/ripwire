@@ -74,6 +74,24 @@
 #   X7 [G] a glob led by a `mod` the file declares, X8 [G] `use super::*`, X9 [G] `use self::Kind::*` are in-tree: typed;
 #   X10 [G] tier 2 without a glob (`use ga::Gother` only) stays typed;  X11 [P] a glob inside a brace group
 #          (`use extcrate::{Alpha, prelude::*}`) is an out-of-tree glob too: hedged
+# FN-SLOT S2 (C/C++; fixture test/fnslotcpp/, its own root; model.h kVrSlotLangs Cpp row memberPointers, kVrSlotMacroCastMark):
+#   C1 [P] ninja's ToolFunc table: `{ …, &NinjaMain::ToolBrowse }` in `static const Tool kTools[]` → `(ninja.*options.tool->func)( … )`
+#          in real_main: called_by="real_main" via="slot" (typed: options is an Options, Options.tool a Tool), cands=2
+#   C2 [P] --callees: the `.*` call prints the typed slot Tool.func and its 2 method targets
+#   C3 [P] --for: slot_by="real_main" on NinjaMain::ToolBrowse, slot_fields="func=2@real_main" on Tool
+#   C4 [P] a header DECLARATION and its definition: `&Hdr::Run` targets the definition (hdr.cc), never the class's prototype
+#          (hdr.h);  C5 [P] a method only declared (`&Hdr::Stop`) targets its declaration
+#   N20 [G] two classes named Twin (namespaces a, b; a symbol's scope has no namespace): `&a::Twin::Go` is no row (never a guess)
+#   N21 [G] a member pointer in a plain variable `( ninja.*local )( … )` and `->*` (an ERROR node) are no slot calls
+#   N22 [G] `&helpers::freeFn` (a namespace function, not a method) is no row (floor);  N23 [G] an inline member-pointer field
+#          declarator `int ( Hdr2::*fn )( int )` (an ERROR node) makes no claim
+#   X20 [G] a Go field of the same name (x.Hook.cb) never joins the C++ Hook2.cb (family guard), nor the reverse
+#   H1 [P] htop's class tables: `.super = { .writeField = Linux_writeField }` nested in a ProcessClass literal keys the path
+#          super.writeField (ProcessClass.super is a RowClass) and `As_Row( this )->writeField( … )` keys the macro's cast type:
+#          called_by="Row_display" via="slot";  H2 [P] --callees prints the typed slot RowClass_.writeField, 1 target
+#   H3 [G] a macro casting to ANOTHER type (As_Other → OtherClass) never targets RowClass's store
+#   H4 [P] a macro of another shape (`Get_Klass( this )->writeField`) and H5 [P] a function call root (`row_class_of( this )->…`)
+#          join by the field name only: via="slot-name"
 #
 # Usage: bash test/fnslotcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -286,5 +304,42 @@ has   "X10 tier 2 without a glob stays typed" "$o" 'into="Gw.wcb" called_by="fir
 o="$( run --callers=nested_glob_t )"
 has   "X11 a glob inside a brace group hedges: slot-name" "$o" 'into="Gh.hcb" called_by="fire_gh" called_at="crates/gx/src/hk.rs:2" via="slot-name"'
 hasnt "X11b never typed" "$o" 'via="slot"'
+
+FIX="$ROOT/test/fnslotcpp"
+[ -d "$FIX" ] || { echo "  FAIL  fixture dir missing: $FIX"; exit 2; }
+o="$( run --callers=ToolBrowse )"
+has   "C1 &NinjaMain::ToolBrowse in the Tool table joins the .* call, typed" "$o" 'into="kTools[0][3]" called_by="real_main" called_at="src/tool.cc:33" via="slot" cands="2"'
+o="$( run --callees=real_main )"
+has   "C2 the .* call prints the typed slot and its 2 targets" "$o" 'through="(ninja.*options.tool-&gt;func)" slot="Tool.func" via="slot" targets="2" shown="2"><t n="NinjaMain.ToolBrowse" p="src/tool.cc:16"/><t n="NinjaMain.ToolClean" p="src/tool.cc:17"/>'
+o="$( run '--for=how does real_main run the Tool func ToolBrowse' )"
+has   "C3a slot_by= on the stored method" "$( row "$o" NinjaMain::ToolBrowse src/tool.cc )" 'slot_by="real_main"'
+has   "C3b slot_fields= on the Tool struct" "$( printf '%s' "$o" | grep -o '<d [^>]*n="Tool" sc="Tool" p="src/tool.cc"[^>]*>' | head -1 )" 'slot_fields="func=2@real_main"'
+o="$( run --callees=go_hdr )"
+has   "C4 &Hdr::Run targets its definition" "$o" '<t n="Hdr.Run" p="src/hdr.cc:2"/>'
+hasnt "C4b never the class's prototype of Run" "$o" '<t n="Hdr.Run" p="src/hdr.h:1"/>'
+has   "C5 a method only declared targets its declaration" "$o" '<t n="Hdr.Stop" p="src/hdr.h:1"/>'
+o="$( run --callers=Go )"
+hasnt "N20 two classes named Twin: &a::Twin::Go is no row" "$o" '<vr '
+o="$( run --callees=plain_var )"
+hasnt "N21 a member pointer in a plain variable, and ->*, are no slot calls" "$o" '<vs '
+o="$( run --callers=freeFn )"
+hasnt "N22 &helpers::freeFn (a namespace function) is no row" "$o" '<vr '
+o="$( run --callers=Walk )"
+hasnt "N23 an inline member-pointer field declarator makes no claim" "$o" 'called_by='
+o="$( run --callers=goTool )"
+hasnt "X20 the Go Hook.cb never joins a C++ cb field" "$o" 'fire_h2'
+o="$( run --callers=cpp_cb )"
+has   "X20a the C++ store keeps its own typed caller" "$o" 'called_by="fire_h2" called_at="src/twin_b.cc:6" via="slot"'
+hasnt "X20b nor does the Go call reach it" "$o" 'fireGo'
+o="$( run --callers=Linux_writeField )"
+has   "H1 a nested designated store meets the macro-cast call, typed" "$o" 'into="LinuxProcess_class.super.writeField" called_by="Row_display" called_at="c/row.c:2" via="slot"'
+o="$( run --callees=Row_display )"
+has   "H2 the macro-cast call prints the typed slot, 1 target" "$o" 'slot="RowClass_.writeField" via="slot" targets="1" shown="1"><t n="Linux_writeField" p="c/linux.c:2"/>'
+o="$( run --callees=Other_display )"
+hasnt "H3 a macro casting to another type never targets RowClass's store" "$o" 'Linux_writeField'
+o="$( run --callees=Klass_display )"
+has   "H4 a macro of another shape joins by the field name" "$o" 'slot=".writeField" via="slot-name"'
+o="$( run --callees=Fn_display )"
+has   "H5 a function call root joins by the field name" "$o" 'slot=".writeField" via="slot-name"'
 if [ "$fail" -eq 0 ]; then echo "fnslotcheck: PASS"; else echo "fnslotcheck: FAIL"; fi
 exit "$fail"

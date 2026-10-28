@@ -34,6 +34,9 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-28, lane fn-slot-s2 (C/C++ slots, base lane/fn-slot-2 7c1b7db5): RE-PINNED ONCE with UPDATE_GOLDEN=1 (127443d5… -> c39e21bb…).
+#   Watched text: kParserVer 249 -> 257, a PLACEHOLDER (the train renumbers; C++ member-pointer values and C nested / macro-cast
+#   slot rows are new extraction), its quality.h mirror with it. kCacheVersion stays 44 (no record changes shape).
 # 2026-10-27, lane fn-slot-2 (part 2: Rust slots, base lane/fn-slot f2e6ef1f): RE-PINNED ONCE with UPDATE_GOLDEN=1 (18dfbcac… -> 127443d5…).
 #   Watched text: kParserVer 247 -> 249, a PLACEHOLDER (train 41 renumbers; Rust files now record slot-join value rows, so the dead
 #   set is extraction-dependent), its quality.h mirror with it. kCacheVersion stays 44 (no record changes shape).

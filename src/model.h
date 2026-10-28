@@ -597,6 +597,10 @@ inline constexpr char kValueRefSlotParamScope = 'q';
 //     slot_join::RustTypeKeys; `Self` is resolved to the impl type by the extractor).
 // pathSep — a registrar may be an associated function reached by a PATH call (`CallEval::new( … )`): the argument row's callee
 //   is written `Owner<pathSep>name`, resolved to the owner type's function of that name ("" = bare callees only, never a method).
+// memberPointers — FN-SLOT S2 (C++): a pointer to MEMBER is a function value and its call a slot call. `&Cls::m` in a value
+//   position is a Value row naming m with memberRoot = Cls (resolved to Cls's method m only, never a namesake: valuerefindex.h
+//   ownedBy); `( obj.*x.f )( … )` is a slot call through field f of x's type (the `.*` proves f holds a member pointer, so no C++
+//   gate applies). Floors: `->*` (the grammar reads it as an ERROR node), a member pointer held in a plain variable.
 enum class VrSlotCallSide : std::uint8_t { ThroughRows, MemberCallByName, ParenFieldCall };
 enum class VrSlotTypeKey : std::uint8_t { TypedefFacts, PackageDir, ModuleType };
 struct VrSlotLang
@@ -606,12 +610,13 @@ struct VrSlotLang
     VrSlotCallSide   callSide;
     VrSlotTypeKey    typeKey;
     std::string_view pathSep;
+    bool             memberPointers = false;
 };
 inline constexpr VrSlotLang kVrSlotLangs[] = {
-    { Lang::C, true, VrSlotCallSide::ThroughRows, VrSlotTypeKey::TypedefFacts, "" },
-    { Lang::Cpp, false, VrSlotCallSide::ThroughRows, VrSlotTypeKey::TypedefFacts, "" },
-    { Lang::Go, false, VrSlotCallSide::MemberCallByName, VrSlotTypeKey::PackageDir, "" },
-    { Lang::Rust, false, VrSlotCallSide::ParenFieldCall, VrSlotTypeKey::ModuleType, "::" },
+    { Lang::C, true, VrSlotCallSide::ThroughRows, VrSlotTypeKey::TypedefFacts, "", false },
+    { Lang::Cpp, false, VrSlotCallSide::ThroughRows, VrSlotTypeKey::TypedefFacts, "", true },
+    { Lang::Go, false, VrSlotCallSide::MemberCallByName, VrSlotTypeKey::PackageDir, "", false },
+    { Lang::Rust, false, VrSlotCallSide::ParenFieldCall, VrSlotTypeKey::ModuleType, "::", false },
 };
 inline constexpr std::array<const VrSlotLang*, kLangCount> kVrSlotLangOf = []
 {
@@ -653,6 +658,10 @@ inline bool slotKeysOwnTypes( Lang l ) noexcept
 // name, so the join never reads it through an alias. A slot fact whose composeRel is kValueRefSlotBodyRel declares that its
 // owner's struct BODY is in this file (no field): one tag with bodies in two files is two types, so it joins nothing.
 inline constexpr char kValueRefSlotTagMark = '\x02';
+// FN-SLOT S2 (c): the slot type key of a call of a function-like macro `M( … )->f( … )` is "()M"; a macro whose body is one
+// pointer cast to a named type records an alias fact "()M" → that type (ingest_valuerefs.h noteMacroCast). A "()M" no fact
+// resolves (a function returning a pointer, a macro of another shape) is an unknown type: the name tier.
+inline constexpr std::string_view kVrSlotMacroCastMark = "()";
 inline constexpr char kValueRefSlotBodyRel = '{';
 
 // Essential-complexity ev_why= reason vocabulary (the essential-complexity design note, §5.1). PUBLIC the

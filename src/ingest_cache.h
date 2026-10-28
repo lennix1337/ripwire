@@ -361,7 +361,10 @@ constexpr std::uint32_t kCacheVersion = 44;           // 44: train 37b — rust-
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 249;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 257;          // bump on any grammar/.scm/extraction change
+                                                      // 257 = 2026-10-28 (lane fn-slot-s2, placeholder: the train renumbers): C++ `&Cls::m` value refs
+                                                      //   (memberRoot = Cls), `( o.*x.f )( … )` slot calls, C nested designated paths and macro-cast slot
+                                                      //   calls + their "()M" alias facts; no record format changed.
                                                       // 249 = 2026-10-27 (lane fn-slot-2, placeholder: train 41 renumbers): Rust files record the
                                                       //   slot join's records (ingest_rustslots.h: function-path arguments of path calls, field stores,
                                                       //   registrar parameter facts, `(x.f)( … )` slot calls); no record format changed.

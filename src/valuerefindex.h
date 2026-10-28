@@ -991,6 +991,10 @@ private:
         }
         std::string_view chain = r.memberPath;
         std::string      t     = r.memberCtor.empty() ? std::string() : unalias( canonType( r.memberCtor, r.fileId ), r.fileId );
+        if( t.starts_with( kVrSlotMacroCastMark ) )
+        {
+            t.clear();   // FN-SLOT S2 (c): a macro / function call root no cast fact resolves: the name tier
+        }
         for( std::size_t dot = chain.find( '.' ); dot != std::string_view::npos; dot = chain.find( '.' ) )
         {
             if( !t.empty() && t != kConflict )
@@ -1626,6 +1630,10 @@ private:
             const NodeId one = m_paths.nearestOf( it->second, r.fileId, at );
             return one == kNoNode ? std::vector<NodeId>{} : std::vector<NodeId>{ one };
         }
+        if( fam == VrLangFamily::C )
+        {
+            return memberOf( owner, fns );
+        }
         std::vector<NodeId> out;
         for( const NodeId id : fns )
         {
@@ -1637,6 +1645,43 @@ private:
             }
         }
         return out;
+    }
+    // FN-SLOT S2 (C++ `&Cls::m`): class `owner`'s method among `fns` — its definitions with a body (an out-of-line definition, or
+    // `#ifdef` / per-platform twins of it), else its bodyless declarations. A symbol's scope is the innermost class name only (no
+    // namespace), so when the repo defines TWO classes of that name the owner is not proven: no target (a floor, never a guess).
+    std::vector<NodeId> memberOf( std::string_view owner, std::span<const NodeId> fns ) const
+    {
+        if( classDefsNamed( owner ) > 1 )
+        {
+            return {};
+        }
+        std::vector<NodeId> bodies, decls;
+        for( const NodeId id : fns )
+        {
+            const Symbol& s = m_ing.symbols[id];
+            if( s.kind == SymKind::Method && valueRefFamily( s.lang ) == VrLangFamily::C && s.scope == owner )
+            {
+                ( s.sigEndByte < s.endByte ? bodies : decls ).push_back( id );
+            }
+        }
+        return bodies.empty() ? decls : bodies;
+    }
+    // How many C-family class / struct definitions (a body) the repo has named `name` (counted once, on first use).
+    std::size_t classDefsNamed( std::string_view name ) const
+    {
+        if( !m_classDefsBuilt )
+        {
+            m_classDefsBuilt = true;
+            for( const Symbol& s : m_ing.symbols )
+            {
+                if( ( s.kind == SymKind::Class || s.kind == SymKind::Struct ) && valueRefFamily( s.lang ) == VrLangFamily::C && s.sigEndByte < s.endByte )
+                {
+                    ++m_classDefs[ s.name ];
+                }
+            }
+        }
+        const auto it = m_classDefs.find( std::string( name ) );
+        return it == m_classDefs.end() ? 0 : it->second;
     }
     // fix1 F-1 / part-2 piece 4: the definitions an argument row's callee (recvVar) resolves to — a bare callee by resolveName;
     // a path callee `Owner::name` (a language whose slot row has a pathSep) by ownedBy, never by its bare last segment.
@@ -1809,6 +1854,8 @@ private:
 
     const IngestResult&                                  m_ing;
     HashMap<std::string, std::vector<NodeId>>            m_fnByName;
+    mutable HashMap<std::string, std::size_t>            m_classDefs;   // FN-SLOT S2: C-family class / struct name → definitions (classDefsNamed)
+    mutable bool                                         m_classDefsBuilt = false;
     HashMap<std::string, std::vector<NodeId>>            m_fnByOwner;   // part 2: "family#Owner::name" → a path language's owned functions
     slot_join::RustPaths                                 m_paths;       // part 2 fix 1: where a Rust path reaches, when a path language is indexed
     std::vector<std::uint8_t>                            m_pyMember;   // per symbol: 1 = a Python def directly in its class (empty: no Python)
