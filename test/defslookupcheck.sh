@@ -129,5 +129,13 @@ if grep -q '<alts' "$TMP/p5b.xml" && ! grep -q 'decl_only' "$TMP/p5b.xml"; then 
 run --path=ping,helperA >"$TMP/p5c.xml" 2>/dev/null
 if grep -q 'alts d decl_only=1: no body' "$TMP/p5c.xml"; then ok "P5: the default (compact) legend reads decl_only=1 on --path"; else no "P5: compact legend lacks the path decl_only reading: $( grep -o '<!--.*-->' "$TMP/p5c.xml" | head -c 200 )"; fi
 
+echo "-- (P6) an <alts> row whose sel= is NOT proven says so: the legend never claims it binds one alone (F7)"
+run --path=inner,helperA --legend=full >"$TMP/p6.xml" 2>/dev/null
+unp="$( grep -o '<alts .*</alts>' "$TMP/p6.xml" )"
+if printf '%s' "$unp" | grep -q 'sel_proven="0"' && grep -q 'except on a sel_proven=0 row' "$TMP/p6.xml" && xmllint --noout "$TMP/p6.xml" 2>/dev/null; then ok "P6: a sel_proven=0 alts row -> --legend=full carries the 'except on a sel_proven=0 row' reading; well-formed"; else no "P6: alts=$unp"; fi
+run --path=inner,helperA >"$TMP/p6c.xml" 2>/dev/null
+if grep -q 'alts d sel_proven=0: no spelling tried' "$TMP/p6c.xml"; then ok "P6: the default (compact) legend reads sel_proven=0 on --path"; else no "P6: compact legend lacks the path sel_proven reading"; fi
+if ! grep -q 'sel_proven' "$TMP/p5.xml" && ! grep -q 'sel_proven' "$TMP/p5c.xml"; then ok "P6 control: an <alts> whose sels are all proven carries no sel_proven text (present-only, both legends)"; else no "P6 control: sel_proven text on an all-proven <alts>"; fi
+
 [ "$fail" -eq 0 ] && echo "defslookupcheck: OK" || echo "defslookupcheck: FAILURES above"
 exit "$fail"

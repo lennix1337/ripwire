@@ -264,6 +264,7 @@ struct PathAlts
 {
     std::string xml;
     bool        declOnly = false;   // some printed row is decl_only=1 (its legend reading rides)
+    bool        unproven = false;   // some printed row is sel_proven="0": its sel= may bind more than that row (the legend says so)
     bool        any() const noexcept { return !xml.empty(); }
 };
 
@@ -300,6 +301,7 @@ inline void defAltsXml( PathAlts& acc, const IngestResult& ing, const DefLookup&
         {
             defRowXml( rows, ing, L, r, owners, /*compact=*/true );
             acc.declOnly = acc.declOnly || L.groups.bodyless[ r.group ];
+            acc.unproven = acc.unproven || !r.selProven;
             ++shown;
         }
     }
@@ -343,8 +345,9 @@ inline std::string defAltsLegend( const PathAlts& alts )
         return {};
     }
     return std::string( "<alts side= of=> lists the definitions the endpoint's name binds that this answer does not already print (the pick is "
-                        "not provably unique): sel= pastes as that endpoint to bind one alone, p= where it is, class=source|test; "
-                        "alts_shown=K defs=N: K of the other rows shown, next= pages the rest. " )
+                        "not provably unique): sel= pastes as that endpoint to bind one alone" )
+         + ( alts.unproven ? ", except on a sel_proven=0 row: no spelling tried binds that one alone, its sel= names the file and owner and may bind more" : "" )
+         + ", p= where it is, class=source|test; alts_shown=K defs=N: K of the other rows shown, next= pages the rest. "
          + ( alts.declOnly ? "decl_only=1: no body (a header declaration or interface contract), not a second definition. " : "" );
 }
 
