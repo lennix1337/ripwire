@@ -20,7 +20,7 @@ pub struct State { decls: Vec<Box<dyn Command>> }
 impl State {
     pub fn get_decl(&self, id: usize) -> &dyn Command { self.decls[id].as_ref() }
     pub fn boxed_decl(&self, id: usize) -> Box<dyn Command> { if id == 0 { Box::new(Ls) } else { Box::new(Cd) } }
-    pub fn any_decl<T: Command + Default>(&self) -> T { T::default() }
+    pub fn any_decl<T: Command>(&self) -> T { unimplemented!() }
 }
 pub struct Overlay;
 impl Overlay {
@@ -45,6 +45,6 @@ pub fn eval_unknown<S>(s: S, id: usize) -> i32 where S: Clone {
     decl.run(7)
 }
 pub fn eval_generic(state: &State) -> i32 {
-    let decl = state.any_decl::<Ls>();
+    let decl = state.any_decl();
     decl.run(8)
 }
