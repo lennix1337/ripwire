@@ -2779,8 +2779,10 @@ std::optional<int> runPath( const MainDispatch& d )
         const rw::PathTestTwin        pthTwin = srcGlob || dstGlob ? rw::PathTestTwin{} : rw::pathTestTwins( ing, g, { srcDefs, srcN, pthBound.from }, { dstDefs, dstN, pthBound.to }, pthShown );
         const std::vector<std::string_view> pthOwners = rw::pathHopOwners( ing, path );   // PATH-OWNERS: n="Owner.name" per hop
         const bool pthHasOwner = pthMarks.owner;
+        // D2 part 5 (defslookup.h): the other definitions of an endpoint whose pick is not provably unique, inline
+        const rw::PathAlts pthAlts = rw::pathAltsOf( ing, g, srcN, dstN, srcGlob, dstGlob, pthBound.from ? srcUsed : rw::kNoNode, pthBound.to ? dstUsed : rw::kNoNode );
         rw::emitTo( stdout, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
-                     "graph holds none. {}{}{}{}-->{}", ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ) + rw::viaNameLegend( pthHasVia )
+                     "graph holds none. {}{}{}{}-->{}", ( std::string( rw::defAltsLegend( pthAlts.any() ) ) + rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ) + rw::viaNameLegend( pthHasVia )
                                                          + rw::viaLinkLegend( pthHasLink ) + rw::anchorMissLegend( pthHasMiss )
                                                          + rw::splitArmLegend( pthHasSplit ) + rw::pathUnboundLegend( !pthBound.from || !pthBound.to )
                                                          + rw::memberOwnerLegend( pthHasOwner ) + rw::memberOwnerContainedLegend( pthMarks.ownerContained ) + std::string( rw::pathPairsLegend( pthPairs ) ) + rw::pathOrderLegend( pthPairs, pthTwin ) ).c_str(),
@@ -2810,6 +2812,7 @@ std::optional<int> runPath( const MainDispatch& d )
                      rw::pathNearSinkXml( ing, pthNear, pthSingleRoot, pthRootPrefix ) );
         // FE-B via="name", #409 via="link"/anchor="missing", attrib-multidef prov="split", PATH-OWNERS n="Owner.name": one emitter, shared with MCP path_between
         rw::emitPathAnswerRows( stdout, ing, g, pthPairs, path, pthOwners, pthSingleRoot, pthRootPrefix );   // TRACE-EP: pairs or today's rows, shared with MCP
+        rw::emitRaw( stdout, pthAlts.xml.c_str() );   // D2 part 5: empty when both picks are provably unique
         rw::emitTo( stdout, "</path>" );
         return 0;
     }
