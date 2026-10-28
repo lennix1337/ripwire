@@ -43,6 +43,7 @@
 #include "testmap.h"       // lane/t10-mcp-coverage: writeAffectedReport — the shared --affected / `affected` verb renderer
 #include "forgraphverb.h"   // FOR-ROUTE-DECLINED: the `for` verb's subject-read graph-verb block (the CLI twin's wrapper)
 #include "pathgaps.h"      // PATH-GAP: the shared gap analysis + clause of --path / path_between
+#include "hopbody.h"       // PATH-HOP-BODY: the middle hops' bodies of a reached path_between
 #include "pathpairs.h"     // TRACE-EP: the reaching definition pairs of --path / path_between
 
 #include <filesystem>      // §B6 M3: the shared root-path existence/directory check (mcpRootRefusal below)
@@ -3827,10 +3828,18 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     const PathTestTwin        ptTwin     = srcGlob || dstGlob ? PathTestTwin{} : pathTestTwins( ing, g, { srcDefs, from, ptBound.from }, { dstDefs, to, ptBound.to }, ptShown );   // zed-03, as on the CLI
     const std::vector<std::string_view> ptOwners = pathHopOwners( ing, pth );   // PATH-OWNERS, as on the CLI
     const bool                ptHasOwner = ptMarks.owner;
+    // PATH-HOP-BODY (src/hopbody.h), as on the CLI
+    const std::string_view    ptBodyRoot  = ptSingleRoot ? std::string_view( root ) : std::string_view();
+    const bool                ptBodiesOn  = !pth.empty() && hopBodiesOn();
+    const std::string         ptHopBodies = ptBodiesOn ? pathHopBodiesXml( ing, pathMiddleHops( ing, ptShown, {} ), ptBodyRoot ) : std::string();
+    std::string               ptRootAttrs = pathTestTwinRootAttrs( ing, pathPairsRootAttrs( ing, ptPairs, ptSingleRoot, ptRootPrefix ).rootAttrs, ptTwin, ptSingleRoot, ptRootPrefix );
+    const std::string         ptHopNext   = ptBodiesOn && ptRootAttrs.find( " next=\"" ) == std::string::npos ? pathMiddleHopNext( ing, ptShown, ptBodyRoot ) : std::string();
+    ptRootAttrs += ptHopNext.empty() ? std::string() : nextAttrXml( ptHopNext );
     rw::emitTo( mem, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                        "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + ptKindLegend
                                                            + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to )
-                                                           + memberOwnerLegend( ptHasOwner ) + memberOwnerContainedLegend( ptMarks.ownerContained ) + std::string( pathPairsLegend( ptPairs ) ) + pathOrderLegend( ptPairs, ptTwin ) ).c_str(),
+                                                           + memberOwnerLegend( ptHasOwner ) + memberOwnerContainedLegend( ptMarks.ownerContained ) + std::string( pathPairsLegend( ptPairs ) ) + pathOrderLegend( ptPairs, ptTwin )
+                                                           + std::string( pathHopBodiesLegend( !ptHopBodies.empty() ) ) + std::string( pathHopNextLegend( !ptHopNext.empty() ) ) ).c_str(),
                   ( std::string( toValueRefsLegend( ptToValueRefs.count > 0 ) ) + valueRefsDepthLegend( ptToValueRefs.depthCut.files > 0 ) ).c_str(),
                   ( pathGapsLegend( ptGaps.any(), !ptSinkCallers.empty() ) + pathBridgeLegend( ptBridge )
                     + nearSinkLegend( ptNear ) + std::string( pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
@@ -3840,7 +3849,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
                   ptBound.to ? " to_p=\"" + loc( dstUsed ) + "\"" : std::string(),
                   srcDefs.size(), dstDefs.size(), ( unprovenDefsAttrXml( unprovenDefs ) + pathGlobAttrXml( srcGlob, dstGlob ) ).c_str(),   // H1: as the CLI root carries it; ix2-slice: a glob endpoint
                   pth.empty() ? 0 : 1, ptShown.empty() ? std::size_t( 0 ) : ptShown.size() - 1,
-                  ( pathTestTwinRootAttrs( ing, pathPairsRootAttrs( ing, ptPairs, ptSingleRoot, ptRootPrefix ).rootAttrs, ptTwin, ptSingleRoot, ptRootPrefix ) + ptRootAttr ).c_str(),
+                  ( ptRootAttrs + ptRootAttr ).c_str(),
                   graphCountFloorAttrXml( g ).c_str()  );   // M15: gauge + marker
     rw::emitTo( mem, "{}{}", countAttrXmlOrEmpty( "to_value_refs", ptToValueRefs.count ),   // absent at zero, as on the CLI
                   valueRefsDepthAttrXml( ing, ptToValueRefs.depthCut, VrRender{ ptSingleRoot, ptRootPrefix } ).c_str() );   // + the depth cut, as the CLI
@@ -3850,6 +3859,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     rw::emitTo( mem, "{}>{}{}{}", ptUnreached.rootAttrs, ptUnreached.rows, pathBridgeXml( ing, g, ptBridge, ptSingleRoot, ptRootPrefix ),
                   pathNearSinkXml( ing, ptNear, ptSingleRoot, ptRootPrefix ) );
     emitPathAnswerRows( mem, ing, g, ptPairs, pth, ptOwners, ptSingleRoot, ptRootPrefix );   // the CLI's own row emitter (pathpairs.h / defattrib.h)
+    rw::emitRaw( mem, ptHopBodies.c_str() );   // PATH-HOP-BODY, as on the CLI
     rw::emitRaw( mem, "</path>" );
     return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }

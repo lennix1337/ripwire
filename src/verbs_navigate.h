@@ -4,6 +4,7 @@
 #endif
 
 #include "infra/emit.h" // rw::emitTo — THE emitter (std::print, or std::format+fputs where <print> is absent)
+#include "hopbody.h"   // PATH-HOP-BODY: the middle hops' bodies of a reached --path
 #include "typeuse.h"   // L7: --impact of a type seeds its walk from the symbols that name it
 #include <string_view>       // std::string_view — the %.*s (precision, pointer) pair collapses to one view
 
@@ -2476,7 +2477,9 @@ std::optional<int> runExternalSurface( const MainDispatch& d )
     return std::nullopt;
 }
 
-std::optional<int> runPath( const MainDispatch& d )
+// served: bodies the enclosing answer already carries (the --for graph-verb block passes its fold's and slot's); a middle hop among them
+// prints no second copy (hopbody.h). The bare --path passes none.
+std::optional<int> runPathServed( const MainDispatch& d, std::span<const rw::NodeId> served )
 {
     using namespace rw;
     const Config&                     cfg          = d.cfg;
@@ -2613,11 +2616,19 @@ std::optional<int> runPath( const MainDispatch& d )
         const rw::PathTestTwin        pthTwin = srcGlob || dstGlob ? rw::PathTestTwin{} : rw::pathTestTwins( ing, g, { srcDefs, srcN, pthBound.from }, { dstDefs, dstN, pthBound.to }, pthShown );
         const std::vector<std::string_view> pthOwners = rw::pathHopOwners( ing, path );   // PATH-OWNERS: n="Owner.name" per hop
         const bool pthHasOwner = pthMarks.owner;
+        // PATH-HOP-BODY (src/hopbody.h): a reached chain of <= 3 hops prints its middle hops' bodies; a longer one names the first in next=
+        const std::string_view   pthBodyRoot  = pthSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view();
+        const bool               pthBodiesOn  = !path.empty() && rw::hopBodiesOn();
+        const std::string        pthHopBodies = pthBodiesOn ? rw::pathHopBodiesXml( ing, rw::pathMiddleHops( ing, pthShown, served ), pthBodyRoot ) : std::string();
+        std::string              pthRootAttrs = rw::pathTestTwinRootAttrs( ing, rw::pathPairsRootAttrs( ing, pthPairs, pthSingleRoot, pthRootPrefix ).rootAttrs, pthTwin, pthSingleRoot, pthRootPrefix );
+        const std::string        pthHopNext   = pthBodiesOn && pthRootAttrs.find( " next=\"" ) == std::string::npos ? rw::pathMiddleHopNext( ing, pthShown, pthBodyRoot ) : std::string();
+        pthRootAttrs += pthHopNext.empty() ? std::string() : rw::nextAttrXml( pthHopNext );
         rw::emitTo( stdout, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                      "graph holds none. {}{}{}{}-->{}", ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ) + rw::viaNameLegend( pthHasVia )
                                                          + rw::viaLinkLegend( pthHasLink ) + rw::anchorMissLegend( pthHasMiss )
                                                          + rw::splitArmLegend( pthHasSplit ) + rw::pathUnboundLegend( !pthBound.from || !pthBound.to )
-                                                         + rw::memberOwnerLegend( pthHasOwner ) + rw::memberOwnerContainedLegend( pthMarks.ownerContained ) + std::string( rw::pathPairsLegend( pthPairs ) ) + rw::pathOrderLegend( pthPairs, pthTwin ) ).c_str(),
+                                                         + rw::memberOwnerLegend( pthHasOwner ) + rw::memberOwnerContainedLegend( pthMarks.ownerContained ) + std::string( rw::pathPairsLegend( pthPairs ) ) + rw::pathOrderLegend( pthPairs, pthTwin )
+                                                         + std::string( rw::pathHopBodiesLegend( !pthHopBodies.empty() ) ) + std::string( rw::pathHopNextLegend( !pthHopNext.empty() ) ) ).c_str(),
                      ( std::string( rw::toValueRefsLegend( pthToValueRefs.count > 0 ) ) + rw::valueRefsDepthLegend( pthToValueRefs.depthCut.files > 0 ) ).c_str(),
                      ( rw::pathGapsLegend( pthGaps.any(), !pthSinkCallers.empty() ) + rw::pathBridgeLegend( pthBridge )
                        + rw::nearSinkLegend( pthNear ) + std::string( rw::pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
@@ -2627,7 +2638,7 @@ std::optional<int> runPath( const MainDispatch& d )
                      pthBound.to ? " to_p=\"" + loc( dstUsed ) + "\"" : std::string(),
                      srcDefs.size(), dstDefs.size(), ( rw::unprovenDefsAttrXml( pthUnprovenDefs ) + rw::pathGlobAttrXml( srcGlob, dstGlob ) ).c_str(),   // H1: beside the defs counts it is not in; ix2-slice: a glob endpoint
                      path.empty() ? 0 : 1, pthShown.empty() ? std::size_t( 0 ) : pthShown.size() - 1,
-                     ( rw::pathTestTwinRootAttrs( ing, rw::pathPairsRootAttrs( ing, pthPairs, pthSingleRoot, pthRootPrefix ).rootAttrs, pthTwin, pthSingleRoot, pthRootPrefix ) + pthRootAttr ).c_str(),
+                     ( pthRootAttrs + pthRootAttr ).c_str(),
                      rw::graphCountFloorAttrXml( g ).c_str() );
         // absent at zero: byte-identical otherwise; the depth cut beside it makes the count (or its absence) a floor
         rw::emitTo( stdout, "{}{}", rw::countAttrXmlOrEmpty( "to_value_refs", pthToValueRefs.count ),
@@ -2644,10 +2655,16 @@ std::optional<int> runPath( const MainDispatch& d )
                      rw::pathNearSinkXml( ing, pthNear, pthSingleRoot, pthRootPrefix ) );
         // FE-B via="name", #409 via="link"/anchor="missing", attrib-multidef prov="split", PATH-OWNERS n="Owner.name": one emitter, shared with MCP path_between
         rw::emitPathAnswerRows( stdout, ing, g, pthPairs, path, pthOwners, pthSingleRoot, pthRootPrefix );   // TRACE-EP: pairs or today's rows, shared with MCP
+        rw::emitRaw( stdout, pthHopBodies.c_str() );   // PATH-HOP-BODY: after the hop rows they explain ("" when none)
         rw::emitTo( stdout, "</path>" );
         return 0;
     }
     return std::nullopt;
+}
+
+std::optional<int> runPath( const MainDispatch& d )
+{
+    return runPathServed( d, {} );
 }
 
 std::optional<int> runConnect( const MainDispatch& d )

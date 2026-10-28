@@ -30,6 +30,7 @@
 // RIPWIRE_NO_BODY_FOLD (any value) turns the fold off — the A/B handle, the RIPWIRE_NO_BODY_SLOT precedent.
 
 #include "commentcoherence.h"   // isCommentStopword — the member slice's question words
+#include "hopbody.h"    // renderBodyElement, spanInside / overlapsServed — the one body render and containment reading
 #include "forowner.h"   // isParsedMemberOf — a class's members BY THE PARSER (the body slot's member reading)
 #include "lexical.h"    // subtokens, isRouteStopword, lexicalScanText — a sliced class's member text, read as the index read it
 #include "model.h"
@@ -169,27 +170,7 @@ inline bool holdsWord( std::string_view text, const std::vector<std::string>& wo
 // front of the <b>. nullopt when the buffer failed or the span rendered nothing.
 inline std::optional<std::string> renderOneBody( const BodyFoldInputs& in, NodeId id )
 {
-    static const std::vector<std::uint32_t> kNoOff;
-    static const std::vector<NodeId>        kNoTargets;
-    static const std::vector<std::uint8_t>  kNoNameOnly;
-    ChargedSection sec = chargeSection( [ & ]( std::FILE* f )
-        { packBodies( f, in.ing, { id }, /*budgetBytes=*/0, kNoOff, kNoTargets, CalleeEdgeBytes( kNoNameOnly ), in.compress, in.redact,
-                      /*ranges=*/nullptr, /*notes=*/nullptr, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/false,
-                      /*withFileContext=*/false, in.rootArg, &in.lensRank, {} ); },
-        kBytesPerTokenBody );
-    if( !sec.isRendered )
-    {
-        return std::nullopt;
-    }
-    std::string&      x     = sec.xml;
-    const std::size_t open  = x.find( "<bodies shown=" );
-    const std::size_t close = open == std::string::npos ? std::string::npos : x.find( '>', open );
-    constexpr std::string_view kClose = "</bodies>";
-    if( close == std::string::npos || !x.ends_with( kClose ) || x.find( "<b t=\"", close ) == std::string::npos )
-    {
-        return std::nullopt;   // an unreadable span renders an empty envelope: nothing to serve
-    }
-    return x.substr( 0, open ) + x.substr( close + 1, x.size() - kClose.size() - close - 1 );
+    return renderBodyElement( in.ing, id, /*capBytes=*/0, in.compress, in.redact, in.rootArg, &in.lensRank );
 }
 
 inline std::string skipRow( const BodyFoldInputs& in, NodeId id, std::string& escapedNext )
@@ -210,27 +191,8 @@ inline std::string skipRow( const BodyFoldInputs& in, NodeId id, std::string& es
     return x;
 }
 
-// does a's text lie inside b's: the same file and b's span holds a's (two equal spans: the later id is the inner one). A body
-// inside another the answer serves is already there — the fold serves each text once (FIX1 N2).
-inline bool spanInside( const IngestResult& ing, NodeId a, NodeId b ) noexcept
-{
-    const Symbol& x = ing.symbols[a];
-    const Symbol& y = ing.symbols[b];
-    return a != b && x.fileId == y.fileId && y.sigStartByte <= x.sigStartByte && x.endByte <= y.endByte
-        && ( y.sigStartByte < x.sigStartByte || x.endByte < y.endByte || b < a );
-}
-// does a's text overlap a body in `ids` the answer already serves: a is one of them or lies inside one, or (orHolds) holds one
-inline bool overlapsServed( const IngestResult& ing, NodeId a, const std::vector<NodeId>& ids, bool orHolds ) noexcept
-{
-    for( const NodeId b : ids )
-    {
-        if( a == b || spanInside( ing, a, b ) || ( orHolds && spanInside( ing, b, a ) ) )
-        {
-            return true;
-        }
-    }
-    return false;
-}
+// spanInside / overlapsServed (each text once, FIX1 N2) live in hopbody.h, the one containment reading the fold and the
+// path hop bodies share.
 
 // a class's direct members by the parser (isParsedMemberOf), in source order; one nested in another member is inside that
 // member's text, so it is not a member of its own

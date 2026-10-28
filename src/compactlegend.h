@@ -864,6 +864,8 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // STRING-KEYED (src/pathgaps.h kNearSinkNameKeyLegend): present-only, read only on an ns row whose site is a name-key lookup
     { "via", "ns via=name-key cands=K: why=declined here is a template lookup by name (getattr(o, 'do_' + c), o['handle' + e]) in=, naming K definitions incl. this one; matched, never traced, the bridge crosses at most 16; a hedge", true, "ns", MapHeaderRead::No, "name-key", "path" },
     { "withheld", "ns withheld=name:N: N callers whose by-name calls fail a name rule; not counted as a way in, never external", true, "ns", MapHeaderRead::No, {}, "path" },
+    // PATH-HOP-BODY (src/hopbody.h): present-only, read only on a reached path's <bodies of="hops"> (value-qualified)
+    { "of", "bodies of=hops: the body of the middle hop (never an endpoint) of a shown chain of 2 hops; b t= l= p= n= as expand prints it, no callee rows, whole up to 4000 B", true, "bodies", MapHeaderRead::No, "hops", "path" },
     // quality-delta: src/verbs_quality.h (root emit) + src/quality.h identityDisclosure
     { "stale", "stale=N: ack ledger rows whose target no longer applies (sa rows); never gating", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     // idea #11 (lane lean-trio): present-only, on a regression-free answer whose stale sa rows were collapsed to counts

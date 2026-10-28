@@ -7,7 +7,9 @@
 #   (p1) path form: the --path answer for the two named symbols, reachable="1", once, right before </ctx>, well-formed
 #   (p2) the qualifier tail is cut (to_span= stops before "for"), and `main` is the one plain word that is an endpoint
 #   (c1) callers form: the --callers answer (both callers listed); (c2) the qualifier tail "with ..." is cut
-#   (v1)/(v2) the block's verb answer is byte-identical to the bare --path= / --callers= call (default caps, compact legend)
+#   (v1)/(v2) the block's verb answer is byte-identical to the bare --path= / --callers= call (default caps, compact legend);
+#        v1 under RIPWIRE_NO_HOP_BODY=1 (the pre-PATH-HOP-BODY premise). (v1b) hop bodies on: identical but for a middle hop body
+#        whose text the --for answer already carries outside the block (src/hopbody.h; not printed twice)
 #   (m1) common-callers form: the --connect answer for both names
 #   (t1) an unresolved last-first candidate falls through to the next one, and tried="2" says so
 #   (n1) "path from X to serialising a dict" does NOT fire, though `dict` is a symbol here
@@ -99,14 +101,36 @@ import re, sys
 s = open( sys.argv[1], encoding="utf8", errors="replace" ).read()
 m = re.search( r"<graph_verb [^>]*>(.*)</graph_verb></ctx>$", s, re.S )
 sys.stdout.write( m.group( 1 ) if m else "NO-BLOCK" )' "$1"; }
-for arm in "v1|p1|--path=startEntry,leaf_sink" "v2|c1|--callers=leaf_sink"
+# (v1) under the PATH-HOP-BODY A/B handle (src/hopbody.h), so its premise is the pre-lane one: the block's bytes ARE the bare call's.
+# With hop bodies on, (v1b) below states the one by-design difference.
+RIPWIRE_NO_HOP_BODY=1 run --for="path from startEntry to leaf_sink" >"$TMP/p1off.xml"
+for arm in "v1|p1off|--path=startEntry,leaf_sink" "v2|c1|--callers=leaf_sink"
 do
     id="${arm%%|*}"; rest="${arm#*|}"; src="${rest%%|*}"; flag="${rest#*|}"
-    run "$flag" >"$TMP/$id.bare"; inner "$TMP/$src.xml" >"$TMP/$id.inner"
+    if [ "$id" = v1 ]; then RIPWIRE_NO_HOP_BODY=1 run "$flag" >"$TMP/$id.bare"; else run "$flag" >"$TMP/$id.bare"; fi
+    inner "$TMP/$src.xml" >"$TMP/$id.inner"
     if [ -s "$TMP/$id.bare" ] && cmp -s "$TMP/$id.bare" "$TMP/$id.inner"
     then ok "($id) the block's verb answer is byte-identical to the bare $flag call (same default caps, same compact legend)"
     else no "($id) the block's verb answer differs from the bare $flag call ($( wc -c <"$TMP/$id.inner" ) vs $( wc -c <"$TMP/$id.bare" ) B)"; fi
 done
+
+# (v1b) PATH-HOP-BODY, hop bodies on: the block is the bare call, except that a middle hop body whose text the --for answer
+# already carries (outside the block) is not printed twice — then the bare call's <bodies of="hops"> and its legend reading are the
+# whole difference. A middle hop the answer does not carry stays in the block byte for byte.
+run --path=startEntry,leaf_sink >"$TMP/v1b.bare"; inner "$TMP/p1.xml" >"$TMP/v1b.inner"
+if python3 - "$TMP/v1b.bare" "$TMP/v1b.inner" "$TMP/p1.xml" <<'PY'
+import re, sys
+bare, inner, full = (open(f, encoding="utf8", errors="replace").read() for f in sys.argv[1:4])
+if bare == inner: sys.exit(0)
+el = re.search(r'<bodies of="hops".*?</bodies>', bare, re.S)
+if not el or '<bodies of="hops"' in inner: sys.exit(1)
+outside = full.split("<graph_verb ", 1)[0]
+held = all(re.search(r'<b [^>]*p="%s"' % re.escape(m.group(1)), outside) for m in re.finditer(r'<b [^>]*p="([^"]*)"', el.group(0)))
+nolegend = lambda t: re.sub(r'<!--.*?-->', '', t, flags=re.S)   # its present-only readings (bodies of=, the window) go with it; (v1) pins the legend
+sys.exit(0 if held and nolegend(bare.replace(el.group(0), "")) == nolegend(inner) else 1)
+PY
+then ok "(v1b) hop bodies on: the block is the bare --path call, less only a middle hop body the answer already carries"
+else no "(v1b) hop bodies on: the block differs from the bare --path call beyond the already-carried middle hop body"; fi
 
 run --for="common callers of mid_hop and other_caller" >"$TMP/m1.xml"
 f="$( facts "$TMP/m1.xml" )"

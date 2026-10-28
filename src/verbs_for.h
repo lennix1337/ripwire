@@ -2652,6 +2652,7 @@ struct ForLensPassMode
 };
 // the verb sections (verbs_navigate.h) come later in this translation unit; the --for block calls their CLI entry points
 std::optional<int> runPath( const MainDispatch& d );
+std::optional<int> runPathServed( const MainDispatch& d, std::span<const rw::NodeId> served );
 std::optional<int> runCallHierarchy( const MainDispatch& d );
 std::optional<int> runConnect( const MainDispatch& d );
 
@@ -2659,7 +2660,7 @@ std::optional<int> runConnect( const MainDispatch& d );
 // gets that verb's DEFAULT answer inside <graph_verb endpoints="subject">, just before </ctx>, on the graph this run built
 // (no re-index). Every byte before it is the ordinary answer; nothing resolves → nothing is printed. XML only (the
 // --json / columnar dialects keep their single document; the verb is one call away there).
-inline void appendSubjectGraphVerb( const MainDispatch& d )
+inline void appendSubjectGraphVerb( const MainDispatch& d, std::span<const rw::NodeId> served )
 {
     const rw::Config& cfg = d.cfg;
     if( cfg.json || cfg.columnar || cfg.candidates || d.multiRoot )
@@ -2694,7 +2695,7 @@ inline void appendSubjectGraphVerb( const MainDispatch& d )
     {
         switch( args->form )
         {
-            case rw::GraphSubjectForm::Path: (void)runPath( sd ); break;
+            case rw::GraphSubjectForm::Path: (void)runPathServed( sd, served ); break;
             case rw::GraphSubjectForm::Callers: (void)runCallHierarchy( sd ); break;
             case rw::GraphSubjectForm::Common: (void)runConnect( sd ); break;
         }
@@ -4405,7 +4406,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             rw::emitChargedSection( stdout, graphSection, [ & ]{ packGraphBlock( stdout, ing, lensRank, g.outOff, g.outTargets ); } );
         }
-        appendSubjectGraphVerb( d );   // FOR-ROUTE-DECLINED: "" unless the task is spelled as a graph question that resolves
+        appendSubjectGraphVerb( d, servedAnswerBodies().bodies );   // FOR-ROUTE-DECLINED: "" unless the task is spelled as a graph question that resolves; the bodies this answer carries print no second copy in its path hop bodies
 
         rw::emitRaw( stdout, "</ctx>" );
         reportRedactions( stderr, redactCounts );
