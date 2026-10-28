@@ -1246,6 +1246,11 @@ public:
         }
         return isAncestor( member, site ) || isAncestor( site, member );
     }
+    // Is class `base` an ancestor of class `c` (through the bound written bases)?
+    bool descendsFrom( NodeId c, NodeId base ) const
+    {
+        return isAncestor( c, base );
+    }
 
 private:
     struct ClassSpan
