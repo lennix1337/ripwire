@@ -17,7 +17,8 @@ impl Renderer for Html {
 }
 
 pub fn build_book(r: &dyn Renderer) -> String {
-    let mut out = String::new();
-    r.render(&mut out);
-    out
+    let mut text = String::with_capacity(64);
+    r.render(&mut text);
+    text.push('\n');
+    text
 }

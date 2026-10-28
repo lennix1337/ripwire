@@ -125,7 +125,8 @@ n1(){ local dir="$1" task="$2" why="$3"
     else no "(N1) an element or clause rode on $why: [$( hop "$TMP/n1" )]"; fi
 }
 n1 "$F/rs" "build_book" "the bare subject (name-exact, its body makes the iface call)"
-run "$F/rs" --for=build_book | grep -q 'route="name-exact(build_book)' && ok "(N1pre) the bare subject routes name-exact (the task-names guard, not the route, holds it)" || no "(N1pre) build_book did not route name-exact"
+run "$F/rs" --for=build_book | grep -q 'route="name-exact(build_book)'
+verdict $? "(N1pre) the bare subject routes name-exact (the task-names guard, not the route, holds it)" "(N1pre) build_book did not route name-exact"
 n1 "$F/cpp" "Loader::Load the Fetch" "the call as a bare word"
 n1 "$F/cppwrap" "CachedSource::Fetch inner_->Fetch" "a wrapper calling its own name"
 n1 "$F/cpp" "DiskSource src_->Fetch" "a type subject"
@@ -134,9 +135,8 @@ if run "$F/ladder" "--for=dispatch_job job.run" | grep -q 'route="name-exact(' &
     ok "(N1pre) the ladder fixture routes name-exact and its job.run IS declined with 2 candidates (the gate=iface guard holds it)"
 else no "(N1pre) the ladder fixture's premise failed"; fi
 run "$F/cppwrap" "--for=CachedSource::Fetch inner_->Fetch" --legend=full >"$TMP/n1w"
-grep -q 'route="name-exact(' "$TMP/n1w" && run "$F/cppwrap" --callees=CachedSource::Fetch --legend=full | grep -q 'gate="iface"' \
-    && ok "(N1pre) the wrapper routes name-exact and its call IS iface-declined (the guard, not the premise, holds it)" \
-    || no "(N1pre) the wrapper fixture's premise failed (route or the iface decline)"
+grep -q 'route="name-exact(' "$TMP/n1w" && run "$F/cppwrap" --callees=CachedSource::Fetch --legend=full | grep -q 'gate="iface"'
+verdict $? "(N1pre) the wrapper routes name-exact and its call IS iface-declined (the guard, not the premise, holds it)" "(N1pre) the wrapper fixture's premise failed (route or the iface decline)"
 
 # ── N2 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 for flag in --json --signatures-only --token-budget=3000; do
@@ -165,7 +165,7 @@ else no "(M1b) MCP one-candidate element: [$H2M]"; fi
 
 # ── X ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 run "$F/rs" "--for=build_book r.render" >"$TMP/x1"
-cmp -s "$TMP/p3" "$TMP/x1" && ok "(X1) deterministic" || no "(X1) two runs differ"
+cmp -s "$TMP/p3" "$TMP/x1"; verdict $? "(X1) deterministic" "(X1) two runs differ"
 if command -v xmllint >/dev/null 2>&1; then
     for f in p1 p2 p3 p4f; do xmllint --noout "$TMP/$f" 2>/dev/null || no "(X2) $f is not well-formed XML"; done
     ok "(X2) xmllint checked"
