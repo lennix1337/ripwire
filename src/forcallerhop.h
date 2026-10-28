@@ -290,10 +290,7 @@ inline bool forBodyHoldsTaskMessage( const std::string& src, const Symbol& s, co
     bool                     found = false;
     std::vector<std::string> parts;
     std::vector<char>        hit;
-    scanCodeTokens( src, s.sigStartByte, s.endByte,
-                    CodeScanOptions{ .stripHashComments = usesHashLineComments( s.lang ), .munchMultiByteOperators = false,
-                                     .singleQuoteStrings = usesSingleQuoteStrings( s.lang ), .slashComments = s.lang != Lang::Python,
-                                     .tripleQuoteStrings = s.lang == Lang::Python },
+    scanCodeTokens( src, s.sigStartByte, s.endByte, stringAwareScanOptions( s.lang, /*munchMultiByteOperators=*/false ),
                     [ & ]( std::string_view token, CodeTokenKind kind )
                     {
                         if( found || kind != CodeTokenKind::String )

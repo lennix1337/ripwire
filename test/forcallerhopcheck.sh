@@ -40,7 +40,7 @@
 #   R12 [G] WHOLE WORD: failover, throwaway, terror, ErrorKind, raiser, crashpad, failsafe, errorless carry none (kills a substring match)
 #   R13 [P] an explanation question (How does ... / Explain ... / Describe ...) carries none; [G] a where-question with a message-bearing row does
 #   R14 [P] F5: the seed is the narrow funnel whose own body holds a string literal with >= 2 task words (rankword: lookup_word r=3, not
-#       command_not_found_hook r=1); R15 [P] a question with no message-bearing narrow funnel carries none (a statement keeps R3's fallback)
+#       command_not_found_hook r=1; hook_user r=2 holds a ONE-word literal, below the bar); R15 [P] a question with no message-bearing narrow funnel carries none (a statement keeps R3's fallback)
 #   R16 [P] F2: a seed whose only first-hop caller is a by-name match (Go interface, Python duck typing) carries none (rankgo, rankpy)
 #   X1 [G] determinism  X2 [G] xmllint well-formed  X3 [G] no "--" inside a legend comment
 #
@@ -339,29 +339,29 @@ rk_hop(){   # $1 task -> prints "R" when verify_dag is r=1 on a ranked route, th
 }
 for w in panicked panic Traceback raises raise throws throw segfault crashed crash failing failed fail exception errors DependencyCycleError dependency_cycle_error ValueError IOException; do
     got="$( rk_hop "dependency cycle $w" )"
-    [ "$got" = RH ] && ok "(R11) [P] the task word '$w' is an error word: the ranked hop rides" || no "(R11) '$w' did not fire the ranked hop (got [$got], want RH)"
+    [ "$got" = RH ]; verdict $? "(R11) [P] the task word '$w' is an error word: the ranked hop rides" "(R11) '$w' did not fire the ranked hop (got [$got], want RH)"
 done
 for w in failover throwaway terror ErrorKind raiser crashpad failsafe errorless; do
     got="$( rk_hop "dependency cycle $w" )"
-    [ "$got" = R ] && ok "(R12) [G] '$w' is not a whole error word: no ranked hop (kills a substring match)" || no "(R12) '$w' fired the ranked hop or left the premise (got [$got], want R)"
+    [ "$got" = R ]; verdict $? "(R12) [G] '$w' is not a whole error word: no ranked hop (kills a substring match)" "(R12) '$w' fired the ranked hop or left the premise (got [$got], want R)"
 done
 for q in "How does the dependency cycle error work?" "Explain the dependency cycle error" "Describe how a dependency cycle error is raised"; do
     got="$( rk_hop "$q" )"
-    [ "$got" = R ] && ok "(R13) [P] an explanation question gets no ranked hop: $q" || no "(R13) an explanation question fired (or left the premise): $q (got [$got], want R)"
+    [ "$got" = R ]; verdict $? "(R13) [P] an explanation question gets no ranked hop: $q" "(R13) an explanation question fired (or left the premise): $q (got [$got], want R)"
 done
 got="$( rk_hop "Where is the dependency cycle error raised?" )"
-[ "$got" = RH ] && ok "(R13b) [G] a where-question whose r=1 row holds the message still rides" || no "(R13b) the where-question lost its hop (got [$got], want RH)"
+[ "$got" = RH ]; verdict $? "(R13b) [G] a where-question whose r=1 row holds the message still rides" "(R13b) the where-question lost its hop (got [$got], want RH)"
 
 # R14 F5: the seed is the narrow funnel whose OWN body holds a string literal with >= 2 task words (lookup_word: "command %d not
 # found"), not the r=1 funnel that merely carries the words in its name (command_not_found_hook). Statement and question alike.
 FW="test/forcallerhopfix/rankword"
 for q in "command not found error" "Where is the command not found error raised?"; do
     run "$FW" --for="$q" >"$TMP/r14"
-    if grep -q '<d [^>]*n="command_not_found_hook"[^>]*r="1"' "$TMP/r14" && grep -q '<d [^>]*n="lookup_word"[^>]*r="3"' "$TMP/r14"; then
+    if grep -q '<d [^>]*n="\(command_not_found_hook\|hook_user\)"[^>]*r="[12]"' "$TMP/r14" && grep -q '<d [^>]*n="lookup_word"[^>]*r="3"' "$TMP/r14"; then
         grep -q '<callers by="rank" of="lookup_word" ' "$TMP/r14"
         verdict $? "(R14) [P] the message-bearing r=3 row (lookup_word) is the seed over the r=1 row without one: $q" "(R14) the seed is not lookup_word for [$q]: [$( hop "$TMP/r14" | cut -c1-90 )]"
     else
-        no "(R14pre) the rankword fixture no longer ranks command_not_found_hook r=1 and lookup_word r=3 for [$q]"
+        no "(R14pre) the rankword fixture no longer ranks a message-less row at r=1..2 and lookup_word r=3 for [$q]"
     fi
 done
 # R15 F5: with NO message-bearing row, a question gets no element (the fallback is for statements); the statement keeps today's seed (R3).
