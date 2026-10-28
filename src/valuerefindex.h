@@ -174,33 +174,360 @@ inline std::vector<std::string_view> cratesOf( const IngestResult& ing )
     }
     return out;
 }
-// The one candidate of `cands` (symbols) that file `fileId` most plausibly means: its own file's, else its crate's (`crates`,
-// cratesOf), else the repo's only one; kNoNode when the tier that has any holds two (which one is unknown: never a guess).
-inline NodeId nearestOf( const IngestResult& ing, std::span<const NodeId> cands, std::uint32_t fileId, std::span<const std::string_view> crates )
+// FN-SLOT-2 fix 1 (review rv-fn-slot-2 F-1/F-2): where a Rust path AS WRITTEN can reach — the module path ingest_rustslots.h
+// keeps (a value's memberVia, a path callee's recvVar, a struct type's memberCtor), read against the file's `use` records (the
+// L3 Rust import records: ing.includes, the specifiers resolve.h resolveRustImport resolves for the call graph) and the in-tree
+// crates (cratesOf). Never a guess: a path whose target is out of the tree, renamed, or not decidable reaches nothing.
+//   * std / core / alloc, an out-of-tree crate (`tokio::spawn`, `use extcrate::Hook`), a `use … as` rename, an unknown first
+//     segment (an inline module: a floor): None.
+//   * `crate::a::x`, `self::…`, `super::…`, `mod a; a::x`, a `use` that spells one: the ONE file resolveRustImport resolves the
+//     path to (this crate's root), never the writing file's own namesake (F-2); `crate::x` the crate root's.
+//   * a path led by an in-tree crate's name (`zed::x`, `use zed::{x}`): that crate's one, outside the writing file.
+//   * a bare name no `use` names: this file's, else its crate's, else the repo's only one — that last tier only when the file
+//     `use`s the defining crate (F-1 iv). A bare name a `use` names while this file defines a namesake too: None (the `use`
+//     sits in an inner scope; which one this reference sees is not read).
+class RustPaths
 {
-    NodeId pick[3] = { kNoNode, kNoNode, kNoNode };
-    int    n[3]    = { 0, 0, 0 };
-    for( const NodeId id : cands )
+public:
+    enum class Reach : std::uint8_t { Near, File, Crate, InCrate, CrateRoot, None };
+    struct At
     {
-        const std::uint32_t f    = ing.symbols[id].fileId;
-        const int           tier = f == fileId ? 0 : crates[f] == crates[fileId] ? 1 : 2;
-        for( int t = tier; t < 3; ++t )
+        Reach            kind    = Reach::Near;
+        bool             viaUse  = false;     // Near only: decided through a `use` (a namesake in this file: None)
+        std::uint32_t    file    = kNoFile;   // File: the one file
+        std::string_view crate;               // Crate / InCrate / CrateRoot: the crate
+    };
+    void build( const IngestResult& ing )
+    {
+        m_ing    = &ing;
+        m_crates = cratesOf( ing );
+        m_uses.assign( ing.files.size(), {} );
+        for( const Include& inc : ing.includes )
         {
-            pick[t] = id;
-            ++n[t];
+            if( inc.fileId < ing.files.size() && !inc.isSymbolic && rootRelPath( ing, inc.fileId ).ends_with( ".rs" ) )
+            {
+                m_uses[ inc.fileId ].push_back( inc.target );
+            }
+        }
+        for( const std::string_view c : m_crates )
+        {
+            if( c.empty() )
+            {
+                continue;
+            }
+            const auto [ it, fresh ] = m_crateByName.try_emplace( crateName( c ), c );
+            if( !fresh && it->second != c )
+            {
+                it->second = std::string_view();   // two crates of one name: which one a path means is unknown
+            }
         }
     }
-    for( int t = 0; t < 3; ++t )
+    std::string_view crateOf( std::uint32_t f ) const { return m_crates[f]; }
+    // Where `name`, written after module path `module` ("" bare) by reference `r`, can reach.
+    At reach( const Reference& r, std::string_view module, std::string_view name ) const
     {
-        if( n[t] > 0 )
+        if( !module.empty() )
         {
-            return n[t] == 1 ? pick[t] : kNoNode;
+            return moduleReach( r, module, name, 0 );
         }
+        std::string via;
+        switch( useOf( r.fileId, name, via ) )
+        {
+            case Use::None:    return At{};
+            case Use::Opaque:  return At{ Reach::None };
+            case Use::Path:    break;
+        }
+        At at = moduleReach( r, via, name, 0 );
+        at.viaUse = true;
+        return at;
     }
-    return kNoNode;
-}
-// FN-SLOT part 2: a ModuleType (Rust) slot type's key — the in-tree STRUCT symbol the written name spells (nearestOf: its own file,
-// else its crate, else the repo's only one), as jsImportKey( symbolId, name ); "" when no struct or several of one tier carry the
+    // The one candidate of `cands` (symbols) `at` reaches from file `fileId`: Near — its own file's, else its crate's, else the
+    // repo's only one (use-gated); kNoNode when the tier that has any holds two (which one is unknown: never a guess).
+    NodeId nearestOf( std::span<const NodeId> cands, std::uint32_t fileId, const At& at ) const
+    {
+        const IngestResult& ing = *m_ing;
+        NodeId pick[3] = { kNoNode, kNoNode, kNoNode };
+        int    n[3]    = { 0, 0, 0 };
+        for( const NodeId id : cands )
+        {
+            const std::uint32_t f    = ing.symbols[id].fileId;
+            const int           tier = tierOf( f, fileId, at );
+            if( f == fileId && at.viaUse && !( at.kind == Reach::File && at.file == fileId ) )
+            {
+                return kNoNode;   // a `use` names it AND this file defines it: the use is in an inner scope (which one is unread)
+            }
+            for( int t = tier; t >= 0 && t < 3; ++t )
+            {
+                pick[t] = id;
+                ++n[t];
+            }
+        }
+        for( int t = 0; t < 3; ++t )
+        {
+            if( n[t] > 0 )
+            {
+                return n[t] == 1 ? pick[t] : kNoNode;
+            }
+        }
+        return kNoNode;
+    }
+
+private:
+    enum class Use : std::uint8_t { None, Path, Opaque };
+    static bool upperLead( std::string_view s ) noexcept { return !s.empty() && s[0] >= 'A' && s[0] <= 'Z'; }
+    static std::string_view trimmed( std::string_view s ) noexcept
+    {
+        while( !s.empty() && ( s.front() == ' ' || s.front() == '\n' || s.front() == '\t' || s.front() == '\r' ) ) { s.remove_prefix( 1 ); }
+        while( !s.empty() && ( s.back() == ' ' || s.back() == '\n' || s.back() == '\t' || s.back() == '\r' ) ) { s.remove_suffix( 1 ); }
+        return s;
+    }
+    static std::string_view firstSegment( std::string_view p ) noexcept { return p.substr( 0, std::min( p.find( "::" ), p.size() ) ); }
+    static std::string joined( std::string_view a, std::string_view b ) { return a.empty() ? std::string( b ) : std::string( a ) + "::" + std::string( b ); }
+    // A crate's name as a path spells it: its directory's last component, `-` as `_` (`crates/nu-engine` → nu_engine).
+    static std::string crateName( std::string_view crate )
+    {
+        std::string n( crate.substr( crate.rfind( '/' ) == std::string_view::npos ? 0 : crate.rfind( '/' ) + 1 ) );
+        std::ranges::replace( n, '-', '_' );
+        return n;
+    }
+    // Each name one `use` specifier binds: cb( name, module path, renamed ). `a::{b, c::d as e, self}`, `a::b as c`; a glob binds none.
+    template<class Cb>
+    static void forEachUse( std::string_view t, const std::string& prefix, int depth, const Cb& cb )
+    {
+        t = trimmed( t );
+        if( t.starts_with( "::" ) )
+        {
+            t.remove_prefix( 2 );
+        }
+        if( const std::size_t br = t.find( '{' ); br != std::string_view::npos )
+        {
+            const std::size_t close = t.rfind( '}' );
+            std::string_view  head  = trimmed( t.substr( 0, br ) );
+            if( close == std::string_view::npos || close < br || depth > 4 )
+            {
+                return;
+            }
+            if( head.ends_with( "::" ) )
+            {
+                head.remove_suffix( 2 );
+            }
+            const std::string      p    = head.empty() ? prefix : joined( prefix, head );
+            const std::string_view body = t.substr( br + 1, close - br - 1 );
+            int                    lvl  = 0;
+            std::size_t            from = 0;
+            for( std::size_t i = 0; i <= body.size(); ++i )
+            {
+                const char c = i < body.size() ? body[i] : ',';
+                lvl += c == '{' ? 1 : c == '}' ? -1 : 0;
+                if( c == ',' && lvl == 0 )
+                {
+                    forEachUse( body.substr( from, i - from ), p, depth + 1, cb );
+                    from = i + 1;
+                }
+            }
+            return;
+        }
+        std::string_view alias;
+        if( const std::size_t as = t.find( " as " ); as != std::string_view::npos )
+        {
+            alias = trimmed( t.substr( as + 4 ) );
+            t     = trimmed( t.substr( 0, as ) );
+        }
+        const std::size_t c      = t.rfind( "::" );
+        std::string_view  leaf   = c == std::string_view::npos ? t : t.substr( c + 2 );
+        std::string       module = c == std::string_view::npos ? prefix : joined( prefix, t.substr( 0, c ) );
+        if( leaf == "self" )
+        {
+            const std::size_t up = module.rfind( "::" );   // `a::b::{self}` binds module b
+            leaf   = std::string_view( module ).substr( up == std::string::npos ? 0 : up + 2 );
+            module = up == std::string::npos ? std::string() : module.substr( 0, up );
+            if( alias.empty() )
+            {
+                const std::string own( leaf );
+                cb( std::string_view( own ), module, false );
+                return;
+            }
+        }
+        if( leaf.empty() || leaf == "*" )
+        {
+            return;
+        }
+        cb( alias.empty() ? leaf : alias, module, !alias.empty() && alias != leaf );
+    }
+    // The module path the file's `use` binds `name` from (`use tokio::spawn` → "tokio"); Opaque: a rename, or two that differ.
+    Use useOf( std::uint32_t fileId, std::string_view name, std::string& via ) const
+    {
+        Use got = Use::None;
+        for( const std::string_view t : m_uses[ fileId ] )
+        {
+            if( t.starts_with( "mod:" ) || got == Use::Opaque )
+            {
+                continue;
+            }
+            forEachUse( t, std::string(), 0, [ & ]( std::string_view bound, const std::string& module, bool renamed )
+            {
+                if( bound != name )
+                {
+                    return;
+                }
+                if( renamed || module.empty() || ( got == Use::Path && via != module ) )
+                {
+                    got = Use::Opaque;
+                    return;
+                }
+                got = Use::Path;
+                via = module;
+            } );
+        }
+        return got;
+    }
+    bool declaresMod( std::uint32_t fileId, std::string_view seg ) const
+    {
+        return std::ranges::any_of( m_uses[ fileId ], [ & ]( std::string_view t ) { return t.starts_with( "mod:" ) && t.substr( 4 ) == seg; } );
+    }
+    bool usesCrate( std::uint32_t fileId, std::string_view crate ) const
+    {
+        const std::string want = crateName( crate );
+        return std::ranges::any_of( m_uses[ fileId ], [ & ]( std::string_view t )
+        {
+            t = trimmed( t.starts_with( "::" ) ? t.substr( 2 ) : t );
+            return trimmed( t.substr( 0, std::min( { t.find( "::" ), t.find( '{' ), t.size() } ) ) ) == want;
+        } );
+    }
+    // The candidate's tier for `at` (-1: out of reach). Near: 0 own file, 1 own crate, 2 another crate the file `use`s.
+    int tierOf( std::uint32_t f, std::uint32_t fileId, const At& at ) const
+    {
+        switch( at.kind )
+        {
+            case Reach::Near:      return f == fileId ? 0 : m_crates[f] == m_crates[fileId] ? 1 : usesCrate( fileId, m_crates[f] ) ? 2 : -1;
+            case Reach::File:      return f == at.file ? 0 : -1;
+            case Reach::Crate:     return f != fileId && m_crates[f] == at.crate ? 0 : -1;
+            case Reach::InCrate:   return m_crates[f] == at.crate ? 0 : -1;
+            case Reach::CrateRoot:
+            {
+                const std::string_view p = rootRelPath( *m_ing, f );
+                return m_crates[f] == at.crate && ( p.ends_with( "/lib.rs" ) || p.ends_with( "/main.rs" ) ) && includerDir( p ) == crateRootDir( f ) ? 0 : -1;
+            }
+            case Reach::None:      return -1;
+        }
+        return -1;
+    }
+    // The directory a file's crate's `crate::` anchors in: `<crate>/src`, a root crate's `src`, else the crate's own directory.
+    std::string_view crateRootDir( std::uint32_t f ) const
+    {
+        const std::string_view rel = rootRelPath( *m_ing, f );
+        if( rel.starts_with( "src/" ) )
+        {
+            return rel.substr( 0, 3 );
+        }
+        const std::size_t at = rel.find( "/src/" );
+        return at == std::string_view::npos ? includerDir( rel ) : rel.substr( 0, at + 4 );
+    }
+    At fileAt( std::uint32_t fileId, const std::string& target, std::uint32_t rootOf ) const
+    {
+        if( m_fileIndex.empty() )
+        {
+            m_fileIndex.reserve( m_ing->files.size() );
+            for( std::uint32_t f = 0; f < m_ing->files.size(); ++f )
+            {
+                m_fileIndex.emplace( lexicalNormalize( rootRelPath( *m_ing, f ) ), f );
+            }
+        }
+        const std::uint32_t f = resolveRustImport( rootRelPath( *m_ing, fileId ), target, m_fileIndex, crateRootDir( rootOf ), true );
+        return f == kNoFile ? At{ Reach::None } : At{ Reach::File, false, f };
+    }
+    // `module::name` led by an anchor, an in-tree crate's name, a `mod` this file declares or a module a `use` binds.
+    At moduleReach( const Reference& r, std::string_view module, std::string_view name, int depth ) const
+    {
+        const std::string_view seg  = trimmed( firstSegment( module ) );
+        const std::string_view rest = module.size() > seg.size() + 2 ? module.substr( seg.size() + 2 ) : std::string_view();
+        if( seg == "std" || seg == "core" || seg == "alloc" )
+        {
+            return At{ Reach::None };
+        }
+        if( seg == "crate" || seg == "self" || seg == "super" )
+        {
+            return anchored( r, seg, rest, name );
+        }
+        if( const auto it = m_crateByName.find( std::string( seg ) ); it != m_crateByName.end() )
+        {
+            if( it->second.empty() )
+            {
+                return At{ Reach::None };
+            }
+            if( rest.empty() )
+            {
+                return At{ Reach::Crate, false, kNoFile, it->second };
+            }
+            for( std::uint32_t f = 0; f < m_crates.size(); ++f )
+            {
+                if( m_crates[f] == it->second )
+                {
+                    return fileAt( r.fileId, "crate::" + joined( rest, name ), f );   // that crate's root anchors it
+                }
+            }
+            return At{ Reach::None };
+        }
+        if( depth == 0 && declaresMod( r.fileId, seg ) )
+        {
+            return anchored( r, "self", module, name );
+        }
+        std::string via;
+        if( depth == 0 && useOf( r.fileId, seg, via ) == Use::Path )
+        {
+            return moduleReach( r, joined( via, module ), name, 1 );
+        }
+        return At{ Reach::None };
+    }
+    // `crate::…`, `self::…`, `super::…`: resolveRustImport's module-file rule from this file (`rest` the modules after the anchor).
+    At anchored( const Reference& r, std::string_view anchor, std::string_view rest, std::string_view name ) const
+    {
+        const IngestResult&    ing  = *m_ing;
+        const std::string_view path = rootRelPath( ing, r.fileId );
+        const std::string_view dir  = includerDir( path );
+        std::string_view       stem = path.substr( dir.empty() ? 0 : dir.size() + 1 );
+        stem                        = stem.substr( 0, stem.rfind( '.' ) );
+        const bool modFile = stem == "mod" || stem == "lib" || stem == "main";
+        if( anchor == "crate" )
+        {
+            return rest.empty() ? At{ Reach::CrateRoot, false, kNoFile, m_crates[ r.fileId ] } : fileAt( r.fileId, "crate::" + joined( rest, name ), r.fileId );
+        }
+        if( r.fromSymbol < ing.symbols.size() )
+        {
+            const Symbol& from = ing.symbols[ r.fromSymbol ];
+            if( from.kind == SymKind::Method && !from.scope.empty() && !upperLead( from.scope ) )
+            {
+                return At{ Reach::None };   // inside an inline `mod m { … }`: `self` / `super` are not this file's module
+            }
+        }
+        if( anchor == "self" )
+        {
+            if( rest.empty() )
+            {
+                return At{ Reach::File, false, r.fileId };
+            }
+            return fileAt( r.fileId, modFile ? "self::" + joined( rest, name ) : "self::" + joined( joined( stem, rest ), name ), r.fileId );
+        }
+        if( modFile )   // super of a mod.rs: its directory's parent module (a crate root has none)
+        {
+            return stem != "mod" || rest.empty() ? At{ Reach::None } : fileAt( r.fileId, "super::" + joined( rest, name ), r.fileId );
+        }
+        if( rest.empty() )   // `super::x` in d/s.rs: x in module d (d.rs or d/mod.rs)
+        {
+            const std::string_view up = dir.substr( dir.rfind( '/' ) == std::string_view::npos ? 0 : dir.rfind( '/' ) + 1 );
+            return up.empty() ? At{ Reach::None } : fileAt( r.fileId, "super::" + joined( up, name ), r.fileId );
+        }
+        return fileAt( r.fileId, "self::" + joined( rest, name ), r.fileId );   // super::a::x in d/s.rs: d/a…
+    }
+
+    const IngestResult*                          m_ing = nullptr;
+    std::vector<std::string_view>                m_crates;       // cratesOf
+    std::vector<std::vector<std::string_view>>   m_uses;         // per file: its Rust `use` specifiers and `mod:x` records
+    HashMap<std::string, std::string_view>       m_crateByName;  // a crate's path name → the crate ("" two crates share it)
+    mutable HashMap<std::string, std::uint32_t>  m_fileIndex;    // root-relative normalised path → fileId, built on first anchored path
+};
+// FN-SLOT part 2: a ModuleType (Rust) slot type's key — the in-tree STRUCT symbol the written path reaches (RustPaths: a bare
+// name its own file's, else its crate's, else the repo's only one; a module path the file it resolves to), as jsImportKey( symbolId, name ); "" when no struct or several of one tier carry the
 // name (an out-of-tree type, or which one is unknown: the name tier); kNoSlot when the name is a path through a TYPE (`E::V`, a
 // variant: no field slot of a struct).
 class RustTypeKeys
@@ -218,33 +545,43 @@ public:
         }
         if( !m_structs.empty() )
         {
-            m_crates = cratesOf( ing );
+            m_paths.build( ing );
         }
     }
     static std::string keyOfSymbol( const Symbol& s, NodeId id ) { return jsImportKey( id, s.name ); }
     std::string keyOf( const IngestResult& ing, const Reference& r ) const
     {
         const std::string_view t = r.memberCtor;
-        if( t.empty() )
+        if( t.empty() || m_structs.empty() )
         {
             return {};
         }
-        if( t.find( ':' ) != std::string_view::npos )
+        const std::size_t      at     = t.rfind( "::" );
+        const std::string_view name   = at == std::string_view::npos ? t : t.substr( at + 2 );
+        const std::string_view module = at == std::string_view::npos ? std::string_view() : t.substr( 0, at );
+        const std::size_t      up     = module.rfind( "::" );
+        const std::string_view last   = up == std::string_view::npos ? module : module.substr( up + 2 );
+        if( !last.empty() && last[0] >= 'A' && last[0] <= 'Z' )
         {
-            return std::string( kNoSlot );
+            return std::string( kNoSlot );   // `E::V`: a variant, no struct's field
         }
-        const auto it = m_structs.find( std::string( t ) );
+        const RustPaths::At reach = m_paths.reach( r, module, name );
+        if( reach.kind == RustPaths::Reach::None )
+        {
+            return std::string( kNoSlot );   // an out-of-tree or undecidable type (`extcrate::Hook`, `std::…`): no in-tree slot
+        }
+        const auto it = m_structs.find( std::string( name ) );
         if( it == m_structs.end() )
         {
             return {};
         }
-        const NodeId id = nearestOf( ing, it->second, r.fileId, m_crates );
+        const NodeId id = m_paths.nearestOf( it->second, r.fileId, reach );
         return id == kNoNode ? std::string() : keyOfSymbol( ing.symbols[id], id );
     }
 
 private:
     HashMap<std::string, std::vector<NodeId>> m_structs;   // struct name → the in-tree Rust structs of that name
-    std::vector<std::string_view>             m_crates;    // cratesOf (built when any Rust struct exists)
+    RustPaths                                 m_paths;     // built when any Rust struct exists
 };
 // The type key of every language that keys its own types (model.h slotKeysOwnTypes), by its row's VrSlotTypeKey.
 class TypeKeys
@@ -979,7 +1316,7 @@ private:
         }
         if( pathLang )
         {
-            m_crates = slot_join::cratesOf( m_ing );
+            m_paths.build( m_ing );
         }
     }
     // Reference `i` into its table (`keep` non-null: a narrow index, which skips what the splice never reads).
@@ -1210,9 +1547,10 @@ private:
 
     // The method-value owner rule (rv-fn-slot part-2 piece 3): `fns` (one name's functions) owned by type `owner`, as reference
     // `r`'s language means it. Go (a method value `b.opPlan` of the enclosing method's receiver, ingest_valuerefs.h methodValueAt):
-    // that type's METHOD in r's own package directory. Rust (`Editor::backspace`, `Self::f` with Self resolved): the owner type's
-    // function of that name nearest r (slot_join::nearestOf: its own file, else its crate, else the repo's only one), else nothing.
-    std::vector<NodeId> ownedBy( const Reference& r, std::string_view owner, std::span<const NodeId> fns ) const
+    // that type's METHOD in r's own package directory. Rust (`Editor::backspace`, `Self::f` with Self resolved, `module` the path
+    // written before the type): the owner type's function of that name in the crate the type's path reaches (slot_join::RustPaths;
+    // a bare type: nearest r — its own file, else its crate, else the repo's only one), else nothing.
+    std::vector<NodeId> ownedBy( const Reference& r, std::string_view owner, std::span<const NodeId> fns, std::string_view module = {} ) const
     {
         const VrLangFamily fam = valueRefFamily( r.lang );
         if( !slotPathSep( r.lang ).empty() )
@@ -1222,7 +1560,14 @@ private:
             {
                 return {};
             }
-            const NodeId one = slot_join::nearestOf( m_ing, it->second, r.fileId, m_crates );
+            using Reach              = slot_join::RustPaths::Reach;
+            slot_join::RustPaths::At at = m_paths.reach( r, module, owner );
+            if( at.kind == Reach::File || at.kind == Reach::Crate || at.kind == Reach::CrateRoot )
+            {
+                // the type's own crate (an impl lives in its type's crate, not always its file)
+                at = { Reach::InCrate, false, kNoFile, at.kind == Reach::File ? m_paths.crateOf( at.file ) : at.crate };
+            }
+            const NodeId one = m_paths.nearestOf( it->second, r.fileId, at );
             return one == kNoNode ? std::vector<NodeId>{} : std::vector<NodeId>{ one };
         }
         std::vector<NodeId> out;
@@ -1245,12 +1590,51 @@ private:
         const std::size_t      at  = sep.empty() ? std::string::npos : v.recvVar.rfind( sep );
         if( at == std::string::npos )
         {
-            return resolveName( v, v.recvVar );
+            return valueRefFamily( v.lang ) == VrLangFamily::Rust ? resolveIn( v, v.recvVar, {} ) : resolveName( v, v.recvVar );
+        }
+        const std::string_view path  = std::string_view( v.recvVar ).substr( 0, at );   // `crate::other` / `a::Owner` / `Owner`
+        const std::size_t      up    = path.rfind( sep );
+        const std::string_view owner = up == std::string_view::npos ? path : path.substr( up + sep.size() );
+        if( owner.empty() || !( owner[0] >= 'A' && owner[0] <= 'Z' ) )
+        {
+            return resolveIn( v, std::string_view( v.recvVar ).substr( at + sep.size() ), path );   // a module path: no owner type
         }
         const auto it = m_fnByName.find( v.recvVar.substr( at + sep.size() ) );
-        return it == m_fnByName.end() ? std::vector<NodeId>{} : ownedBy( v, std::string_view( v.recvVar ).substr( 0, at ), it->second );
+        return it == m_fnByName.end() ? std::vector<NodeId>{} : ownedBy( v, owner, it->second, up == std::string_view::npos ? std::string_view() : path.substr( 0, up ) );
     }
 
+    // FN-SLOT-2 fix 1: Rust function `name` written after module path `module` ("" bare) by reference `r` — the one
+    // slot_join::RustPaths reaches (a bare name with no `use`: every one in r's own file, else its crate's one, else the repo's
+    // only one in a crate the file `use`s); a class member (an impl's or an inline module's function) is never in bare scope.
+    std::vector<NodeId> resolveIn( const Reference& r, std::string_view name, std::string_view module ) const
+    {
+        const auto it = m_fnByName.find( std::string( name ) );
+        if( it == m_fnByName.end() )
+        {
+            return {};
+        }
+        std::vector<NodeId> cands, sameFile;
+        for( const NodeId id : it->second )
+        {
+            const Symbol& s = m_ing.symbols[id];
+            if( valueRefFamily( s.lang ) != VrLangFamily::Rust || ( isClassMember( s ) && !memberVisibleFrom( r, s, VrLangFamily::Rust ) ) )
+            {
+                continue;
+            }
+            cands.push_back( id );
+            if( s.fileId == r.fileId )
+            {
+                sameFile.push_back( id );
+            }
+        }
+        const slot_join::RustPaths::At at = m_paths.reach( r, module, name );
+        if( at.kind == slot_join::RustPaths::Reach::Near && !sameFile.empty() )
+        {
+            return sameFile;   // the file's own (`#[cfg]` twins all of them, as every family's same-file rule)
+        }
+        const NodeId one = m_paths.nearestOf( cands, r.fileId, at );
+        return one == kNoNode ? std::vector<NodeId>{} : std::vector<NodeId>{ one };
+    }
     // `name` as seen from reference `r`'s file, under the visibility rules in the header comment.
     std::vector<NodeId> resolveName( const Reference& r, std::string_view name ) const
     {
@@ -1262,7 +1646,11 @@ private:
         const VrLangFamily  fam = valueRefFamily( r.lang );
         if( r.role == RefRole::Value && !r.memberRoot.empty() )
         {
-            return ownedBy( r, r.memberRoot, it->second );
+            return ownedBy( r, r.memberRoot, it->second, r.memberVia );
+        }
+        if( valueRefFamily( r.lang ) == VrLangFamily::Rust )
+        {
+            return resolveIn( r, name, r.role == RefRole::Value ? std::string_view( r.memberVia ) : std::string_view() );
         }
         // A C/C++ PROTOTYPE (a bodyless declaration) names the function its definition lives in: it is the target only
         // when no definition with a body is visible — a prototype in this file never hides the extern definition.
@@ -1324,15 +1712,7 @@ private:
                 }
                 break;
             }
-            case VrLangFamily::Rust:
-            {
-                // FN-SLOT part 2: a bare Rust function of another file — its crate's one, else the repo's only one (nearestOf)
-                if( const NodeId one = slot_join::nearestOf( m_ing, other, r.fileId, m_crates ); one != kNoNode )
-                {
-                    out.push_back( one );
-                }
-                break;
-            }
+            case VrLangFamily::Rust: break;   // resolveIn above
             case VrLangFamily::Js:
             case VrLangFamily::Py:
             {
@@ -1374,7 +1754,7 @@ private:
     const IngestResult&                                  m_ing;
     HashMap<std::string, std::vector<NodeId>>            m_fnByName;
     HashMap<std::string, std::vector<NodeId>>            m_fnByOwner;   // part 2: "family#Owner::name" → a path language's owned functions
-    std::vector<std::string_view>                        m_crates;      // part 2: slot_join::cratesOf, when a path language is indexed
+    slot_join::RustPaths                                 m_paths;       // part 2 fix 1: where a Rust path reaches, when a path language is indexed
     std::vector<std::uint8_t>                            m_pyMember;   // per symbol: 1 = a Python def directly in its class (empty: no Python)
     std::vector<std::uint32_t>                           m_values;            // Value reference indices, ascending
     std::vector<std::uint32_t>                           m_depthCuts;         // the files' depth-cut records (no row), ascending

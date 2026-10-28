@@ -13,11 +13,13 @@
 //     `f::<D>` with its turbofish dropped): Value, scope 'a', recvVar = the callee as written with `Self` resolved to the impl
 //     type ("CallEval::new"), argCount = the argument's position (a `self` parameter is position 0 of a path call), name = the
 //     function's last segment, memberRoot = its owner TYPE when the path names one (`Editor` in `Editor::backspace`; a module
-//     path `eval::eval_block` names no owner). A method call's arguments (`cx.listener( Self::f )`) are a floor: no row.
+//     path `eval::eval_block` names no owner), memberVia = the module path written before the owner or the function
+//     (`crate::other`, `std::thread`, "" bare: valuerefindex.h slot_join::RustPaths decides where it can reach; recvVar keeps
+//     the callee's own). A method call's arguments (`cx.listener( Self::f )`) are a floor: no row.
 //   * a function path stored into a struct FIELD — a struct expression `T { f: path }` / `T { path }` (shorthand), the value
 //     unwrapped from `Box::new( … )` / `Rc::new( … )` / `Arc::new( … )`, or an assignment `self.f = path` / `x.f = path`:
-//     Value, scope 'x', memberPath = the field, memberCtor = the struct type as written, its last segment when a module path
-//     leads it (`Self` → the impl type; `x.f`: "" — x's type is not read, the name tier).
+//     Value, scope 'x', memberPath = the field, memberCtor = the struct type as written, its module path kept (`Self` → the
+//     impl type; `x.f`: "" — x's type is not read, the name tier), memberVia = the value's module path.
 //   * a PARAMETER stored the same way (`fn new( eval: EvalFn ) -> Self { Self { eval } }`): the slot fact of a registrar
 //     (model.h kValueRefSlotParamScope), recvVar = the function's name, argCount = the parameter's position.
 //   * a call through a field `(self.eval)( … )` (Rust calls a function-valued field only so: `x.f( … )` is always a method
@@ -292,6 +294,11 @@ private:
         forEachNamedChild( n, c.cur, [ & ]( TSNode ch ) { bindIn( ch, out, depth + 1 ); return true; } );
     }
 
+    static std::string_view lastSegment( std::string_view path ) noexcept
+    {
+        const std::size_t at = path.rfind( "::" );
+        return at == std::string_view::npos ? path : path.substr( at + 2 );
+    }
     // `Box::new` / `Rc::new` / `Arc::new`: a wrapper that hands its one argument on (the value, not a registrar).
     bool wrapperCallee( TSNode fn ) const noexcept
     {
@@ -331,6 +338,7 @@ private:
     {
         std::string_view name;
         std::string      owner;
+        std::string_view module;         // the module path written before the owner type or the function (`crate::a`, `std::thread`)
         bool             bare = false;   // a bare identifier: a function, a parameter or a local, as its function binds it
     };
     static bool upperLead( std::string_view s ) noexcept { return !s.empty() && s[0] >= 'A' && s[0] <= 'Z'; }
@@ -374,6 +382,14 @@ private:
             }
             out.name  = leaf;
             out.owner = upperLead( owner ) ? std::string( owner ) : std::string();   // a module path names no owner type
+            if( out.owner.empty() )
+            {
+                out.module = text( path );   // `crate::other::target`: the whole path before the function
+            }
+            else if( owner == text( field( path, "name" ) ) && is( path, "scoped_identifier" ) )
+            {
+                out.module = text( field( path, "path" ) );   // `a::Editor::f`: the module path before the owner type
+            }
         }
         return out;
     }
@@ -392,10 +408,12 @@ private:
         {
             return;   // `Box::new( f )`: the value lands where the wrapper does (unwrap), not in the wrapper
         }
-        std::string  written;
+        std::string  written;   // the callee as written (`Self` resolved): recvVar
+        std::string  shown;     // without its module path: the row's into=
         if( is( callee, "identifier" ) )
         {
             written = std::string( text( callee ) );
+            shown   = written;
         }
         else if( is( callee, "scoped_identifier" ) )
         {
@@ -404,7 +422,8 @@ private:
             {
                 return;
             }
-            written = n.owner.empty() ? std::string( n.name ) : n.owner + "::" + std::string( n.name );
+            shown   = n.owner.empty() ? std::string( n.name ) : n.owner + "::" + std::string( n.name );
+            written = n.module.empty() ? shown : std::string( n.module ) + "::" + shown;   // resolveCallee reads the module path
         }
         else
         {
@@ -428,9 +447,10 @@ private:
             {
                 RawRef r        = rawRefAt( a, m_fileId, m_lang, RefRole::Value, std::string( n.name ) );
                 r.memberRoot    = n.owner;
+                r.memberVia     = std::string( n.module );
                 r.qualifier     = "a0";
                 r.recvVar       = written;
-                r.fieldName     = written + "#arg" + std::to_string( pos );
+                r.fieldName     = shown + "#arg" + std::to_string( pos );
                 r.composeRel    = "#" + std::to_string( pos );
                 r.argCount      = static_cast<std::uint16_t>( std::min<std::uint32_t>( pos, 0xFFFFu ) );
                 r.argCountKnown = true;
@@ -505,8 +525,8 @@ private:
             return true;
         } );
     }
-    // The struct type a struct expression's name spells: `Self` → the impl type; `m::T` → T (a module path leads); a
-    // variant `E::V` or any other path is kept whole (no in-tree struct has that name: the join keys it as no slot).
+    // The struct type a struct expression's name spells, its path kept as written (slot_join::RustTypeKeys reads the module
+    // path: `crate::a::Cfg` is a.rs's Cfg, `extcrate::Hook` no in-tree one, `E::V` a variant); `Self` → the impl type.
     std::string structType( TSNode nm ) const
     {
         if( is( nm, "generic_type_with_turbofish" ) )
@@ -520,11 +540,15 @@ private:
         }
         if( is( nm, "scoped_type_identifier" ) )
         {
-            const std::string_view path = text( field( nm, "path" ) );
-            const std::string_view tail = path.substr( path.rfind( ':' ) == std::string_view::npos ? 0 : path.rfind( ':' ) + 1 );
-            return upperLead( tail ) ? std::string( text( nm ) ) : std::string( text( field( nm, "name" ) ) );
+            return std::string( text( nm ) );
         }
         return {};
+    }
+    // A struct type as a row shows it (into=): its module path dropped (`crate::a::Cfg` → Cfg), a variant `E::V` whole.
+    static std::string shownType( std::string_view ty )
+    {
+        const std::size_t at = ty.rfind( "::" );
+        return at == std::string_view::npos || upperLead( lastSegment( ty.substr( 0, at ) ) ) ? std::string( ty ) : std::string( ty.substr( at + 2 ) );
     }
     // `x.f = v`: a store into field f (typed for `self.f` inside an impl, else the name tier).
     void assignAt( TSNode as )
@@ -554,8 +578,9 @@ private:
         }
         r.name       = std::string( n.name );
         r.memberRoot = n.owner;
+        r.memberVia  = std::string( n.module );
         r.qualifier  = "x0";
-        r.fieldName  = ( ty.empty() ? std::string() : ty ) + "." + std::string( fieldName );
+        r.fieldName  = shownType( ty ) + "." + std::string( fieldName );
         r.composeRel = "." + std::string( fieldName );
         land( std::move( r ), n.bare ? n.name : std::string_view(), true );
     }
