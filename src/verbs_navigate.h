@@ -150,10 +150,11 @@ inline std::string notFoundGitRoot( const rw::IngestResult& ing, const rw::Confi
     return ing.realPaths.empty() && cfg.roots.size() == 1 ? std::string( cfg.roots[0] ) : std::string();
 }
 
-inline int refuseNotFoundWithAnswer( const rw::IngestResult& ing, const rw::Config& cfg, const rw::NotFoundAnswer& answer,
+inline int refuseNotFoundWithAnswer( const rw::IngestResult& ing, const rw::Config& cfg, rw::NotFoundAnswer answer,
                                      std::string_view prefix, std::string_view spec, std::string_view retryForm )
 {
     rw::emitTo( stderr, "{}{}{}{}\n", prefix, spec, rw::notFoundRenameClause( answer.near ), rw::selectorFaultClause( ing, spec, retryForm ) );
+    answer.refused = rw::refusedMatchCount( ing, spec );   // js-def-naming fix 1: several definitions fit and none was chosen: refused=N beside found=0
     rw::writeNotFoundAnswer( stdout, answer, cfg.json );
     return 1;
 }
@@ -336,9 +337,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         const bool        chDiscloseCap = ( pw.end - pw.begin ) < result.size();
         // QUALNAME-1: n="Owner.name" on a member row (memberowner.h) — the rows MF1-NX's <callers> block shares; its legend clause
         // rides exactly when a shown row carries an owner.
-        const rw::MemberOwners chOwners( ing );
-        const bool             chHasOwner = std::any_of( result.begin() + std::ptrdiff_t( pw.begin ), result.begin() + std::ptrdiff_t( pw.end ),
-                                                         [ & ]( rw::NodeId id ) { return !chOwners.ownerOf( ing.symbols[ id ] ).empty(); } );
+        const rw::MemberOwners    chOwners( ing );
+        const rw::MemberOwnerRows chOwnerRows = rw::memberOwnerRows( ing, std::span<const rw::NodeId>( result ).subspan( pw.begin, pw.end - pw.begin ) );
         char              pab[ kPageDisclosureCap ];
 
         const auto [ chNextSelector, chNextIsBare ] = rw::callHierarchyNextSelector( ing, chRows, sym, wantCallers );
@@ -418,7 +418,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                            + rw::viaNameLegend( chHasVia, false, cfg.columnar )                   // FE-B: likewise for via="name"
                            + rw::viaLinkLegend( chHasLink )
                            + rw::defTableLegend( chAttr.groups.multi(), chListing.cut ) + rw::splitArmLegend( chHasSplit )   // attrib-multidef: likewise
-                           + rw::memberOwnerLegend( chHasOwner ) ).c_str(),   // QUALNAME-1: likewise, exactly when a shown row names its owner
+                           + rw::memberOwnerLegendFor( chOwnerRows ) ).c_str(),   // QUALNAME-1: likewise, exactly when a shown row names its owner
                          ( std::string( rw::modScopeLegend( chHasModScope ) )   // #60: likewise, exactly when a t="modscope" row is
                            + rw::callSitesAtLegend( chSites.any, chSites.anyCut, rw::kCallSitesPerRowCap ) ).c_str(),   // CALLSITE-AT: likewise for sites_at=/sites_total=
                          ( rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ) + rw::valueRefsLegend( !chRows.valueRefs.rows.empty(), wantCallers )
@@ -2615,7 +2615,7 @@ std::optional<int> runPath( const MainDispatch& d )
                      "graph holds none. {}{}{}{}-->{}", ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ) + rw::viaNameLegend( pthHasVia )
                                                          + rw::viaLinkLegend( pthHasLink ) + rw::anchorMissLegend( pthHasMiss )
                                                          + rw::splitArmLegend( pthHasSplit ) + rw::pathUnboundLegend( !pthBound.from || !pthBound.to )
-                                                         + rw::memberOwnerLegend( pthHasOwner ) + std::string( rw::pathPairsLegend( pthPairs ) ) + rw::pathOrderLegend( pthPairs, pthTwin ) ).c_str(),
+                                                         + rw::memberOwnerLegend( pthHasOwner ) + rw::memberOwnerContainedLegend( pthMarks.ownerContained ) + std::string( rw::pathPairsLegend( pthPairs ) ) + rw::pathOrderLegend( pthPairs, pthTwin ) ).c_str(),
                      ( std::string( rw::toValueRefsLegend( pthToValueRefs.count > 0 ) ) + rw::valueRefsDepthLegend( pthToValueRefs.depthCut.files > 0 ) ).c_str(),
                      ( rw::pathGapsLegend( pthGaps.any(), !pthSinkCallers.empty() ) + rw::pathBridgeLegend( pthBridge )
                        + std::string( rw::nearSinkLegend( !pthNear.rows.empty() ) ) + std::string( rw::pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
@@ -3020,7 +3020,7 @@ inline void emitImpactLegend( const rw::Config& cfg, const rw::IngestResult& ing
                    + rw::impactRollupLegend( !imFiles.rows.empty() && !cfg.columnar, imports.umbrella, rw::impactRollupHedged( imFiles ),
                                              !imports.next.empty() && !cfg.columnar, rw::ImpactRollupTypeClauses{ imFiles.typed, imFiles.typeDefs, imFiles.typeCapped } )
                    + rw::defTableLegend( imAttr.groups.multi(), imListing.cut )
-                   + rw::memberOwnerLegend( rw::anyMemberOwnerRow( ing, std::span<const rw::NodeId>( show ).subspan( imPage.begin, imPage.end - imPage.begin ) ) ) ).c_str(),   // QUALNAME-1
+                   + rw::memberOwnerLegendFor( rw::memberOwnerRows( ing, std::span<const rw::NodeId>( show ).subspan( imPage.begin, imPage.end - imPage.begin ) ) ) ).c_str(),   // QUALNAME-1
                  ( std::string( rw::valueRefsReachLegend( !imValueRefs.rows.empty() ) )
                    + rw::valueRefsDepthLegendFor( imValueRefs )
                    + rw::patternDispatchLegend( !imValueRefs.patternSites.empty() || !imValueRefs.patternWideSites.empty(), true )   // IX-3: exactly when pattern_dispatch=/pattern_too_wide= rides

@@ -12669,6 +12669,43 @@ inline bool typeEnclosesMember( const Symbol& ty, const Symbol& m ) noexcept
     return ty.fileId == m.fileId && ty.sigStartByte <= m.sigStartByte && m.endByte <= ty.endByte;
 }
 
+// The owner a SCOPE-LESS member's containment gives it: every type whose span holds it (outermost first, `chain`), or `nested`
+// when a function, method or other non-type definition holds it — a local def, an object literal returned by a method: no owner
+// and no module reaches it. `bySigStart` holds the candidate owners in ascending sigStartByte (every symbol of the member's
+// file, or more); the member itself and a symbol of its own name (its binding, `const run = () => …`) are skipped. ONE rule for
+// the written-spelling tier (resolveAllByWrittenSpelling, which reads `Class.method` by it) and the rows that print the owner
+// (memberowner.h MemberOwners, n="Class.method" for TS/JS), so a printed owner is the owner a spelling binds by.
+struct ContainedOwners
+{
+    std::vector<std::string_view> chain;
+    bool                          nested = false;
+};
+inline ContainedOwners containedOwnersOf( const IngestResult& ing, std::span<const NodeId> bySigStart, const Symbol& s )
+{
+    ContainedOwners out;
+    for( const NodeId t : bySigStart )
+    {
+        const Symbol& ty = ing.symbols[ t ];
+        if( ty.sigStartByte > s.sigStartByte )
+        {
+            break;   // ascending start: nothing later can hold s
+        }
+        if( t == s.id || ty.name == s.name || !typeEnclosesMember( ty, s ) )
+        {
+            continue;   // itself, or its own binding (`const run = () => …`)
+        }
+        if( namespaceCompatible( RefRole::Type, ty.kind ) )
+        {
+            out.chain.push_back( ty.name );
+        }
+        else if( ty.kind != SymKind::ModuleScope )
+        {
+            out.nested = true;
+        }
+    }
+    return out;
+}
+
 inline std::vector<int> nameTowerRanks( const IngestResult& ing, std::span<const NodeId> ids )
 {
     const auto typeKind = []( SymKind k ) noexcept { return k == SymKind::Class || k == SymKind::Interface || isStructOrNamedType( k ); };
@@ -13382,9 +13419,49 @@ inline bool chainNamesPrefixThroughUnnamed( const std::vector<std::string>& chai
     return named.size() != chain.size() && named.size() >= prefix.size() && std::equal( prefix.begin(), prefix.end(), named.end() - std::ptrdiff_t( prefix.size() ) );
 }
 
-// `found` is what the earlier tiers matched, returned untouched unless it is empty (resolveAllByDottedScope's contract).
-inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing, std::string_view spec, std::vector<NodeId> found )
+// lane js-def-naming fix 1: how a written prefix meets a candidate held by a TS `namespace` / `module` body. The member's FULL chain is the
+// namespace plus its class (`NS.C.m`); the printed form is the class alone (`C.m`, memberowner.h) and must resolve back too. Either binds,
+// as a match whose key carries the namespace, so a same-named class elsewhere (another namespace, another file) is a second entity and the
+// spelling refuses. A prefix that writes the namespace without the rest of the chain is `unplaced` (refuse); any other prefix names no member.
+struct NamespaceFit
 {
+    bool                          skip     = false;   // the candidate does not bind (and is unplaced when `unplaced`)
+    bool                          unplaced = false;
+    std::vector<std::string_view> owner;              // the owner chain to match the prefix's tail against
+    std::vector<std::string_view> keyChain;           // the chain the one-entity key is made of
+};
+
+inline NamespaceFit namespaceFitOf( std::span<const std::string_view> prefix, const std::vector<std::string_view>& namespaceNames,
+                                    const std::vector<std::string_view>& owner )
+{
+    const auto endsWith = [ & ]( const std::vector<std::string_view>& chain )
+    {
+        return chain.size() <= prefix.size() && std::equal( chain.begin(), chain.end(), prefix.end() - std::ptrdiff_t( chain.size() ) );
+    };
+    std::vector<std::string_view> full( namespaceNames );
+    full.insert( full.end(), owner.begin(), owner.end() );
+    if( endsWith( full ) )
+    {
+        return { false, false, full, full };
+    }
+    if( !owner.empty() && endsWith( owner ) )
+    {
+        return { false, false, owner, std::move( full ) };
+    }
+    const bool ownerFits = endsWith( owner );
+    const auto head      = prefix.first( ownerFits ? prefix.size() - owner.size() : 0 );
+    return { true, ownerFits && std::ranges::all_of( namespaceNames, [ & ]( std::string_view n ) { return std::ranges::find( head, n ) != head.end(); } ), owner, owner };
+}
+
+// `found` is what the earlier tiers matched, returned untouched unless it is empty (resolveAllByDottedScope's contract).
+// `fitted` (lane js-def-naming fix 1): how many definitions the spelling could mean (matches plus candidates left unplaced) when it
+// refuses, 0 on every other path, so a refusal can say "N fit, none chosen" rather than "none".
+inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing, std::string_view spec, std::vector<NodeId> found,
+                                                        std::size_t* fittedOut = nullptr )
+{
+    std::size_t scratch = 0;
+    std::size_t& fitted = fittedOut != nullptr ? *fittedOut : scratch;
+    fitted              = 0;
     const std::optional<WrittenSpec> w = found.empty() ? splitWrittenSpec( spec ) : std::nullopt;
     if( !w )
     {
@@ -13453,7 +13530,7 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
     // review rv-qn-input-delta (D2): a TS `namespace` and an object literal are containers the index has no symbol for. A candidate
     // inside one that the spelling could name makes the spelling UNKNOWN, as an unreadable C++ chain does — never dropped, so a
     // same-named file (`Zone.f` beside Zone.ts) cannot bind alone in its place.
-    bool                                 unplaced = false;
+    std::size_t                          unplaced = 0;   // the candidates a spelling could name but the index cannot place (a refusal), counted for `fitted`
     bool                                 objectMember = false;   // a TS / JS object-literal member nothing typed encloses was dropped (name unknown)
     bool                                 headNamed    = false;   // a match leans on a path-named head (a stem or directory), which a container could also be
     std::vector<const Binding*>          namespaces;   // the TS `namespace` / `module` bodies (index Namespace binds), built at the first TS candidate
@@ -13488,6 +13565,32 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
         }
         return inside;
     };
+    // lane js-def-naming: the module-scope object literals' binding names (model.h JsObjectLiteral), built at the first owner-less member
+    std::vector<const Binding*> literals;
+    bool                        literalsBuilt = false;
+    const auto literalNameOf = [ & ]( const Symbol& s ) -> std::optional<std::string_view>
+    {   // the name of the recorded literal whose span holds `s`, innermost; nullopt when no recorded literal does (its name is unknown)
+        if( !std::exchange( literalsBuilt, true ) )
+        {
+            for( const Binding& b : ing.bindings )
+            {
+                if( b.kind == LocalBindKind::JsObjectLiteral )
+                {
+                    literals.push_back( &b );
+                }
+            }
+        }
+        const Binding* best = nullptr;
+        for( const Binding* b : literals )
+        {
+            if( b->fileId == s.fileId && b->spanStart <= s.sigStartByte && s.endByte <= b->spanEnd
+                && ( best == nullptr || b->spanEnd - b->spanStart < best->spanEnd - best->spanStart ) )
+            {
+                best = b;
+            }
+        }
+        return best != nullptr ? std::optional<std::string_view>( best->var ) : std::nullopt;
+    };
     const std::span<const std::string_view> prefix( w->prefix );
     for( const NodeId id : cands )
     {
@@ -13504,36 +13607,39 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
         {   // review rv-qn-input: an enclosing function or method (a local def, an object literal returned by a method) is
             // neither an owner nor a module, so no written spelling reaches the candidate; a scope-less METHOD nothing typed
             // encloses (an object-literal or class-expression member) has an UNKNOWN owner, never read as a module-level def.
-            bool nested = false;
-            for( const NodeId t : types )
-            {
-                const Symbol& ty = ing.symbols[ t ];
-                if( t == id || ty.name == s.name || !typeEnclosesMember( ty, s ) )
-                {
-                    continue;   // itself, or its own binding (`const run = () => …`)
+            ContainedOwners contained = containedOwnersOf( ing, types, s );
+            const bool      nested    = contained.nested;
+            owner                     = std::move( contained.chain );
+            if( !nested && s.kind == SymKind::Method && owner.empty() && langFacts( s.lang ).objectLiteralMembers )
+            {   // an object-literal member: its owner is the literal's binding name when ingest recorded one (QN-OBJLIT-NAMED), else unknown
+                if( const std::optional<std::string_view> literal = literalNameOf( s ) )
+                {   // a spelling whose owner segment is that name could mean this member: unknown beside any other match, never dropped
+                    unplaced += std::size_t( !prefix.empty() && prefix.back() == *literal );
+                    continue;
                 }
-                if( namespaceCompatible( RefRole::Type, ty.kind ) )
-                {
-                    owner.push_back( ty.name );
-                }
-                else if( ty.kind != SymKind::ModuleScope )
-                {
-                    nested = true;
-                }
+                objectMember = true;
             }
-            objectMember = objectMember || ( !nested && s.kind == SymKind::Method && owner.empty() && langFacts( s.lang ).objectLiteralMembers );
             if( nested || ( s.kind == SymKind::Method && owner.empty() ) )
             {
                 continue;
             }
         }
         std::vector<std::string_view> namespaceNames;
+        std::vector<std::string_view> keyChain;   // the chain the one-entity key is made of: the owner, plus the namespace that holds it (lane js-def-naming fix 1)
         if( enclosingNamespaceNames( s, namespaceNames ) )
-        {   // the namespace is an owner the index does not store: the spelling either writes it (unplaced: refuse) or does not name this member
-            const bool ownerFits = owner.size() <= prefix.size() && std::equal( owner.begin(), owner.end(), prefix.end() - std::ptrdiff_t( owner.size() ) );
-            const auto head      = prefix.first( ownerFits ? prefix.size() - owner.size() : 0 );
-            unplaced = unplaced || ( ownerFits && std::ranges::all_of( namespaceNames, [ & ]( std::string_view n ) { return std::ranges::find( head, n ) != head.end(); } ) );
-            continue;
+        {   // the namespace is an owner the index does not store (see namespaceFitOf)
+            NamespaceFit fit = namespaceFitOf( prefix, namespaceNames, owner );
+            unplaced += std::size_t( fit.unplaced );
+            if( fit.skip )
+            {
+                continue;
+            }
+            owner    = std::move( fit.owner );
+            keyChain = std::move( fit.keyChain );
+        }
+        if( keyChain.empty() )
+        {
+            keyChain = owner;
         }
         std::string key;
         bool        hit = false;
@@ -13565,7 +13671,7 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
         {
             hit = true;
             headNamed = headNamed || prefix.size() > owner.size();
-            for( const std::string_view o : owner )
+            for( const std::string_view o : keyChain )
             {
                 key.append( o ).append( "::" );
             }
@@ -13585,8 +13691,9 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
     const bool sameChain = std::all_of( matches.begin(), matches.end(), [ & ]( const Match& m ) { return chainOf( m.key ) == chainOf( matches.front().key ); } );
     const bool oneEntity = sameChain && ( bodied <= 1 || std::all_of( matches.begin(), matches.end(), [ & ]( const Match& m ) { return m.key == matches.front().key; } ) );
     // an object-literal member's object has no stored name: when a match rests on a path-named head, that object could be the head
-    if( unknownChain || unplaced || ( objectMember && headNamed ) || matches.empty() || !oneEntity )
+    if( unknownChain || unplaced != 0 || ( objectMember && headNamed ) || matches.empty() || !oneEntity )
     {
+        fitted = matches.size() + unplaced;
         return {};
     }
     std::vector<NodeId> out;
@@ -13597,6 +13704,62 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
     }
     out = preferExactFile( ing, w->file, std::move( out ) );
     return applyNameTower( ing, std::move( out ) );
+}
+
+// lane js-def-naming fix 1: every definition of the seed's file whose signature STARTS on the seed line, in index order. More than one
+// means a `file:LINE` selector cannot say which a row's p= meant (`class P { q() {} }` has P and q on line 1), so it refuses and
+// selectorrefuse.h lists these.
+inline std::vector<NodeId> defsStartingOnLine( const IngestResult& ing, const AtSeed& seed )
+{
+    const auto startsOnSeedLine = [ & ]( const Symbol& s ) { return s.fileId == seed.fileId && s.line == seed.line; };
+    std::vector<NodeId> out;
+    std::for_each( ing.symbols.begin(), ing.symbols.end(), [ & ]( const Symbol& s )
+    {
+        if( startsOnSeedLine( s ) )
+        {
+            out.push_back( s.id );
+        }
+    } );
+    return out;
+}
+
+// lane js-def-naming: the p= a row prints (`file:LINE`, a definition's own signature line) is a selector too — the spelling an
+// agent holds after reading a row, and the only one that tells two same-file namesakes apart where no owner prints. LAST and only
+// when every name tier found nothing, so a name that is all digits (a JSON key `445`) still resolves as a name — the reason the
+// @FILE:LINE seed above takes no inference. It binds only the definition whose signature starts on LINE (the line seed's innermost
+// coverer, by the same resolveAtSeed); a body line, a line where two or more definitions start (disjoint or nested), or a path two files share
+// stay not found.
+inline bool isDefLineSpec( std::string_view spec ) noexcept
+{   // `file:LINE`: a path half, a single colon (not `::`), digits only after it; a leading `@` is the other grammar
+    const std::size_t colon = spec.rfind( ':' );
+    return !spec.empty() && spec.front() != '@' && colon != std::string_view::npos && colon != 0 && spec[ colon - 1 ] != ':'
+           && colon + 1 != spec.size() && std::all_of( spec.begin() + std::ptrdiff_t( colon + 1 ), spec.end(), []( char c ) { return c >= '0' && c <= '9'; } );
+}
+
+// The definitions a `file:LINE` selector would have to choose between: every one starting on LINE (empty when `spec` is not a line
+// selector that reaches a readable file). More than one is a refusal (resolveAllByDefLine) that selectorrefuse.h lists.
+inline std::vector<NodeId> defLineStarts( const IngestResult& ing, std::string_view spec )
+{
+    if( !isDefLineSpec( spec ) )
+    {
+        return {};
+    }
+    const AtSeed seed = resolveAtSeed( ing, spec );
+    return seed.fault == AtFault::None ? defsStartingOnLine( ing, seed ) : std::vector<NodeId>{};
+}
+
+inline std::vector<NodeId> resolveAllByDefLine( const IngestResult& ing, std::string_view spec, std::vector<NodeId> found )
+{
+    if( !found.empty() || !isDefLineSpec( spec ) )
+    {
+        return found;
+    }
+    const AtSeed seed = resolveAtSeed( ing, spec );
+    if( seed.fault != AtFault::None || ing.symbols[ seed.chain.back() ].line != seed.line || defsStartingOnLine( ing, seed ).size() != 1 )
+    {   // two definitions starting on LINE (`class P { q() {} }`, a nested arrow on its parent's line) are refused, never the innermost
+        return found;
+    }
+    return { seed.chain.back() };
 }
 
 // `unprovenDefCountOut` (H1, optional): the residue declToDefFollowThrough dropped — see its contract. Zero
@@ -13655,7 +13818,22 @@ inline std::vector<NodeId> resolveAllByNameQualified( const IngestResult& ing, s
     declToDefFollowThrough( ing, file, name, out, unprovenDefCountOut );
     out = applyNameTower( ing, std::move( out ) );   // the tower orders the name/file tier (task C); the early tiers above stay as-is
     out = resolveAllByDottedScope( ing, spec, std::move( out ) );   // `Class.method` / `Class#method`, only when `out` is empty
-    return resolveAllByWrittenSpelling( ing, spec, std::move( out ) );   // the source's own spelling, last, only when still empty
+    out = resolveAllByWrittenSpelling( ing, spec, std::move( out ) );   // the source's own spelling, only when still empty
+    return resolveAllByDefLine( ing, spec, std::move( out ) );            // a printed p= (`file:LINE`), last, only when still empty
+}
+
+// lane js-def-naming fix 1: how many definitions a selector that resolved to NOTHING was refused over (0 = it simply matched none). A
+// `file:LINE` that starts several definitions, or a written spelling that two definitions fit, is a refusal, not an absence: the
+// not-found answer says so (selectorrefuse.h). Only asked on the refusal path, after every resolution tier came back empty.
+inline std::size_t refusedMatchCount( const IngestResult& ing, std::string_view spec )
+{
+    if( const std::size_t starts = defLineStarts( ing, spec ).size(); starts > 1 )
+    {
+        return starts;
+    }
+    std::size_t fitted = 0;
+    resolveAllByWrittenSpelling( ing, spec, {}, &fitted );
+    return fitted > 1 ? fitted : 0;
 }
 
 // ─── MEMBER VARIABLES: `Owner.field` selection + per-site use resolution (the member-variable round, card A3) ─

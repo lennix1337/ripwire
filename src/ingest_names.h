@@ -2279,6 +2279,7 @@ inline bool cppBlockScopeDirectInit( TSNode fnDeclarator, std::string_view src )
 
 // forward declarations for dropGatedCapture below — the helpers live after nodeTextOf's section.
 inline bool isCjsExportTarget( TSNode nameNode, std::string_view src ) noexcept;
+inline bool isCjsModuleExportsItself( TSNode nameNode, std::string_view src ) noexcept;
 inline bool isPrototypeMemberTarget( TSNode nameNode, std::string_view src ) noexcept;
 inline bool isPyEnumMemberTarget( TSNode nameNode, std::string_view src ) noexcept;
 inline TSNode jsClassFactoryReceiver( TSNode nameNode, std::string_view src ) noexcept;
@@ -2406,7 +2407,7 @@ inline bool dropGatedCapture( std::string_view defCapSv, Lang lang, std::string_
     }
     if( defCapSv == "definition.cjsexport" )
     {
-        return !isCjsExportTarget( nameNode, src );
+        return !isCjsExportTarget( nameNode, src ) && !isCjsModuleExportsItself( nameNode, src );   // the bare form is named by captureTagsFacts
     }
     if( defCapSv == "definition.classfactory" )
     {
@@ -2475,6 +2476,21 @@ inline bool isCjsExportTarget( TSNode nameNode, std::string_view src ) noexcept
             && nodeTextOf( fieldChild( obj, NodeField::Property ), src ) == "exports";
     }
     return false;
+}
+
+// Lane js-def-naming (koa-11: lib/is-stream.js): the bare `module.exports = ( … ) => …` / `module.exports = function ( … ) {…}`. The
+// @name capture is then the `exports` property itself — the left side IS module.exports — so the function the module exports has no
+// name of its own (a named function expression already defines its own, the query's `!name`). captureTagsFacts names it by the
+// file's stem, the rule a Markdown file's own node is named by (ingest_parsepool.h: `fs::path( path ).stem()`).
+inline bool isCjsModuleExportsItself( TSNode nameNode, std::string_view src ) noexcept
+{
+    const TSNode member = ts_node_parent( nameNode );
+    if( ts_node_is_null( member ) || !kindIs( ts_node_type( member ), "member_expression" ) || nodeTextOf( nameNode, src ) != "exports" )
+    {
+        return false;
+    }
+    const TSNode obj = fieldChild( member, NodeField::Object );
+    return !ts_node_is_null( obj ) && kindIs( ts_node_type( obj ), "identifier" ) && nodeTextOf( obj, src ) == "module";
 }
 
 // `Foo.prototype.NAME = fn` at any qualifier depth: the member_expression under `object:` must name

@@ -218,6 +218,10 @@ struct LangFacts
     /// `self.f.m()` field receiver, receiverevidence.h foreignFieldOwner / dispatchReceiverOf). `this` unless the language says
     /// otherwise; elsewhere the same text is an ordinary name (a JS `const self = …`, a Python local `this`) that proves nothing.
     std::string_view instanceReceiver = "this";
+
+    /// TypeScript, JavaScript: a class member is indexed with no Symbol::scope; its owner is the one class whose body holds it
+    /// (graph.h containedOwnersOf), the rule the written-spelling tier binds `Class.method` by and memberowner.h prints n= by.
+    bool containmentOwners = false;
 };
 
 /// java.lang.Object's public methods an interface may redeclare abstract (LangFacts::samIgnoredMembers).
@@ -230,7 +234,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Python, .frameworkEntryHooks = true, .closureReceiverDispatch = true, .baseImportEvidence = BaseImportEvidence::PythonImport,
       .instanceReceiver = "self" },
     { .lang = Lang::TypeScript, .overloadSignatures = true, .structuralTyping = true, .importBoundConstruction = true, .baseImportEvidence = BaseImportEvidence::JsImport,
-      .writtenBindingUndecided = true, .namespaceBodies = true, .objectLiteralMembers = true },
+      .writtenBindingUndecided = true, .namespaceBodies = true, .objectLiteralMembers = true, .containmentOwners = true },
     { .lang = Lang::Go, .structuralTyping = true, .writtenModule = WrittenModuleRule::PackageDir },
     { .lang = Lang::Rust, .contractSignaturesUnindexed = true, .traitImplBlocks = true, .constructorMethod = "new", .memberSeparator = "::", .baseImportEvidence = BaseImportEvidence::RustUse,
       .instanceReceiver = "self" },
@@ -238,7 +242,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::ObjC, .noNestedNamedFunctions = true, .transitiveIncludes = true },
     { .lang = Lang::Markdown, .linkSections = true },
     { .lang = Lang::JavaScript, .structuralTyping = true, .importBoundConstruction = true, .baseImportEvidence = BaseImportEvidence::JsImport,
-      .writtenBindingUndecided = true, .objectLiteralMembers = true },
+      .writtenBindingUndecided = true, .objectLiteralMembers = true, .containmentOwners = true },
     { .lang = Lang::Bash },
     { .lang = Lang::Java, .samLambdas = true, .samIgnoredMembers = kJavaObjectMethods, .anonymousImplementors = true, .baseImportEvidence = BaseImportEvidence::JvmImport,
       .writtenModule = WrittenModuleRule::DirsOnly },

@@ -1418,6 +1418,13 @@ enum class LocalBindKind : std::uint8_t
     // (via=name); over a `var x;` / `let x;` / undeclared name only the root's SPELLING stops deciding (`Eng = Foo; Eng.make()` is
     // not the class `Eng`) while a stated type (`let app; … app = new Hono(); app.request()`) keeps its receiver reading. APPENDED (cache u8).
     JsRebind,
+    // Lane js-def-naming (QN-OBJLIT-NAMED): a JS/TS MODULE-SCOPE object literal bound to a name — `const Widget = { run() {} }`,
+    // `export const Widget = { … }`, `var Widget = { … }`. var = the binding name; spanStart/spanEnd = the object literal, so a
+    // member inside it is that literal's (the index stores no owner for it: langfacts.h objectLiteralMembers). fromSymbol kNoNode
+    // (a module-level statement). Read by graph.h resolveAllByWrittenSpelling ONLY: a spelling whose owner segment is the
+    // literal's name (`Widget.run`) could name that member, so beside a class of that name it is unknown, never the class alone.
+    // APPENDED (cache u8).
+    JsObjectLiteral,
 };
 // fix round 4: the TypeAlias rows that bind a spelling with no alias target (model.h LocalBindKind::TypeAlias, typeName)
 inline constexpr std::string_view kTypeBindForward  = "forward";
@@ -1425,7 +1432,7 @@ inline constexpr std::string_view kTypeBindShadow   = "shadow";
 inline constexpr std::string_view kTypeBindUnparsed = "unparsed";
 inline constexpr std::string_view kTypeBindUnrecorded = "unrecorded";
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
-inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::JsRebind ) + 1;
+inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::JsObjectLiteral ) + 1;
 // FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).
 // L6's ImplBlock is in the set for the same reason: its var is the TRAIT / interface being implemented, never a name bound in the
 // enclosing function, so the generic binding readers (localNameSet, the fn-pointer tables, nonlocalstate) must skip it (its two
