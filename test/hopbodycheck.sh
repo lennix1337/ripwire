@@ -48,6 +48,7 @@ unset RIPWIRE_NO_HOP_BODY RIPWIRE_NO_BODY_FOLD RIPWIRE_NO_BODY_SLOT
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 echo "hopbodycheck: BIN=$BIN"
+fail=0
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
 cd "$ROOT"
@@ -187,7 +188,7 @@ for f in ("p1", "p1f", "p3f", "p4", "f1", "f1f"):
     check(all("--" not in c for c in re.findall(r'<!--(.*?)-->', rd(f), re.S)), "(X3) %s: no -- inside a legend comment" % f)
 sys.exit(1 if fails else 0)
 PY
-python3 "$TMP/chk.py" "$TMP" "$BIN" "$ROOT"; fail=$?
+python3 "$TMP/chk.py" "$TMP" "$BIN" "$ROOT" || fail=1
 
 # P7: MCP path_between twin
 python3 - "$BIN" "$ROOT/$WEB" "$TMP" <<'PY' || fail=1
