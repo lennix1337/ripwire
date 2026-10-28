@@ -40,3 +40,12 @@ struct HHold { const HEnt* e; };
 struct HDHold { const HDEnt* e; };
 int go_hbase(HBase& b, int k) { HHold h; h.e = &kHEnt[k]; return (b.*h.e->f)(k); }
 int go_hder(HDer& d, int k) { HDHold h; h.e = &kHDEnt[k]; return (d.*h.e->f)(k); }
+// V6: the override is only DECLARED in the tree (its body lives in an unindexed unit) and the base method is pure: the pointer's
+// candidate is the override's declaration, never the base's bodyless (pure) one
+struct PB { virtual int pv(int x) = 0; };
+struct PD : PB { int pv(int x) override; };
+typedef int (PB::*PFn)(int);
+struct PEnt { PFn f; };
+static const PEnt kPEnt[] = { { &PB::pv } };
+struct PHold { const PEnt* e; };
+int go_pv(PB& b, int k) { PHold h; h.e = &kPEnt[k]; return (b.*h.e->f)(k); }

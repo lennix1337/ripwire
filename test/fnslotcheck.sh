@@ -96,11 +96,14 @@
 #   V1 [P] a pointer to a VIRTUAL method `&VBase::Act`: every override is a candidate (VDerived::Act, and VDeeper::Act two levels down)
 #          gets called_by="dispatch_v";  V2 [P] a pure virtual's override gets it too;  V3 [P] the pure virtual's bodyless declaration
 #          is never a target (5 targets: the three Act bodies, VDerived::Pure, VBase::Plain);  V4 [P] a method a derived class HIDES:
-#          `&HBase::sh` lists both (a hedge);  V5 [G] `&HDer::sh` names HDer's own only
+#          `&HBase::sh` lists both (a hedge);  V5 [G] `&HDer::sh` names HDer's own only;  V6 [P] a pure base method whose override is only
+#          DECLARED in the tree: the candidate is the override's declaration, never the base's bodyless one
 #   E1 [P] `&grpc::Server::start` (the header is not indexed) never binds the in-tree mine::Server (qualified spelling); E1b [P] nor
 #          does a bare `&Server::start` under `using grpc::Server;`;  E1c [P] nor under `using namespace grpc;` (a bare Server
 #          outside mine::);  E1d [P] nor `&other::inner::Deep::run` beside the in-tree outer::inner::Deep;  E1e [P] nor `&::Server::stop`
 #          (the global-anchored spelling of a class that sits in mine::)
+#   E4 [P] the in-tree class is GLOBAL (GSrv) and `using ext::GSrv;` makes the bare spelling the external one;  E4b [G] the same bare
+#          spelling without the using stays typed;  E5 [G] `using namespace mine;` makes a bare `&Server::both` outside mine typed
 #   E2 [G] `&mine::Server::stop`, the bare `&Server::stop` written inside `namespace mine`, an out-of-line `int mine::Server::both()`
 #          writing `&Server::start`, `&::mine::Server::start` stay typed;  E3 [G] nested (`outer::inner::Deep`, the suffix `inner::Deep`),
 #          C++17 nested (`c1::c2::Pair`, `c2::Pair`), an anonymous namespace (`Anon`) and an inline namespace (`v0::Ver`) stay typed
@@ -377,6 +380,14 @@ has   "V4 a hidden non-virtual method: the base's pointer lists both (a hedge)" 
 has   "V4b and the base's own" "$o" '<t n="HBase.sh" p="virt.cc:'
 o="$( run --callees=go_hder )"
 hasnt "V5 the derived class's pointer names its own only" "$o" '<t n="HBase.sh"'
+o="$( run --callees=go_pv )"
+has   "V6 a declared-only override is the candidate of a pure base method" "$o" '<t n="PD.pv"'
+hasnt "V6b never the base's bodyless declaration" "$o" '<t n="PB.pv"'
+o="$( run --callers=GSrv::gs_start )"
+hasnt "E4 a using-declaration of an external class beside an in-tree global one of that name binds nothing" "$o" 'called_by="go_gdecl"'
+has   "E4b the same bare spelling without the using stays typed" "$o" 'called_by="go_gok"'
+o="$( run --callers=Server::both )"
+has   "E5 a using-directive of the class's own namespace keeps the bare spelling typed" "$o" 'called_by="go_dirin"'
 o="$( run --callers=Server::start )"
 hasnt "E1 an external &grpc::Server::start never binds the in-tree mine::Server" "$o" 'called_by="go_ext"'
 hasnt "E1b nor a bare spelling under using grpc::Server" "$o" 'called_by="go_using"'
