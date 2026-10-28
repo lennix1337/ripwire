@@ -5,6 +5,10 @@
 # flag (18 FAIL) and its --path answer carries no <alts>. Three NEGATIVES pass vacuously there (no row is a JSON key, every
 # sel= proven, P2 no <alts>); each was proven able to fail by a mutant on f966224b: the data-Section filter dropped (6 FAIL),
 # picksAlone always false (4 FAIL), defPickProvablyUnique false at one group (P2 FAIL).
+# FIX ROUND 1 (2026-10-28, review F15): the picksAlone all_of -> any_of mutant ("binds this group AND MAYBE OTHERS" counts as
+# proven) survived all 21 arms because no fixture held two same-named definitions in ONE file, so file:name always picked alone.
+# Arm B2 (src/pair.ts: P.go, Q.go) fails that mutant, as do the (C) re-resolution of its sels. Mutants of the fix round are recorded
+# at the end of this header.
 # Arms: namesakes across files with a test copy and a JSON key (A), a C prototype folded with its definition (B), every
 # printed sel= re-resolved by another verb to one definition (C), file:name / Owner.name spellings (D), zero found (E), over
 # the 16-row cap with --offset paging (F), several names in one call (G), the JSON twin spelling every row as the XML does (J),
@@ -42,14 +46,21 @@ echo "-- (B) a C prototype and its definition are one group"
 run --defs=work >"$TMP/b.xml" 2>/dev/null
 if grep -q '<name q="work" defs="1">' "$TMP/b.xml" && grep -q 'p="src/work.c:2"' "$TMP/b.xml"; then ok "work: one group, the bodied definition"; else no "work not one group: $( grep -o '<name.*' "$TMP/b.xml" | head -c 300 )"; fi
 
+echo "-- (B2) two same-named methods in ONE file: the bare file:name binds both, so it proves neither (F15)"
+run --defs=go >"$TMP/b2.xml" 2>/dev/null
+selsb2="$( grep -o 'sel="[^"]*"' "$TMP/b2.xml" | sed 's/sel="//; s/"$//' )"
+if grep -q '<name q="go" defs="2">' "$TMP/b2.xml" && [ "$( printf '%s\n' "$selsb2" | sort -u | wc -l | tr -d ' ' )" = 2 ] && ! printf '%s\n' "$selsb2" | grep -qx 'src/pair.ts:go' && ! grep -q 'sel_proven=' "$TMP/b2.xml"; then ok "go: 2 rows, 2 DIFFERENT proven sels (Owner-qualified), never the bare file:name that binds both"; else no "go: $( grep -o '<d [^>]*>' "$TMP/b2.xml" )"; fi
+run --callers=src/pair.ts:go >"$TMP/b2c.xml" 2>/dev/null
+if grep -q '<def ix=' "$TMP/b2c.xml"; then ok "B2 control: --callers=src/pair.ts:go really is a 2-group table (the spelling a wrong proof would have printed)"; else no "B2 control: src/pair.ts:go binds one group: the fixture cannot show the any_of mutant"; fi
+
 echo "-- (C) every printed sel= re-resolves to exactly one definition group in another verb (no multi-group <def> table)"
 n=0; bad=0
-for s in $( grep -o 'sel="[^"]*"' "$TMP/a.xml" "$TMP/b.xml" | sed 's/.*sel="//; s/"$//' ); do
+for s in $( grep -o 'sel="[^"]*"' "$TMP/a.xml" "$TMP/b.xml" "$TMP/b2.xml" | sed 's/.*sel="//; s/"$//' ); do
     n=$(( n + 1 ))
     out="$( run --callers="$s" 2>/dev/null )"
     { printf '%s' "$out" | grep -q '<callers ' && ! printf '%s' "$out" | grep -q '<def ix='; } || { bad=$(( bad + 1 )); echo "    sel=$s -> $( printf '%s' "$out" | grep -o '<callers [^>]*>' | head -c 200 )"; }
 done
-if [ "$n" -ge 4 ] && [ "$bad" -eq 0 ]; then ok "$n sel= spellings each bind one definition group"; else no "$bad of $n sel= spellings did not bind one definition group"; fi
+if [ "$n" -ge 6 ] && [ "$bad" -eq 0 ]; then ok "$n sel= spellings each bind one definition group"; else no "$bad of $n sel= spellings did not bind one definition group"; fi
 
 echo "-- (D) spellings the shared resolver accepts"
 run --defs=src/b.ts:run >"$TMP/d1.xml" 2>/dev/null
