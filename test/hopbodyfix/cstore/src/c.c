@@ -1,4 +1,5 @@
 int fill_buffer(int *out, int n);
+int commit_slots(int *out, int n);
 int scale_and_store(int *out, int *aux, int n)
 {
     int t = fill_buffer(out, n);
@@ -24,4 +25,11 @@ int scale_store_limit(int v)
 int store_and_scale_twice(int v)
 {
     return ( v * 3 ) - ( v % 7 );
+}
+int prime_then_fill(int *out, int *aux, int *tag, int n)
+{
+    *aux = n;
+    *tag = n + 1;
+    *out = n + 2;
+    return commit_slots(out, n);
 }

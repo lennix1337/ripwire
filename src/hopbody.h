@@ -21,6 +21,7 @@
 
 #include "defattrib.h"  // edgeSplitArm — the hop row's prov="split", read for a body's hedge
 #include "graph.h"
+#include "langfacts.h"  // dashDashComments / leadingDocstring — the statement-line rule's per-language columns
 #include "lexical.h"    // lexicalScanText — the body text the index read
 #include "model.h"
 #include "nextverb.h"   // nextFlag
@@ -127,7 +128,7 @@ inline bool isStatementLine( std::string_view line, Lang lang ) noexcept
     }
     const std::string_view t           = line.substr( a );
     const bool             starComment = t == "*" || t.starts_with( "* " ) || t.starts_with( "*\t" ) || t.starts_with( "*/" );
-    if( t.starts_with( "//" ) || t.starts_with( "#" ) || t.starts_with( "/*" ) || starComment || ( lang == Lang::Lua && t.starts_with( "--" ) ) )
+    if( t.starts_with( "//" ) || t.starts_with( "#" ) || t.starts_with( "/*" ) || starComment || ( langFacts( lang ).dashDashComments && t.starts_with( "--" ) ) )
     {
         return false;
     }
@@ -160,7 +161,7 @@ inline std::size_t bodyStatementLines( std::string_view body, Lang lang, std::si
 {
     std::size_t      statements = 0;
     std::string_view docClose;                        // inside a leading multi-line docstring: its closing quote
-    bool             docAllowed = lang == Lang::Python;
+    bool             docAllowed = langFacts( lang ).leadingDocstring;
     while( !body.empty() && statements <= stopAbove )
     {
         const std::size_t      nl   = body.find( '\n' );

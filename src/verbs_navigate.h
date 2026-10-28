@@ -2479,7 +2479,7 @@ std::optional<int> runExternalSurface( const MainDispatch& d )
 
 // served: bodies the enclosing answer already carries (the --for graph-verb block passes its fold's and slot's); a middle hop among them
 // prints no second copy (hopbody.h). The bare --path passes none.
-std::optional<int> runPathServed( const MainDispatch& d, std::span<const rw::NodeId> served )
+std::optional<int> runPathServed( const MainDispatch& d, std::span<const rw::NodeId> served, bool inForBlock )
 {
     using namespace rw;
     const Config&                     cfg          = d.cfg;
@@ -2624,7 +2624,9 @@ std::optional<int> runPathServed( const MainDispatch& d, std::span<const rw::Nod
         const std::string_view   pthBodyRoot  = pthSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view();
         const bool               pthBodiesOn  = !path.empty() && rw::hopBodiesOn();
         const rw::RouteBodiesXml pthHopBodyEl = pthBodiesOn ? rw::pathHopBodiesXml( ing, rw::pathMiddleHops( ing, g, pthShown, served ), pthBodyRoot ) : rw::RouteBodiesXml{};
-        const rw::RouteBodiesXml pthRouteEl   = path.empty() && rw::hopBodiesOn()
+        // GAIN GATE (fix1 fire table): never inside a --for graph-verb block — the --for answer serves its own bodies, and the one
+        // in-sample fire there (LARGE-DEV vscode-03, +7.7 KB) named nothing its question asked for
+        const rw::RouteBodiesXml pthRouteEl   = path.empty() && !inForBlock && rw::hopBodiesOn()
                                                     ? rw::pathRouteBodies( ing, g, pthBridge, pthHandler, pthBodyRoot ) : rw::RouteBodiesXml{};
         const std::string&       pthHopBodies = pthHopBodyEl.xml;
         std::string              pthRootAttrs = rw::pathTestTwinRootAttrs( ing, rw::pathPairsRootAttrs( ing, pthPairs, pthSingleRoot, pthRootPrefix ).rootAttrs, pthTwin, pthSingleRoot, pthRootPrefix );
@@ -2675,7 +2677,7 @@ std::optional<int> runPathServed( const MainDispatch& d, std::span<const rw::Nod
 
 std::optional<int> runPath( const MainDispatch& d )
 {
-    return runPathServed( d, {} );
+    return runPathServed( d, {}, /*inForBlock=*/false );
 }
 
 std::optional<int> runConnect( const MainDispatch& d )

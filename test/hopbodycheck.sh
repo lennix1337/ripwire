@@ -54,6 +54,8 @@
 #          source; never the to= row (on_event); reachable= and hops= unchanged; the of=route clause rides (compact and full)
 #   R2 [M] the route spew guard: a fifth route body is cut, capped="1" next="--expand=pump.py:45:_trace_message"
 #   R3 [M] the hop bound: the 4-hop bridge press -> on_event prints its rows 0..2 only (press, post_message, the loop)
+#   H4b[M] three `*p =` stores before the one call: 4 statement lines, never followed (pins the * comment rule alone)
+#   R5 [G] the gain gate: inside a --for answer's graph-verb block the unreached path prints no route bodies
 #   R4 [G] RIPWIRE_NO_HOP_BODY=1: no route element; MCP path_between prints the CLI's route element byte for byte
 #
 # Usage:  bash test/hopbodycheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/hopbodycheck.sh
@@ -118,6 +120,7 @@ run "$HB/external" --for="how does relayWorkItem relay a work item" >"$TMP/h2b"
 run "$HB/ffi" --for="How does relay_transform relay a value?" >"$TMP/h3"
 run "$HB/ffi" --callees=relay_transform >"$TMP/h3c"
 run "$HB/cstore" --for="how does scale_and_store scale and store" >"$TMP/h4"
+run "$HB/cstore" --for="how does prime_then_fill prime the buffers then fill" >"$TMP/h4b"
 run "$HB/pydoc" --for="how does Widget post_message post a message" >"$TMP/h5a"
 run "$HB/pydoc" --for="how does Widget post_message_plain post a message" >"$TMP/h5b"
 run "$HB/klass" --for="how does PanelHolder compute the panel size for the holder" >"$TMP/h6"
@@ -132,6 +135,7 @@ rrun route '--path=post_message,on_*' >"$TMP/r1"
 rrun route '--path=post_message,on_*' --legend=full >"$TMP/r1f"
 rrun routecap '--path=post_message,on_*' >"$TMP/r2"
 rrun route '--path=press,on_event' >"$TMP/r3"
+rrun route --for="Trace the path from post_message() to on_event()" >"$TMP/r5"
 ( cd "$TMP/route" && RIPWIRE_NO_HOP_BODY=1 "$BIN" "$TMP/route" --no-cache '--path=post_message,on_*' 2>/dev/null ) >"$TMP/r1.off"
 
 cat > "$TMP/chk.py" <<'PY'
@@ -238,6 +242,7 @@ check('via="declined"' in rd("h2c") and re.search(r'<b [^>]*n="relayWorkItem"', 
 check(re.search(r'<b [^>]*n="relayWorkItem"', rd("h2b")) and fol(rd("h2b")) == [], "(H2) an undefined call beside the proven one: never followed")
 check('graph_ambiguous="1"' in rd("h3c") and re.search(r'<b [^>]*n="relay_transform"', rd("h3")) and fol(rd("h3")) == [] and not re.search(r'<b [^>]*n="scale_impl"', rd("h3")), "(H3) a binding-only call (amb=) is never followed")
 check(re.search(r'<b [^>]*n="scale_and_store"', rd("h4")) and fol(rd("h4")) == [], "(H4) C *out stores count as statements: no follow")
+check(re.search(r'<b [^>]*n="prime_then_fill"', rd("h4b")) and fol(rd("h4b")) == [], "(H4b) three *p stores + the call = 4 statement lines: no follow (pins the * rule alone)")
 check(fol(rd("h5a")) == ["Widget.post_message"] and fol(rd("h5b")) == ["Widget.post_message_plain"], "(H5) documented and plain Python delegators both followed, follow_of=Owner.name: %r %r" % (fol(rd("h5a")), fol(rd("h5b"))))
 check(re.search(r'<b [^>]*n="PanelHolder"', rd("h6")) and fol(rd("h6")) == [], "(H6) a class is never a wrapper")
 check(fol(rd("h6b")) == ["ChildRunner.launch"], "(H5/F7) a super-override follow names its wrapper Owner.name: %r" % fol(rd("h6b")))
@@ -262,6 +267,8 @@ el2 = routel(rd("r2"))
 check(el2.startswith('<bodies of="route" proven="0" shown="4" total="5" capped="1" next="--expand=pump.py:45:_trace_message">') and len(bodies(el2)) == 4, "(R2) a fifth route body is cut: capped=1, next= the first unshown")
 b3 = [b[0].get("n") for b in bodies(routel(rd("r3")))]
 check(b3 == ["press", "post_message", "_process_messages_loop"], "(R3) a 4-hop bridge prints rows 0..2 only: %r" % b3)
+g5 = (re.search(r'<graph_verb .*?</graph_verb>', rd("r5"), re.S) or re.search(r'$', rd("r5"))).group(0)
+check(g5 != "" and 'reachable="0"' in g5 and routel(g5) == "" and "bodies of=route" not in legend(rd("r5")), "(R5) a --for graph-verb path block prints no route bodies (the gain gate)")
 check(routel(rd("r1.off")) == "" and "bodies of=route" not in legend(rd("r1.off")), "(R4) RIPWIRE_NO_HOP_BODY=1: no route element, no clause")
 for f in ("h1", "r1", "r2", "r3"):
     check(subprocess.run(["xmllint", "--noout", os.path.join(T, f)], capture_output=True).returncode == 0, "(X2) %s well-formed" % f)

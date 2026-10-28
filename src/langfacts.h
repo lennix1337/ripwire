@@ -233,6 +233,14 @@ struct LangFacts
     /// Python parameter `static=False`, a TypeScript literal type `'static'`, a Rust `'static` lifetime, a string default all spell it
     /// without meaning linkage, and a function in those languages carries no `static` storage class at all.
     bool staticLinkage = false;
+
+    /// Lua: a line starting `--` is a comment (elsewhere it is a decrement, `--n;`). hopbody.h isStatementLine reads it when it
+    /// counts a thin delegator's statement lines (lane path-hop-body-fix1, review F3).
+    bool dashDashComments = false;
+
+    /// Python: a string literal as a function's FIRST statement is its docstring, not code; hopbody.h bodyStatementLines does not
+    /// count it (lane path-hop-body-fix1, review F4: a documented one-line delegator is still thin).
+    bool leadingDocstring = false;
 };
 
 /// java.lang.Object's public methods an interface may redeclare abstract (LangFacts::samIgnoredMembers).
@@ -243,7 +251,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true, .memberSeparator = "::",
       .transitiveIncludes = true, .writtenModule = WrittenModuleRule::SourceChain, .staticLinkage = true },
     { .lang = Lang::Python, .frameworkEntryHooks = true, .closureReceiverDispatch = true, .baseImportEvidence = BaseImportEvidence::PythonImport,
-      .instanceReceiver = "self", .underscorePrivacy = true },
+      .instanceReceiver = "self", .underscorePrivacy = true, .leadingDocstring = true },
     { .lang = Lang::TypeScript, .overloadSignatures = true, .structuralTyping = true, .importBoundConstruction = true, .baseImportEvidence = BaseImportEvidence::JsImport,
       .writtenBindingUndecided = true, .namespaceBodies = true, .objectLiteralMembers = true, .containmentOwners = true },
     { .lang = Lang::Go, .structuralTyping = true, .writtenModule = WrittenModuleRule::PackageDir },
@@ -267,7 +275,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Toml },
     { .lang = Lang::Yaml },
     { .lang = Lang::Php, .memberSeparator = "::" },
-    { .lang = Lang::Lua },
+    { .lang = Lang::Lua, .dashDashComments = true },
     { .lang = Lang::Elixir, .hasInertQuoteRegions = true },
     { .lang = Lang::Dart },
     { .lang = Lang::Kotlin, .samFromJavaLambdas = true, .trailingLambdaScopeFns = true, .interfaceReadsAsClass = true, .anonymousImplementors = true, .overloadsWithoutArity = true,

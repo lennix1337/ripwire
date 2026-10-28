@@ -2656,7 +2656,7 @@ struct ForLensPassMode
 };
 // the verb sections (verbs_navigate.h) come later in this translation unit; the --for block calls their CLI entry points
 std::optional<int> runPath( const MainDispatch& d );
-std::optional<int> runPathServed( const MainDispatch& d, std::span<const rw::NodeId> served );
+std::optional<int> runPathServed( const MainDispatch& d, std::span<const rw::NodeId> served, bool inForBlock );
 std::optional<int> runCallHierarchy( const MainDispatch& d );
 std::optional<int> runConnect( const MainDispatch& d );
 
@@ -2699,7 +2699,7 @@ inline void appendSubjectGraphVerbBlock( const MainDispatch& d, std::span<const 
     {
         switch( args->form )
         {
-            case rw::GraphSubjectForm::Path: (void)runPathServed( sd, served ); break;
+            case rw::GraphSubjectForm::Path: (void)runPathServed( sd, served, /*inForBlock=*/true ); break;
             case rw::GraphSubjectForm::Callers: (void)runCallHierarchy( sd ); break;
             case rw::GraphSubjectForm::Common: (void)runConnect( sd ); break;
         }

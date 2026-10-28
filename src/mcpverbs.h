@@ -2443,7 +2443,7 @@ inline std::string_view mcpPageRankFlags( bool noRoute )
 }
 
 // defined below; forTaskText's FOR-ROUTE-DECLINED block calls them (the path_between / connect twins)
-inline std::optional<std::string> pathText( const std::string& root, const std::string& from, const std::string& to );
+inline std::optional<std::string> pathText( const std::string& root, const std::string& from, const std::string& to, bool inForBlock = false );
 inline std::string connectText( const std::string& root, const std::vector<std::string>& symbolSpecs, std::uint32_t radius, std::string& err, RedactCounts* redact );
 inline std::string batchCdata( const std::string& s );   // the callers twin's JSON rides as CDATA
 
@@ -2922,7 +2922,7 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
         GraphSubjectOpen opts;
         if( gsa->form == GraphSubjectForm::Path )
         {
-            verb              = pathText( root, gsa->endpoints[0], gsa->endpoints[1] ).value_or( std::string() );
+            verb              = pathText( root, gsa->endpoints[0], gsa->endpoints[1], /*inForBlock=*/true ).value_or( std::string() );
             opts.nameTestHops = graphSubjectNameTestHops( verb );
         }
         else if( gsa->form == GraphSubjectForm::Common )
@@ -3751,7 +3751,7 @@ inline McpAffectedResult affectedText( const std::string& root, std::string_view
 // resolveFocus + shortestPath, exactly as the CLI --path=A,B. Returns the <path>…</path> XML fragment (with
 // reachable="0" hops="0" and no <s> children when B is NOT reachable from A — a valid answer, not an error),
 // or "" (caller → not-found error) when EITHER endpoint fails to resolve.
-inline std::optional<std::string> pathText( const std::string& root, const std::string& from, const std::string& to )
+inline std::optional<std::string> pathText( const std::string& root, const std::string& from, const std::string& to, bool inForBlock )
 {
     const McpIndex&     ix  = getIndex( root );
     const IngestResult& ing = ix.ing;
@@ -3835,7 +3835,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     // F8: no served set here — the MCP `for` answer's graph-verb block calls this twin by name only, so a middle hop that `for`
     // answer already carries prints a second copy on MCP (the CLI passes its served bodies: runPathServed); a known, bounded divergence
     const RouteBodiesXml      ptHopBodyEl = ptBodiesOn ? pathHopBodiesXml( ing, pathMiddleHops( ing, g, ptShown, {} ), ptBodyRoot ) : RouteBodiesXml{};
-    const RouteBodiesXml      ptRouteEl   = pth.empty() && hopBodiesOn() ? pathRouteBodies( ing, g, ptBridge, ptHandler, ptBodyRoot ) : RouteBodiesXml{};   // BODY-ON-ROUTE, as on the CLI
+    const RouteBodiesXml      ptRouteEl   = pth.empty() && !inForBlock && hopBodiesOn() ? pathRouteBodies( ing, g, ptBridge, ptHandler, ptBodyRoot ) : RouteBodiesXml{};   // BODY-ON-ROUTE, as on the CLI
     const std::string&        ptHopBodies = ptHopBodyEl.xml;
     std::string               ptRootAttrs = pathTestTwinRootAttrs( ing, pathPairsRootAttrs( ing, ptPairs, ptSingleRoot, ptRootPrefix ).rootAttrs, ptTwin, ptSingleRoot, ptRootPrefix );
     const std::string         ptHopNext   = ptBodiesOn && ptRootAttrs.find( " next=\"" ) == std::string::npos ? pathMiddleHopNext( ing, ptShown, ptBodyRoot ) : std::string();
