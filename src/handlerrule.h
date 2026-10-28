@@ -26,6 +26,8 @@
 #include "darkflags.h"          // readWhole — the rule and the post site are read from the file text
 #include "filter.h"             // isTestPath — a test's reader does not make posters
 #include "model.h"
+#include "resolve.h"            // trimWs
+#include "infra/namesplit.h"   // isIdentChar
 #include "valuerefindex.h"      // ClassFamilies — owner class and written-base family
 
 #include <algorithm>
@@ -33,6 +35,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -85,6 +88,15 @@ inline std::string snakeOfCamel( std::string_view s )
     return out;
 }
 
+// Two reference-ordered site lists merged in reference order (NameKeyHops: template lookups beside post sites).
+inline std::vector<std::uint32_t> mergedSiteLists( std::vector<std::uint32_t> sites, const std::vector<std::uint32_t>& more )
+{
+    const std::size_t mid = sites.size();
+    sites.insert( sites.end(), more.begin(), more.end() );
+    std::ranges::inplace_merge( sites, sites.begin() + std::ptrdiff_t( mid ) );
+    return sites;
+}
+
 class HandlerRules
 {
 public:
@@ -103,8 +115,8 @@ public:
     const HandlerPostSite* siteAt( std::uint32_t ref ) const
     {
         build();
-        const auto it = std::ranges::lower_bound( m_sites, ref, {}, &HandlerPostSite::ref );
-        return it != m_sites.end() && it->ref == ref ? &*it : nullptr;
+        const auto it = m_siteOfRef.find( ref );
+        return it == m_siteOfRef.end() ? nullptr : &m_sites[ it->second ];
     }
     // The post sites whose message names handler `d` (a method), in reference order.
     std::vector<std::uint32_t> sitesNaming( NodeId d ) const
@@ -195,56 +207,31 @@ public:
     }
 
 private:
+    // A Python function definition inside a class (collectMessagesAndMethods marks them).
     bool isHandlerShaped( NodeId d ) const
     {
-        const Symbol& s = m_ing.symbols[d];
-        return s.lang == Lang::Python && ( s.kind == SymKind::Function || s.kind == SymKind::Method ) && m_classes.ownerOf( d ) != kNoNode;
+        return d < m_inClass.size() && m_inClass[d] != 0;
     }
     std::string_view span( const Symbol& s ) const
     {
         const std::string& t = text( s.fileId );
         return s.sigStartByte < s.endByte && s.endByte <= t.size() ? std::string_view( t ).substr( s.sigStartByte, s.endByte - s.sigStartByte ) : std::string_view();
     }
-    std::string_view lineAt( const Reference& r ) const
-    {
-        const std::string_view t( text( r.fileId ) );
-        if( r.startByte >= t.size() )
-        {
-            return {};
-        }
-        const std::size_t b = t.rfind( '\n', r.startByte );
-        const std::size_t e = t.find( '\n', r.startByte );
-        const std::size_t from = b == std::string_view::npos ? 0 : b + 1;
-        return t.substr( from, ( e == std::string_view::npos ? t.size() : e ) - from );
-    }
-    static bool isIdent( char c ) noexcept { return std::isalnum( static_cast<unsigned char>( c ) ) || c == '_'; }
-    static std::string_view trimmed( std::string_view s ) noexcept
-    {
-        while( !s.empty() && std::isspace( static_cast<unsigned char>( s.front() ) ) )
-        {
-            s.remove_prefix( 1 );
-        }
-        while( !s.empty() && std::isspace( static_cast<unsigned char>( s.back() ) ) )
-        {
-            s.remove_suffix( 1 );
-        }
-        return s;
-    }
     // `cls.A = f"P{v}"` (either quote) → prefix P; nullopt for any other line.
     static std::optional<std::string> templatePrefix( std::string_view line, std::string_view attr )
     {
-        line = trimmed( line );
+        line = trimWs( line );
         const std::string head = "cls." + std::string( attr );
         if( !line.starts_with( head ) )
         {
             return std::nullopt;
         }
-        line = trimmed( line.substr( head.size() ) );
+        line = trimWs( line.substr( head.size() ) );
         if( !line.starts_with( '=' ) || line.starts_with( "==" ) )
         {
             return std::nullopt;
         }
-        line = trimmed( line.substr( 1 ) );
+        line = trimWs( line.substr( 1 ) );
         if( line.size() < 6 || line[0] != 'f' || ( line[1] != '"' && line[1] != '\'' ) || line.back() != line[1] )
         {
             return std::nullopt;
@@ -252,7 +239,7 @@ private:
         const std::string_view body = line.substr( 2, line.size() - 3 );
         const std::size_t      open = body.find( '{' );
         if( open == 0 || open == std::string_view::npos || body.back() != '}' || body.find( '{', open + 1 ) != std::string_view::npos
-            || !std::ranges::all_of( body.substr( 0, open ), isIdent ) || !std::ranges::all_of( body.substr( open + 1, body.size() - open - 2 ), isIdent ) )
+            || !std::ranges::all_of( body.substr( 0, open ), namesplit::isIdentChar ) || !std::ranges::all_of( body.substr( open + 1, body.size() - open - 2 ), namesplit::isIdentChar ) )
         {
             return std::nullopt;
         }
@@ -284,9 +271,9 @@ private:
     // One `cls.A = f"P{v}"` line of __init_subclass__ `writer` (at byte `at` of its file) as a rule, or nullopt.
     std::optional<HandlerRule> ruleAt( NodeId writer, std::string_view line, std::uint32_t lineNo ) const
     {
-        const std::string_view t = trimmed( line );
+        const std::string_view t = trimWs( line );
         std::size_t            e = 4;
-        while( e < t.size() && isIdent( t[e] ) )
+        while( e < t.size() && namesplit::isIdentChar( t[e] ) )
         {
             ++e;
         }
@@ -326,12 +313,12 @@ private:
         {
             return {};
         }
-        std::string_view v = trimmed( head.substr( at + 9 ) );
+        std::string_view v = trimWs( head.substr( at + 9 ) );
         if( !v.starts_with( '=' ) )
         {
             return {};
         }
-        v = trimmed( v.substr( 1 ) );
+        v = trimWs( v.substr( 1 ) );
         if( v.size() < 2 || ( v[0] != '"' && v[0] != '\'' ) )
         {
             return {};
@@ -371,7 +358,7 @@ private:
         for( ;; )
         {
             const std::size_t b = i;
-            while( i < t.size() && isIdent( t[i] ) )
+            while( i < t.size() && namesplit::isIdentChar( t[i] ) )
             {
                 ++i;
             }
@@ -443,35 +430,28 @@ private:
     }
     void collectMessagesAndMethods() const
     {
+        m_inClass.assign( m_ing.symbols.size(), 0 );
         for( const Symbol& s : m_ing.symbols )
         {
-            if( s.lang != Lang::Python )
+            const bool fn = s.kind == SymKind::Function || s.kind == SymKind::Method;
+            if( s.lang == Lang::Python && fn && m_classes.ownerOf( s.id ) != kNoNode )
             {
-                continue;
+                m_inClass[ s.id ] = 1;
+                m_methodsByName[ std::string_view( s.name ) ].push_back( s.id );
             }
-            if( s.kind == SymKind::Class && !handlerNameOf( s.id ).empty() )
+            else if( s.lang == Lang::Python && s.kind == SymKind::Class && !handlerNameOf( s.id ).empty() )
             {
                 m_messagesByName[ std::string_view( s.name ) ].push_back( s.id );
             }
-            else if( isHandlerShaped( s.id ) )
-            {
-                m_methodsByName[ std::string_view( s.name ) ].push_back( s.id );
-            }
         }
     }
-    // The innermost Python function definition of `fileId` holding byte `at`, else kNoNode.
+    // The innermost Python function definition of `fileId` holding byte `at`, else kNoNode (definition order: an inner function
+    // follows the one it is nested in, so the last that holds `at` is the innermost).
     NodeId functionAt( std::uint32_t fileId, std::uint32_t at ) const
     {
-        NodeId best = kNoNode;
-        for( const NodeId f : m_fnsOfFile[ fileId ] )
-        {
-            const Symbol& s = m_ing.symbols[f];
-            if( s.sigStartByte <= at && at < s.endByte && ( best == kNoNode || s.sigStartByte >= m_ing.symbols[ best ].sigStartByte ) )
-            {
-                best = f;
-            }
-        }
-        return best;
+        const auto holds = [ & ]( NodeId f ) { return m_ing.symbols[f].sigStartByte <= at && at < m_ing.symbols[f].endByte; };
+        const auto hit   = std::ranges::find_if( m_fnsOfFile[ fileId ] | std::views::reverse, holds );
+        return hit == ( m_fnsOfFile[ fileId ] | std::views::reverse ).end() ? kNoNode : *hit;
     }
     // Readers of a rule attribute (`.A` not assigned) in Python files outside test paths, read from the text, and every method
     // name their classes define (the posters).
@@ -505,7 +485,7 @@ private:
                         ++next;
                     }
                     const bool store = next < t.size() && t[ next ] == '=' && ( next + 1 >= t.size() || t[ next + 1 ] != '=' );
-                    if( ( end < t.size() && isIdent( t[ end ] ) ) || store )
+                    if( ( end < t.size() && namesplit::isIdentChar( t[ end ] ) ) || store )
                     {
                         continue;
                     }
@@ -565,6 +545,7 @@ private:
             site.names.erase( std::ranges::unique( site.names ).begin(), site.names.end() );
             if( !site.names.empty() )
             {
+                m_siteOfRef[ i ] = std::uint32_t( m_sites.size() );
                 m_sites.push_back( std::move( site ) );
             }
         }
@@ -575,6 +556,8 @@ private:
     mutable bool                                          m_built = false;
     mutable std::vector<HandlerRule>                      m_rules;
     mutable std::vector<HandlerPostSite>                  m_sites;      // reference order
+    mutable HashMap<std::uint32_t, std::uint32_t>         m_siteOfRef;  // post-site reference -> its m_sites index
+    mutable std::vector<char>                             m_inClass;    // per symbol: a Python function definition inside a class
     mutable std::vector<HandlerReader>                    m_readers;
     mutable std::vector<std::vector<NodeId>>              m_fnsOfFile;   // per file: its Python function definitions
     mutable HashMap<std::string_view, std::vector<NodeId>> m_messagesByName;

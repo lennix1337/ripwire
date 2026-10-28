@@ -636,7 +636,7 @@ public:
                 return isCall( m_ing.references[ site ] ) && from != d && from < m_ing.symbols.size();
             } );
         }
-        return withPostSites( out, m_rules.sitesNaming( d ) );   // ON-NAME-HANDLERS-V2: a posted message class names d
+        return mergedSiteLists( out, m_rules.sitesNaming( d ) );   // ON-NAME-HANDLERS-V2: a posted message class names d
     }
     // The template lookups made in u that make a call, in reference order.
     std::vector<std::uint32_t> sitesIn( NodeId u ) const
@@ -646,7 +646,7 @@ public:
         {
             std::ranges::copy_if( m_pix->sitesIn( std::span<const NodeId>( &u, 1 ) ), std::back_inserter( out ), [ & ]( std::uint32_t site ) { return isCall( m_ing.references[ site ] ); } );
         }
-        return withPostSites( out, m_rules.sitesIn( u ) );
+        return mergedSiteLists( out, m_rules.sitesIn( u ) );
     }
     // The message-handler rule (handlerrule.h): its post sites are name-key sites too.
     const HandlerRules& rules() const noexcept { return m_rules; }
@@ -668,17 +668,6 @@ public:
     }
 
 private:
-    // The template sites and the post sites, merged in reference order (each list is already in that order).
-    static std::vector<std::uint32_t> withPostSites( std::vector<std::uint32_t> sites, const std::vector<std::uint32_t>& posts )
-    {
-        if( !posts.empty() )
-        {
-            const std::size_t mid = sites.size();
-            sites.insert( sites.end(), posts.begin(), posts.end() );
-            std::ranges::inplace_merge( sites, sites.begin() + std::ptrdiff_t( mid ) );
-        }
-        return sites;
-    }
     // A usable template lookup that makes a call through the name: not too wide ("w"), not a presence test or a store ("t": hasattr,
     // `o[ 'p' + e ] = fn`; both are still <pd> clues, ingest_valuerefs.h emitPattern).
     static bool isCall( const Reference& r ) noexcept
