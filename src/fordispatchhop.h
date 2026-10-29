@@ -364,14 +364,14 @@ struct DispatchHopRender
     std::size_t bodyBytes = 0;    // the body elements' bytes inside xml (the body rate); the rest is markup
 };
 
-// Rust spells a constructor `new` (an associated function, not a keyword). A switch, not a `== Lang::` predicate: the language-identity
-// ratchet (test/langidentity/ratchet.tsv) counts predicates in shared files and may never rise.
-inline bool rustNew( Lang lang, std::string_view name ) noexcept
+// A constructor spelling for the element: forctorhop.h's per-language rule, plus Rust `new` (an associated function, not a
+// keyword). A switch, not a language-equality predicate: the language-identity ratchet counts those in shared files.
+inline bool dispatchCtorName( Lang lang, std::string_view name, std::string_view owner ) noexcept
 {
     switch( lang )
     {
         case Lang::Rust: return name == "new";
-        default:         return false;
+        default:         return ctor_detail::isCtorName( lang, name, owner );
     }
 }
 
@@ -391,7 +391,7 @@ inline std::vector<NodeId> dispatchOwnerCtors( const IngestResult& ing, NodeId c
     {
         const Symbol& s = ing.symbols[id];
         if( id != cand && s.lang == c.lang && s.scope == c.scope && ReceiverEvidence::callableKind( s.kind )
-            && ( ctor_detail::isCtorName( s.lang, s.name, owner ) || rustNew( s.lang, s.name ) ) )
+            && dispatchCtorName( s.lang, s.name, owner ) )
         {
             out.push_back( id );
         }
