@@ -1713,15 +1713,8 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 {
                     return "; the memory guard stopped an ingest this request ran, which may be the real cause — " + std::string( memguard::kOverride );
                 }
-                // notfound-on-cut: a LATER request served from an index an earlier one found cut. Its not-found / refusal is
-                // an absence claim on a partial corpus, and a result of the same index carries _memory_stop (textResult), so
-                // the error carries the same sentence. Resident slot only — an error never builds or rebuilds an index.
-                const McpIndex& resident = mcpIndexSlot();
-                if( resident.valid && resident.root == path && resident.ing.memoryStop.isSet() )
-                {
-                    return "; " + memguard::partialAbsenceLine( resident.ing );
-                }
-                return {};
+                // notfound-on-cut: a LATER request served from an index an earlier one found cut (mcpindex.h)
+                return cutIndexErrorClause( path );
             };
             const auto errResult = [ & ]( int code, const char* msg )
             {

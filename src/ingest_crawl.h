@@ -1744,13 +1744,28 @@ struct CrawlResult
 // Same surface as the iterator the loop used (*it, it->, disable_recursion_pending, increment(ec), != end): symlinked
 // directories are not entered (recursive_directory_iterator's default), a directory that cannot be opened is skipped,
 // and a directory's entries are held (sorted) only while it is being walked, so a pruned subtree is never listed.
+// `dir`'s entries in file-name byte order; empty when it cannot be opened (ec says why) or has none. An error part-way keeps
+// the entries read so far.
+inline std::vector<fs::directory_entry> sortedDirEntries( const fs::path& dir, fs::directory_options opts, std::error_code& ec )
+{
+    std::vector<fs::directory_entry> entries;
+    for( fs::directory_iterator it( dir, opts, ec ), last; !ec && it != last; it.increment( ec ) )
+    {
+        entries.push_back( *it );
+    }
+    if( !entries.empty() )
+    {
+        ec.clear();
+    }
+    std::sort( entries.begin(), entries.end(), []( const fs::directory_entry& a, const fs::directory_entry& b )
+               { return a.path().filename().native() < b.path().filename().native(); } );
+    return entries;
+}
+
 class SortedDirWalk
 {
 public:
-    SortedDirWalk( const fs::path& root, fs::directory_options opts, std::error_code& ec ) : opts_( opts )
-    {
-        open( root, ec );
-    }
+    SortedDirWalk( const fs::path& root, fs::directory_options opts, std::error_code& ec ) : opts_( opts ) { push( root, ec ); }
     [[nodiscard]] bool atEnd() const noexcept { return levels_.empty(); }
     [[nodiscard]] const fs::directory_entry& operator*() const noexcept { return levels_.back().entries[ levels_.back().next ]; }
     [[nodiscard]] const fs::directory_entry* operator->() const noexcept { return &**this; }
@@ -1765,15 +1780,10 @@ public:
         }
         const bool descend = recurse_;
         recurse_           = true;
-        if( descend )
+        std::error_code tec;
+        if( descend && ( **this ).is_directory( tec ) && !( **this ).is_symlink( tec ) && push( ( **this ).path(), tec ) )
         {
-            std::error_code    tec;
-            const fs::path     dir = ( **this ).path();   // a copy: open() grows levels_
-            const bool         isDir = ( **this ).is_directory( tec ) && !( **this ).is_symlink( tec );
-            if( isDir && open( dir, tec ) )
-            {
-                return;
-            }
+            return;
         }
         for( ++levels_.back().next; levels_.back().next == levels_.back().entries.size(); ++levels_.back().next )
         {
@@ -1791,24 +1801,15 @@ private:
         std::vector<fs::directory_entry> entries;
         std::size_t                      next = 0;
     };
-    // list `dir` sorted and make it the innermost level; false (nothing pushed) when it cannot be opened or is empty
-    bool open( const fs::path& dir, std::error_code& ec )
+    bool push( fs::path dir, std::error_code& ec )   // by value: `dir` may name an entry of a level that growing levels_ moves
     {
-        Level level;
-        for( fs::directory_iterator it( dir, opts_, ec ), last; !ec && it != last; it.increment( ec ) )
+        Level level{ sortedDirEntries( dir, opts_, ec ), 0 };
+        const bool any = !level.entries.empty();
+        if( any )
         {
-            level.entries.push_back( *it );
+            levels_.push_back( std::move( level ) );
         }
-        if( level.entries.empty() )
-        {
-            return false;   // ec says why when the directory could not be opened
-        }
-        ec.clear();   // an error part-way keeps the entries read so far
-        std::sort( level.entries.begin(), level.entries.end(),
-                   []( const fs::directory_entry& a, const fs::directory_entry& b )
-                   { return a.path().filename().native() < b.path().filename().native(); } );
-        levels_.push_back( std::move( level ) );
-        return true;
+        return any;
     }
     fs::directory_options opts_;
     std::vector<Level>    levels_;
