@@ -83,6 +83,8 @@ inline RawRef rawRefAt( TSNode at, std::uint32_t fileId, Lang lang, RefRole role
 // inside a function the reference is not in. Those leave the reference without a local binding — never a wrong one.
 inline constexpr std::uint32_t kBaseBindNone    = 0;            // no enclosing scope declares the name
 inline constexpr std::uint32_t kBaseBindUnknown = 0xFFFFFFFFu;  // a scope was too large to scan: nothing proven either way
+inline constexpr std::uint32_t kBaseBindTemplateParam = 0xFFFFFFFEu;   // fn-slot S2 fix 2: the written base is a TEMPLATE PARAMETER of the deriving class (`template <class B> struct M : B`): it names no declaration
+inline bool                    baseNamesTemplateParameter( TSNode self, std::string_view base, std::string_view src );   // ingest_names.h
 // kBaseScopeScanCap bounds the two SCANS only: the unindexed lookupInScope fallback and the reopened-namespace sibling scan
 // (a runaway guard: past it those two bind nothing and the edge stays name-only). The indexed path (lookupInScopeIndexed,
 // the one captureTagsFacts installs) reads the scope's table and has no cap: a 32,000-class module scope binds every base.
@@ -496,6 +498,13 @@ inline std::uint32_t localBaseBinding( TSNode site, TSNode self, const std::vect
     return ts_node_start_byte( foundName ) + 1u;   // never 0 (kBaseBindNone) — and below ~0u: a TSNode byte is a u32 < src.size()
 }
 
+// RawRef::baseBind of a base clause written `text` (segments `segs`): a bare name that is a template parameter of the deriving
+// class is a dependent base (kBaseBindTemplateParam), else the same-file declaration the name binds to.
+inline std::uint32_t baseBindOf( TSNode site, TSNode self, std::string_view text, const std::vector<std::string_view>& segs, bool absolute, std::string_view src )
+{
+    return !absolute && segs.size() == 1 && baseNamesTemplateParameter( self, text, src ) ? kBaseBindTemplateParam : localBaseBinding( site, self, segs, absolute, src );
+}
+
 // Emit one inherit RawRef (derived → base) for a base-type node. startByte sits inside the class header
 // (the type node's own start), so the byte-span enclosing attribution binds fromSymbol = the derived class.
 // `self` is the declaration whose header writes the base (its own name never answers the lookup). lane lego-transitive
@@ -516,7 +525,7 @@ inline void emitBaseRef( TSNode typeNode, std::uint32_t fileId, Lang lang, std::
     {
         bool                                absolute = false;
         const std::vector<std::string_view> segs     = baseSegments( text, absolute );
-        r.baseBind = localBaseBinding( typeNode, self, segs, absolute, src );
+        r.baseBind = baseBindOf( typeNode, self, text, segs, absolute, src );
         if( segs.size() > 1 )
         {
             const std::size_t last = text.rfind( segs.back() );

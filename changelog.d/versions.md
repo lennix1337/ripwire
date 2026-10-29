@@ -1,6 +1,6 @@
 ### Changed — the versions this change moves, stated once
 
-`kParserVer` 206 → 259 (file tag 260): the Rust written-type receivers carried 202 (203) on their branch and the struct-field
+`kParserVer` 206 → 269 (file tag 270): the Rust written-type receivers carried 202 (203) on their branch and the struct-field
 slot join 204 (205), and its fix rounds changed what 204 extracts, so a cache from that branch would replay the older slot
 rows; the interface-dispatch records carried 210 and 212 on theirs; the JS/TS written-binding records carried 218 and the
 Python rebind-withholding records a 224 placeholder on theirs; train 34 took 226; the Kotlin trailing-lambda capture (#155)
@@ -12,7 +12,9 @@ carried a 237 (238) placeholder on its branch and train 39 took 239 (240); the J
 function, a named object literal's binding) carried 238, the name-keyed lookup qualifier 241 (242) and the Go function-valued
 slots 247 (248) on their branches and train 40 took 251 (252); the Rust slot join carried 249 (250) and the Python conditional
 module-scope definition record (a `def` or `class` inside an `if`/`try`/`with`/loop at module scope) 255 (256) on theirs, and the
-C/C++ slot join carries 257 (258) on its, so 259 sits above every live branch and pull-request number. A cache
+C/C++ slot join carried 257 (258), 259 and 260 on its and train 41 took 259 (260); the interface-receiver peel carries 259, the
+alias-import records 261 and the string/literal records 263, 265 and 267 on theirs, so 269 sits above every live branch and
+pull-request number. A cache
 written by 0.6.8 is re-parsed once. `kCacheVersion` 36 → 46: a Rust binding typed only through a trait
 (`&dyn T`, `impl T`, a bound), a Rust `impl T for X` block and a JS/TS binding written after its declaration are new binding
 records, as is a JS/TS module-scope object literal's binding name, a Kotlin call's trailing-lambda byte (#155) widens the reference record, and a file's parse-health record gains the

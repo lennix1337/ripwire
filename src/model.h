@@ -597,6 +597,10 @@ inline constexpr char kValueRefSlotParamScope = 'q';
 //     slot_join::RustTypeKeys; `Self` is resolved to the impl type by the extractor).
 // pathSep — a registrar may be an associated function reached by a PATH call (`CallEval::new( … )`): the argument row's callee
 //   is written `Owner<pathSep>name`, resolved to the owner type's function of that name ("" = bare callees only, never a method).
+// memberPointers — FN-SLOT S2 (C++): a pointer to MEMBER is a function value and its call a slot call. `&Cls::m` in a value
+//   position is a Value row naming m with memberRoot = Cls (resolved to Cls's method m only, never a namesake: valuerefindex.h
+//   ownedBy); `( obj.*x.f )( … )` is a slot call through field f of x's type (the `.*` proves f holds a member pointer, so no C++
+//   gate applies). Floors: `->*` (the grammar reads it as an ERROR node), a member pointer held in a plain variable.
 enum class VrSlotCallSide : std::uint8_t { ThroughRows, MemberCallByName, ParenFieldCall };
 enum class VrSlotTypeKey : std::uint8_t { TypedefFacts, PackageDir, ModuleType };
 struct VrSlotLang
@@ -606,12 +610,13 @@ struct VrSlotLang
     VrSlotCallSide   callSide;
     VrSlotTypeKey    typeKey;
     std::string_view pathSep;
+    bool             memberPointers = false;
 };
 inline constexpr VrSlotLang kVrSlotLangs[] = {
-    { Lang::C, true, VrSlotCallSide::ThroughRows, VrSlotTypeKey::TypedefFacts, "" },
-    { Lang::Cpp, false, VrSlotCallSide::ThroughRows, VrSlotTypeKey::TypedefFacts, "" },
-    { Lang::Go, false, VrSlotCallSide::MemberCallByName, VrSlotTypeKey::PackageDir, "" },
-    { Lang::Rust, false, VrSlotCallSide::ParenFieldCall, VrSlotTypeKey::ModuleType, "::" },
+    { Lang::C, true, VrSlotCallSide::ThroughRows, VrSlotTypeKey::TypedefFacts, "", false },
+    { Lang::Cpp, false, VrSlotCallSide::ThroughRows, VrSlotTypeKey::TypedefFacts, "", true },
+    { Lang::Go, false, VrSlotCallSide::MemberCallByName, VrSlotTypeKey::PackageDir, "", false },
+    { Lang::Rust, false, VrSlotCallSide::ParenFieldCall, VrSlotTypeKey::ModuleType, "::", false },
 };
 inline constexpr std::array<const VrSlotLang*, kLangCount> kVrSlotLangOf = []
 {
@@ -653,7 +658,39 @@ inline bool slotKeysOwnTypes( Lang l ) noexcept
 // name, so the join never reads it through an alias. A slot fact whose composeRel is kValueRefSlotBodyRel declares that its
 // owner's struct BODY is in this file (no field): one tag with bodies in two files is two types, so it joins nothing.
 inline constexpr char kValueRefSlotTagMark = '\x02';
+// FN-SLOT S2 (c): the slot type key of a call of a function-like macro `M( … )->f( … )` is "()M"; a macro whose body is one
+// pointer cast to a named type records an alias fact "()M" → that type (ingest_valuerefs.h noteMacroCast). A "()M" no fact
+// resolves (a function returning a pointer, a macro of another shape) is an unknown type: the name tier.
+inline constexpr std::string_view kVrSlotMacroCastMark = "()";
 inline constexpr char kValueRefSlotBodyRel = '{';
+// FN-SLOT S2 fix 1 (F-2): a body fact's composeRel is kValueRefSlotBodyRel followed by the SCOPE PATH of the class (its enclosing named
+// namespaces and classes, outermost first, "::"-joined; an anonymous or inline namespace is transparent; "" = the global scope).
+// A C++ `&Cls::m` Value row's memberVia says where the pointer was written, so the join can tell the in-tree class from an external
+// namesake: the written QUALIFIER (`grpc` in `&grpc::Server::start`, a leading "::" kept; `using ns::Cls;` supplies it for a bare
+// `Cls`), the SITE (the named namespaces and classes enclosing the pointer, plus the scope an out-of-line definition's declarator
+// writes) and the `using namespace` DIRECTIVES in the file (',' joined), the three joined by kVrMemberScopeSep.
+inline constexpr char kVrMemberScopeSep = '\x1f';
+struct VrMemberScope
+{
+    std::string_view qualifier;
+    std::string_view site;
+    std::string_view directives;
+};
+inline VrMemberScope vrMemberScopeOf( std::string_view via ) noexcept
+{
+    VrMemberScope out;
+    const std::size_t a = via.find( kVrMemberScopeSep );
+    if( a == std::string_view::npos )
+    {
+        out.qualifier = via;
+        return out;
+    }
+    const std::size_t b = via.find( kVrMemberScopeSep, a + 1 );
+    out.qualifier       = via.substr( 0, a );
+    out.site            = via.substr( a + 1, b == std::string_view::npos ? std::string_view::npos : b - a - 1 );
+    out.directives      = b == std::string_view::npos ? std::string_view() : via.substr( b + 1 );
+    return out;
+}
 
 // Essential-complexity ev_why= reason vocabulary (the essential-complexity design note, §5.1). PUBLIC the
 // moment it ships (test/attrvocabcheck.sh's standing posture; test/essentialcxcheck.sh pins the spellings):
