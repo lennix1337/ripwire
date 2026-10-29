@@ -12,4 +12,4 @@ typedef int (DBase::*DBFn)(int);
 struct DBEnt { const char* n; DBFn fn; };
 static const DBEnt kDBEnts[] = { { "dfoo", &DBase::dfoo } };
 struct DBHolder { const DBEnt* e; };
-int go_dbok(DBase& r, int k) { DBHolder h; h.e = &kDBEnts[k]; return k != 0 ? (r.*h.e->fn)(k) : 0; }
+int go_dbok(DBase& r, int k) { DBHolder h; h.e = &kDBEnts[k]; return (r.*h.e->fn)(k) + (r.*h.e->fn)(k + 1); }
