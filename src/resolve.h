@@ -5015,6 +5015,7 @@ private:
         std::vector<char>        isClass;                    // isClass[k - 1]: scope k is a class
         bool                     anon  = false;
         bool                     local = false;              // inside a function body: no scope this index models
+        bool                     innerIsClass = false;       // the innermost scope is a class
 
         Scope() = default;
         explicit Scope( std::string_view path )
@@ -5036,10 +5037,11 @@ private:
                 next.append( next.empty() ? "" : "::" ).append( el );
                 prefix.push_back( std::move( next ) );
                 isClass.push_back( cls ? 1 : 0 );
+                innerIsClass = cls;
             }
         }
         const std::string& path() const { return prefix.back(); }
-        bool               inClass() const { return !isClass.empty() && isClass.back() != 0; }
+        bool               inClass() const { return innerIsClass; }
         bool               anyClass() const { return std::ranges::any_of( isClass, []( char c ) { return c != 0; } ); }
     };
     struct Entry
