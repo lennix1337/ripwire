@@ -51,3 +51,7 @@ class Der1 : public Base2 { public: int act(int x) override { return x + 1; } };
 class Der2 : public Base2 { public: int act(int x) override { return x + 2; } };
 using Base2Ptr = std::shared_ptr<Base2>;
 class UsesBase2 { public: int go(int x) { return b_->act(x); } Base2Ptr b_; };
+// a member alias a BASE class declares: `Hz2` reads the inherited Hz1::HP, never the global HP of another pointee
+class Hz1 { public: using HP = std::shared_ptr<KxI>; };
+using HP = std::unique_ptr<KyC>;
+class Hz2 : public Hz1 { public: int go(int x) { return h_->kick(x); } HP h_; };

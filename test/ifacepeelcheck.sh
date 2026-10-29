@@ -39,6 +39,7 @@
 #   S1a the chain cap: an alias reached through 3 plain aliases still peels (ch::V3), 4 do not (ch::V4: the base hedge) — a cap lowered to 2 fails V3
 #   S1b the real-class refusal: an alias name that is also an in-tree class (e2::Tank beside f2::Tank) is never peeled
 #   S1c the disagreement refusal: two same-scope aliases of one name with different pointees (dis::QPtr) are never peeled
+#   S1e a member alias a base class declares (Hz1::HP) is never replaced by a global alias of the same name (Hz2 inherits Hz1)
 #   S1d a raw-pointer typedef of the alias's name in another namespace (rp2::Ptr beside rp1::Ptr) is never peeled
 #   N1b an alias of a CONCRETE class that has a virtual method derived classes override is no typed pin: the override set stays
 #   L-1 a C member written with the name of a C++ smart alias is a C pointer: the peel is gated on the member's language (lang.c)
@@ -133,6 +134,8 @@ say "$( has "$o" 'Der2::act' )" "N1b ... and Der2::act"
 # ---- fix round 1, L-1: the member reader is language-gated like the ingest ----
 o="$( callees "$CPP" "lang.c:cgo" )"
 say "$( hasnt "$o" 'gate="iface"' )" "L-1 a C struct member named like a C++ smart alias is never read as its pointee (no iface row)"
+o="$( callees "$CPP" "scope2.h::Hz2::go" )"
+say "$( hedge "$o" )" "S1e a member of a derived class never takes a global alias when a base class may declare the name"
 echo "ifacepeelcheck: $npass passed, $nfail failed"
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"
