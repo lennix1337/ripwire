@@ -1370,7 +1370,8 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
     // after hits_capped so the historic key order other gates read is byte-untouched; absent when any
     // condition fails (the floor vocabulary already covers partial answers).
     // R-H adds the tier arm the CLI emitter also adds: a listing that held comment/string rows back did not
-    // print every hit it found, so it may not claim to be exhaustive.
+    // print every hit it found, so it may not claim to be exhaustive. notfound-on-cut: nor may an index the memory
+    // guard cut (the files it never read may hold a hit) — the claim line below carries that fifth term.
     const bool scanExhaustive  = collected.cleanScan();
     const bool windowWhole     = grepPage.begin == 0 && grepPage.end == collected.raw.size();
     const bool nothingHeldBack = tierReport.suppressedComment == 0 && tierReport.suppressedString == 0;
@@ -1402,7 +1403,7 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
                                       page.limit, page.offset, /*discloseCap=*/true, kJsonPageSyntax,
                                       /*collectionCapped=*/collected.isBudgetReached )   // H8/N2: the cap hits_capped names floors this root (CLI parity)
                     + ",\"hits_capped\":" + ( collected.isBudgetReached ? "true" : "false" )
-                    + ( scanExhaustive && windowWhole && nothingHeldBack ? ",\"complete\":true" : "" )
+                    + ( scanExhaustive && windowWhole && nothingHeldBack && !ing.memoryStop.isSet() ? ",\"complete\":true" : "" )   // notfound-on-cut: a cut index never claims it
                     // P3 (L7): the CLI grep root's next= — the same three-way rule (verbs_grep.h), mcpclidiffcheck LENS2
                     + nextFieldJson( grepMetaNextOr( pattern, [ & ] { return ( grepPage.end < collected.raw.size() || collected.isBudgetReached )
                                          ? nextFlag( "--grep=", pattern ) + " --offset=" + std::to_string( grepPage.end ) + " --legend=compact"
@@ -4568,6 +4569,7 @@ inline QualityDeltaOutcome computeQualityDelta( const std::string& root )
         std::lock_guard<std::mutex> ingestLk( rw::quality::headSnapshotIngestMutex() );
         ing = ingest( root.c_str(), {}, {} );
     }
+    noteOwnIngestCut( ing );   // notfound-on-cut: a refusal below ends with the shared partial-index sentence when this ingest was cut
     const Graph  g   = buildGraph( ing, nullptr );
 
     const std::string sidecar = qualityBaselinePath( root );   // root-qualified (see SIDECAR LOCATION note)
@@ -5051,6 +5053,7 @@ inline EditCheckReply editCheckText( const std::string& root, const std::string&
         std::lock_guard<std::mutex> ingestLk( rw::quality::headSnapshotIngestMutex() );
         ing = ingest( root.c_str(), {}, {} );
     }
+    noteOwnIngestCut( ing );   // notfound-on-cut: a refusal below ends with the shared partial-index sentence when this ingest was cut
     const Graph g = buildGraph( ing, nullptr );
 
     // H1: the decl→def residue, the CLI --edit-check's unproven_defs= — same resolver, same assembler parameter, so the two
