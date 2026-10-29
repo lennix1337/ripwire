@@ -46,7 +46,7 @@ verbs (`affected`/`connect`/`explore`/`from_trace`/`edit_check` and the cross-br
 ## Wiring — `ripwire wrap <agent>` prints the recipe
 
 ```
-ripwire wrap claude      # → claude mcp add ripwire -- ripwire --mcp
+ripwire wrap claude      # → claude mcp add ripwire -- ripwire --mcp --mcp-tools=no-edit
 ripwire wrap cursor      # → JSON mcpServers stanza for .cursor/mcp.json (also: windsurf, gemini)
 ripwire wrap codex       # → TOML stanza for ~/.codex/config.toml
 ripwire wrap opencode    # → CLI first (AGENTS.md is read automatically); its config key is "mcp", NOT mcpServers
