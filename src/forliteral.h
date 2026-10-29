@@ -35,6 +35,7 @@
 // FOR-ROUTE-DECLINED precedent: the bytes are counted on the element instead, bytes=). MCP `for` is not changed.
 
 #include "filter.h"          // pathTierOf — source / test / doc, the reader's tier
+#include "layout.h"          // layout::lineOf — a byte offset's line
 #include "hopbody.h"         // renderBodyElement — the --expand body element, no callee rows
 #include "model.h"
 #include "nextverb.h"        // nextFlag / nextAttrXml
@@ -43,6 +44,7 @@
 #include "search.h"          // grepCollect / grepEnrich / isBareWordCodePath
 #include "serialize.h"       // escapeXml / appendCdataSafe / truncateUtf8WithEllipsis
 
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -79,8 +81,6 @@ struct ForLiteral
 
 namespace lit_detail
 {
-inline bool isUpperOrDigit( char c ) noexcept { return ( c >= 'A' && c <= 'Z' ) || ( c >= '0' && c <= '9' ); }
-inline bool isAsciiLetter( char c ) noexcept { return ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' ); }
 
 // CONST_SHAPED: upper-case letters and digits, starting with a letter, joined by underscores (at least one, none doubled or at an
 // end) and at least kForLiteralMinConst bytes; or no underscore and at least kForLiteralMinBareCaps bytes (PYTHONASYNCIODEBUG)
@@ -101,7 +101,7 @@ inline bool isConstShaped( std::string_view w ) noexcept
             }
             ++underscores;
         }
-        else if( !isUpperOrDigit( w[i] ) )
+        else if( !std::isupper( static_cast<unsigned char>( w[i] ) ) && !std::isdigit( static_cast<unsigned char>( w[i] ) ) )
         {
             return false;
         }
@@ -122,7 +122,7 @@ inline std::optional<std::string> quotedSpan( std::string_view task, char q )
         bool letter = false;
         for( const char c : inner )
         {
-            letter = letter || isAsciiLetter( c );
+            letter = letter || std::isalpha( static_cast<unsigned char>( c ) ) != 0;
         }
         // a MESSAGE fragment: two words or more (a single quoted word is a value or a name, read as words by the ranked answer)
         if( inner.size() >= kForLiteralMinQuoted && letter && inner.find_first_not_of( " \t" ) == 0 && inner.back() != ' '
@@ -211,42 +211,20 @@ inline bool isDocstringAt( const std::string& text, std::size_t start ) noexcept
     return true;
 }
 
-inline std::string lineTextOf( const std::string& text, std::uint32_t line )
-{
-    std::size_t at = 0;
-    for( std::uint32_t l = 1; l < line && at != std::string::npos; ++l )
-    {
-        at = text.find( '\n', at );
-        at = at == std::string::npos ? at : at + 1;
-    }
-    if( at == std::string::npos || at > text.size() )
-    {
-        return {};
-    }
-    const std::size_t end = text.find( '\n', at );
-    return text.substr( at, ( end == std::string::npos ? text.size() : end ) - at );
-}
-
-inline std::uint32_t lineOfByte( const std::string& text, std::size_t byte ) noexcept
-{
-    std::uint32_t line = 1;
-    for( std::size_t i = 0; i < byte && i < text.size(); ++i )
-    {
-        line += text[i] == '\n' ? 1u : 0u;
-    }
-    return line;
-}
-
-// lines [a, b] of `text` (1-based, inclusive)
+// lines [a, b] of `text` (1-based, inclusive), newline-joined: the grep verb's own slicing core (search.h grepLineRangeText)
 inline std::string linesOf( const std::string& text, std::uint32_t a, std::uint32_t b )
 {
-    std::string out;
-    for( std::uint32_t l = a; l <= b; ++l )
+    std::vector<std::size_t> starts{ 0 };
+    for( std::size_t i = 0; i < text.size(); ++i )
     {
-        out += lineTextOf( text, l );
-        out += '\n';
+        if( text[i] == '\n' )
+        {
+            starts.push_back( i + 1 );
+        }
     }
-    return out;
+    const std::uint32_t count = grepRealLineCount( text, starts );
+    b = std::min( b, count );
+    return a < 1 || a > b ? std::string() : grepLineRangeText( text, starts, count, a, b );
 }
 }   // namespace lit_detail
 
@@ -434,8 +412,8 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
         {
             continue;
         }
-        const std::uint32_t first = lit_detail::lineOfByte( text, s.sigStartByte );
-        const std::uint32_t last  = lit_detail::lineOfByte( text, s.endByte > 0 ? s.endByte - 1 : 0 );
+        const std::uint32_t first = layout::lineOf( text, s.sigStartByte );
+        const std::uint32_t last  = layout::lineOf( text, s.endByte > 0 ? s.endByte - 1 : 0 );
         std::uint32_t       a = UINT32_MAX, b = 0;
         for( const GrepHit& o : hits )
         {
@@ -497,7 +475,7 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
         {
             // a string site outside any function (a table entry, an error-code map): the lines after it hold what it builds
             const std::string text = docparse::detail::readWholeFile( diskPath( ing, h.fileId ) ).value_or( std::string() );
-            const std::uint32_t lastLine = text.empty() ? h.line : lit_detail::lineOfByte( text, text.size() - 1 );
+            const std::uint32_t lastLine = text.empty() ? h.line : layout::lineOf( text, text.size() - 1 );
             const std::uint32_t b = std::min( h.line + kForLiteralContextLines, lastLine );
             if( !text.empty() && b > h.line )
             {
