@@ -762,8 +762,10 @@ inline GitCommandLines gitCommandLines( const std::string& cmd )
 // merge prefix and is skipped — that is what keeps a merge's combined-diff files, the ones the first
 // migration draft dropped, attached to the merge that introduced them. The one collision left is the
 // same class the line frame had: a merge whose FIRST combined path is a file literally named `__C__`
-// reads as a pathless record, because its prefix empty is followed by the marker-spelled path. That
-// boundary is disclosed here and pinned in the gate rather than papered over.
+// reads as a pathless record, because its prefix empty is followed by the marker-spelled path: the
+// merge's next three paths become a phantom record's email and (unparsable, so 0) epochs, and a fifth
+// and later path rides that phantom at epoch 0. That boundary is disclosed here and pinned in the gate
+// rather than papered over.
 struct GitLogRecord
 {
     std::string              authorEmail;

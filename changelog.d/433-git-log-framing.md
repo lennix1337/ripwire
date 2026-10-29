@@ -1,4 +1,4 @@
-### Fixed — a committed filename can no longer be read as commit metadata (`git log` framing)
+### Fixed — a committed filename can no longer be read as commit metadata (`git log` framing) (#433, thanks @pt-act)
 
 Every `git log --name-only` consumer in the history miners framed its stream with a line-based reader and a
 `__C__` marker matched as a line prefix, so a repository containing a file whose name begins with the marker
@@ -31,7 +31,9 @@ for the whole stream.
 
 **One case is disclosed, not fixed:** a merge whose FIRST combined path is a file literally named `__C__`
 still reads as pathless — its prefix empty is followed by the marker-spelled path, which the boundary rule
-cannot tell from a real record boundary, so that merge's files lose their attribution (a pathless phantom
-record is emitted that every consumer ignores). The full fix is a format sentinel change, owned by a
+cannot tell from a real record boundary, so that merge's files lose their attribution. Its next three paths
+are read as a phantom record's email and epochs (which never parse, so ownership skips it); a fifth and later
+combined path rides that phantom at epoch 0, which the co-change sets count as one more commit and
+`--rank-by=churn-decay` weights as if it were HEAD's. The full fix is a format sentinel change, owned by a
 follow-on spec. `test/gitframingcheck.sh` pins both the fix and this collision's exact observable, including
 where the two churn miners disagree by design.
