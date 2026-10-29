@@ -367,6 +367,15 @@ done
 # R15 F5: with NO message-bearing row, a question gets no element (the fallback is for statements); the statement keeps today's seed (R3).
 run "$FR" --for="manifest syntax error?" >"$TMP/r15"
 if [ -s "$TMP/r15" ] && grep -q '<d [^>]*n="load_one"[^>]*r="2"' "$TMP/r15" && ! grep -q '<callers ' "$TMP/r15"; then ok "(R15) [P] a question with no message-bearing narrow funnel: no ranked hop"; else no "(R15) a question fell back to the first narrow funnel (or the fixture moved)"; fi
+# R15b (CR 4408459921, harvest 463): a yes/no question opens with an auxiliary and may carry no `?`: it is a question all the same.
+for q in "Did manifest syntax error" "Could manifest syntax error" "Should manifest syntax error" "Would manifest syntax error" "Was manifest syntax error" "Has manifest syntax error" "Have manifest syntax error" "Will manifest syntax error" "Were manifest syntax error"; do
+    run "$FR" --for="$q" >"$TMP/r15b"
+    if [ -s "$TMP/r15b" ] && grep -q '<d [^>]*n="load_one"[^>]*r="2"' "$TMP/r15b"; then
+        ! grep -q '<callers ' "$TMP/r15b"; verdict $? "(R15b) [P] a question with no ? and no message-bearing narrow funnel: no ranked hop: $q" "(R15b) a ? -less question fell back to the first narrow funnel: $q"
+    else
+        no "(R15b-pre) the fixture no longer ranks load_one r=2 for [$q]"
+    fi
+done
 
 # R16 F2: a seed whose only first-hop caller is a by-name match (a Go interface method, a Python duck-typed call) is skipped: its d=2
 # rows would print unhedged under an unproven receiver. The callers verb prints that caller via="name" (premise).

@@ -218,7 +218,8 @@ inline bool forTaskIsQuestion( std::string_view task )
         return false;
     }
     const std::string first = routeLower( w.front() );
-    static constexpr std::string_view kOpeners[] = { "how", "what", "why", "where", "which", "when", "who", "explain", "describe", "does", "do", "is", "are", "can" };
+    static constexpr std::string_view kOpeners[] = { "how", "what", "why", "where", "which", "when", "who", "explain", "describe", "does", "do", "is", "are", "can",
+        "did", "could", "should", "would", "will", "was", "were", "has", "have" };   // yes/no questions carry no `?` at times
     return std::ranges::find( kOpeners, std::string_view( first ) ) != std::end( kOpeners );
 }
 
