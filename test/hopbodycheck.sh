@@ -58,6 +58,9 @@
 #   R6-R9 [M] FIX2 (review rv-phbf1): R6 a by-name bridge edge row's body carries via=name cands=2 (G1); R7 a > 4000 B route body is cut,
 #          truncated=1 lines= next= (G2); R8 a reader that is also a bridge row prints once (G3); R9 a slot crossing's body carries slot_fns=
 #          and the bare-b reading rides (S1, S4)
+#   R10 [M] CR pre-pass 41: a route/hop body prints a definition, <alts> never lists it again (post_message bound to no definition because
+#          a second class defines it too): <alts side="from"> lists the other class's post_message, not the pump.py:10 the route body
+#          printed; the same on MCP path_between; [G] a definition no body printed is still listed
 #   R5 [G] the gain gate: inside a --for answer's graph-verb block the unreached path prints no route bodies
 #   R4 [G] RIPWIRE_NO_HOP_BODY=1: no route element; MCP path_between prints the CLI's route element byte for byte
 #
@@ -153,10 +156,13 @@ make("routededupe", ded)
 big = list(src)
 for at in (33, 25, 20, 12): big[at:at] = ["        x%d = len(str(message)) + %d" % (i, i) for i in range(160)]
 make("routebig", big)
+shutil.copytree(os.path.join(T, "route"), os.path.join(T, "routealt"))
+open(os.path.join(T, "routealt", "other.py"), "w").write("class Other:\n    def post_message(self, message):\n        return message\n")
 PY
 rrun routename '--path=post_message,on_*' >"$TMP/r6"
 rrun routebig '--path=post_message,on_*' >"$TMP/r7"
 rrun routededupe '--path=post_message,on_*' >"$TMP/r8"
+rrun routealt '--path=post_message,on_*' >"$TMP/r10"
 rrun routeslot '--path=start_job,sink_write' >"$TMP/r9"
 rrun routeslot '--path=start_job,sink_write' --legend=full >"$TMP/r9f"
 ( cd "$TMP/route" && RIPWIRE_NO_HOP_BODY=1 "$BIN" "$TMP/route" --no-cache '--path=post_message,on_*' 2>/dev/null ) >"$TMP/r1.off"
@@ -304,6 +310,12 @@ check(n8 == ["post_message", "_process_messages_loop", "_dispatch_message", "_on
 b9 = rb("r9")
 check(b9.get("run_fast", {}).get("via") == "slot" and b9.get("run_fast", {}).get("slot_callers") == "1" and b9.get("run_fast", {}).get("slot_fns") == "3", "(R9) a slot-crossing route body carries slot_fns= beside slot_callers= (S1): %r" % b9.get("run_fast"))
 check("proven call from the row above" in legend(rd("r9")) and "proven call from the row above" in legend(rd("r9f")), "(R9) the bare-b reading rides beside a hedged route, compact and full (S4)")
+# R10 (CR pre-pass 41): defs-lookup's <alts> must not list a definition the route body printed (pathAltsOf's bodyIds)
+def alts_p(t): return re.findall(r'<d p="([^"]*)"', (re.search(r'<alts side="from" of="post_message">.*?</alts>', t, re.S) or re.search(r'$', t)).group(0))
+r10 = rd("r10"); printed10 = {(b[0].get("p"), b[0].get("l")) for b in bodies(routel(r10))}
+check(("pump.py", "10") in printed10 and root(r10).get("from_defs") == "2", "(R10pre) the route body prints pump.py:10 post_message and the endpoint binds 2 definitions")
+check(alts_p(r10) == ["other.py:2"], "(R10) <alts side=from> lists the other class's post_message only, never the one a route body printed: %r" % alts_p(r10))
+check(all(a.split(":")[0] + ":" + a.split(":")[1] not in {p + ":" + l for p, l in printed10} for a in alts_p(r10)), "(R10) no <alts> row repeats a printed <b>")
 for f in ("h1", "r1", "r2", "r3"):
     check(subprocess.run(["xmllint", "--noout", os.path.join(T, f)], capture_output=True).returncode == 0, "(X2) %s well-formed" % f)
 # X3
@@ -356,6 +368,24 @@ for line in p.stdout.splitlines():
 el = lambda t: (re.search(r'<bodies of="route".*?</bodies>', t, re.S) or re.search(r'$', t)).group(0)
 good = el(mcp) != "" and el(mcp) == el(open(tmp + "/r1").read())
 print("  %s  (R4) MCP path_between post_message,on_*: the CLI's route element" % ("PASS" if good else "FAIL"))
+sys.exit(0 if good else 1)
+PY
+
+# R10m: MCP path_between lists the same <alts> (the route body's definition is not listed again)
+python3 - "$BIN" "$TMP/routealt" "$TMP" <<'PY' || fail=1
+import json, re, subprocess, sys
+binp, d, tmp = sys.argv[1], sys.argv[2], sys.argv[3]
+reqs = [{"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "g", "version": "1"}}},
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "path_between", "arguments": {"path": d, "from": "post_message", "to": "on_*"}}}]
+p = subprocess.run([binp, "--mcp", "--mcp-legend=inline"], input="".join(json.dumps(r) + "\n" for r in reqs), capture_output=True, text=True, timeout=120, cwd=d)
+mcp = ""
+for line in p.stdout.splitlines():
+    try: o = json.loads(line)
+    except ValueError: continue
+    if o.get("id") == 1: mcp = "".join(c.get("text", "") for c in o.get("result", {}).get("content", []))
+al = lambda t: (re.search(r'<alts side="from".*?</alts>', t, re.S) or re.search(r'$', t)).group(0)
+good = '<alts side="from" of="post_message">' in mcp and al(mcp) == al(open(tmp + "/r10").read()) and 'p="pump.py:10"' not in al(mcp) and '<b t="fn" l="10" p="pump.py" n="post_message"' in mcp
+print("  %s  (R10m) MCP path_between post_message,on_*: the CLI's <alts>, without the route body's definition" % ("PASS" if good else "FAIL"))
 sys.exit(0 if good else 1)
 PY
 

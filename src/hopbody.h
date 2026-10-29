@@ -403,8 +403,9 @@ inline std::string pathMiddleHopNext( const IngestResult& ing, std::span<const N
 // its hop's hedge. Past maxBodies (a spew guard): capped="1" and next= the first unshown body's --expand. "" when none renders.
 struct RouteBodiesXml
 {
-    std::string xml;
-    bool        hedged = false;   // some <b> carries a hedge (its legend clause rides)
+    std::string         xml;
+    bool                hedged = false;   // some <b> carries a hedge (its legend clause rides)
+    std::vector<NodeId> ids;              // the definitions whose <b> rendered (not the ones asked for): what <alts> must not list again
 };
 inline RouteBodiesXml routeBodiesXml( const IngestResult& ing, std::span<const RouteBody> bodies, std::string_view of, std::string_view rootAttrs,
                                       std::size_t maxBodies, std::string_view rootArg )
@@ -430,6 +431,7 @@ inline RouteBodiesXml routeBodiesXml( const IngestResult& ing, std::span<const R
             }
             cut = cut || b->find( " truncated=\"1\"" ) != std::string::npos;
             children += *b;
+            out.ids.push_back( rb.id );
             ++shown;
         }
     }

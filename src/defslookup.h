@@ -241,7 +241,7 @@ inline bool defPickProvablyUnique( const DefLookup& L ) noexcept { return candid
 
 // The definitions a --path answer already prints, as the --path answer's own rows name them: the root's from_p=/to_p= are the
 // first pair's, and every printed <pair>/<alt> row carries its own (pathpairs.h emitPathPairs). Listing one again under <alts>
-// tells the agent nothing new.
+// tells the agent nothing new. (The body elements' definitions join in pathAltsOf.)
 inline std::vector<NodeId> pathPrintedEnds( const PathPairs& pp )
 {
     std::vector<NodeId> ends;
@@ -321,13 +321,15 @@ inline void defAltsXml( PathAlts& acc, const IngestResult& ing, const DefLookup&
     acc.xml += out + ">" + rows + "</alts>";
 }
 
-// Both --path transports (verbs_navigate.h runPath, mcpverbs.h pathText): the two endpoints' <alts>, from= first. A glob endpoint
-// stands for every fitting definition by design (from_glob=), so it lists none.
+// Both --path transports (verbs_navigate.h runPathServed, mcpverbs.h pathText): the two endpoints' <alts>, from= first. A glob endpoint
+// stands for every fitting definition by design (from_glob=), so it lists none. `bodyIds`: the definitions the answer's <bodies of=hops>
+// / <bodies of=route> elements rendered (RouteBodiesXml::ids), so an alternative is never listed beside its own printed body.
 inline PathAlts pathAltsOf( const IngestResult& ing, const Graph& g, std::string_view srcN, std::string_view dstN, bool srcGlob, bool dstGlob,
-                            NodeId srcBound, NodeId dstBound, const PathPairs& pairs )
+                            NodeId srcBound, NodeId dstBound, const PathPairs& pairs, std::span<const NodeId> bodyIds )
 {
-    PathAlts                  out;
-    const std::vector<NodeId> printed = pathPrintedEnds( pairs );
+    PathAlts            out;
+    std::vector<NodeId> printed = pathPrintedEnds( pairs );
+    printed.insert( printed.end(), bodyIds.begin(), bodyIds.end() );   // a <bodies of=hops|route> body is a definition the answer prints too
     if( !srcGlob )
     {
         defAltsXml( out, ing, lookupDefs( ing, g, srcN ), srcBound, "from", printed );
