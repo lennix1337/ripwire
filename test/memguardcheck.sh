@@ -456,6 +456,27 @@ case "$em3" in
     *"is partial"*"memory guard stopped the crawl"*) case "$em4" in "symbol not found"*) case "$em4" in *"memory guard"*|*"partial"*) no "(B6i) the whole root alone inherits the workspace's cut: '${em4:0:200}'";; *) ok "(B6i) a cut workspace's not-found carries the sentence; the whole root alone, asked next, does not";; esac;; *) no "(B6i) id=4 error='${em4:0:200}'";; esac;;
     *) no "(B6i) id=3 error='${em3:0:240}'";;
 esac
+# (B6j) a `batch` sub-query's not-found is an ok="0" err= INSIDE a result, not a JSON-RPC error — it is the same
+#       absence from the same cut index, so it carries the same partial-index clause; the same batch on an uncut server does not
+{ cut_req 2 grep "{\"path\":\"$FX\",\"pattern\":\"a_01\"}"
+  cut_req 3 batch "{\"path\":\"$FX\",\"queries\":[\"callers: d_17\",\"callers: a_02\"]}"
+} | RIPWIRE_TEST_MEMGUARD=crawl:30 mcp_call "$TMP" --max-memory=64M >"$TMP/b6j.out"
+bt="$( mcp_field "$TMP/b6j.out" 3 text )"
+case "$bt" in
+    *'ok="0" err="symbol not found'*)
+        case "$bt" in
+            *'ok="0" err="symbol not found'*"is partial"*"not proof of absence"*"covers "*" files"*"max-memory"*) ok "(B6j) a batch sub-query's not-found from the cut index carries the partial-index clause";;
+            *) no "(B6j) batch err= without the clause: $( printf '%s' "$bt" | grep -o '<q [^>]*ok="0"[^>]*>' | head -c 300 )";;
+        esac;;
+    *) no "(B6j) id=3 expected an ok=0 sub-query: $( printf '%s' "$bt" | head -c 300 )";;
+esac
+{ printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"batch\",\"arguments\":{\"path\":\"$FX\",\"queries\":[\"callers: zzz_nope\"]}}}"; } \
+    | mcp_call "$TMP" >"$TMP/b6j2.out"
+bt="$( mcp_field "$TMP/b6j2.out" 2 text )"
+case "$bt" in
+    *'ok="0" err="symbol not found'*) case "$bt" in *"memory guard"*|*"partial"*) no "(B6j2) an uncut batch not-found mentions the guard";; *) ok "(B6j2) near miss: an uncut server's batch not-found is plain";; esac;;
+    *) no "(B6j2) id=2 expected an ok=0 sub-query: $( printf '%s' "$bt" | head -c 300 )";;
+esac
 # (B6g) near miss: an uncut server's not-found is the plain one
 printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$FX\",\"pattern\":\"a_01\"}}}" \
     "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"$FX\",\"symbol\":\"zzz_nope\"}}}" \

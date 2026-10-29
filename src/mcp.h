@@ -2812,6 +2812,15 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                             {
                                 subs.push_back( runBatchSub( path, objs[i], topK, stable, redactPtr, legendCompactPosture ) );
                             }
+                            // notfound-on-cut: a sub-query's not-found is an ok="0" err= inside a RESULT, not a JSON-RPC error, so
+                            // errResult never saw it — it takes the same partial-index clause (one helper, memoryStopSuffix)
+                            for( BatchSub& sub : subs )
+                            {
+                                if( !sub.ok )
+                                {
+                                    sub.err += memoryStopSuffix( sub.err );
+                                }
+                            }
                             // M1: the posture reaches INSIDE the CDATA — the rule, its measurement and the one
                             // skipped verb live once, on applyCompactToBatchSubs (mcpverbs.h), because the CLI
                             // --batch path needs exactly the same thing.
