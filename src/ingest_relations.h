@@ -1234,6 +1234,52 @@ inline WrittenPointee stdSmartPointee( TSNode typeNode, std::string_view src ) n
     return {};
 }
 
+// The text of a class-like node's name with a template-id's arguments cut (`Box<T>` → Box); "" for an anonymous one.
+inline std::string cppClassNameText( TSNode classNode, std::string_view src )
+{
+    const TSNode name = fieldChild( classNode, NodeField::Name );
+    std::string  text = ts_node_is_null( name ) ? std::string() : std::string( nodeTextOf( name, src ) );
+    text.resize( std::min( text.find( '<' ), text.size() ) );
+    return text;
+}
+
+// The lexical scope `node` is declared in, as model.h kAnonScopeElement documents it (memberRoot of an alias / member record).
+inline std::string cppScopePath( TSNode node, std::string_view src )
+{
+    std::vector<std::string> innerFirst;
+    int                      guard = 0;
+    for( TSNode up = ts_node_parent( node ); !ts_node_is_null( up ) && guard < 128; up = ts_node_parent( up ), ++guard )
+    {
+        const char* t = ts_node_type( up );
+        if( kindIs( t, "function_definition" ) || kindIs( t, "compound_statement" ) || kindIs( t, "lambda_expression" ) )
+        {
+            return std::string( kLocalScope );
+        }
+        if( kindIs( t, "namespace_definition" ) )
+        {
+            const bool isInline = ts_node_child_count( up ) > 0 && kindIs( ts_node_type( ts_node_child( up, 0 ) ), "inline" );
+            const TSNode name   = fieldChild( up, NodeField::Name );
+            if( !isInline )
+            {
+                innerFirst.push_back( ts_node_is_null( name ) ? std::string( kAnonScopeElement ) : std::string( nodeTextOf( name, src ) ) );
+            }
+        }
+        else if( kindIs( t, "class_specifier" ) || kindIs( t, "struct_specifier" ) || kindIs( t, "union_specifier" ) )
+        {
+            if( const std::string name = cppClassNameText( up, src ); !name.empty() )
+            {
+                innerFirst.push_back( "#" + name );   // an anonymous struct's members belong to the class around it
+            }
+        }
+    }
+    std::string path;
+    for( auto it = innerFirst.rbegin(); it != innerFirst.rend(); ++it )
+    {
+        path.append( path.empty() ? "" : "::" ).append( *it );
+    }
+    return path;
+}
+
 // one alias record: `aliasNode` names `target`, the class `spec` spells (see captureTypeAlias for the record's fields)
 inline void emitTypeAlias( TypeAliasCtx& cx, TSNode aliasNode, TSNode spec, std::string_view target )
 {
@@ -1263,6 +1309,7 @@ inline void emitTypeAlias( TypeAliasCtx& cx, TSNode aliasNode, TSNode spec, std:
             r.memberCtor = pointee.name;
             r.memberVia  = pointee.qualifier;
         }
+        r.memberRoot = cppScopePath( aliasNode, cx.src );   // fix round 1: the lexical scope the alias is declared in (its target is looked up there)
     }
     cx.out.push_back( std::move( r ) );
 }
@@ -1305,6 +1352,39 @@ inline void captureTypeAlias( TypeAliasCtx& cx, TSNode n, const char* t )
     } );
 }
 
+inline std::string cppTemplateParameterName( std::string_view text );   // ingest_names.h (included after this section; one translation unit)
+
+// The names the `template <…>` declarations ENCLOSING a class declare as parameters (`template <class Handle, int N> class S`:
+// Handle, N), innermost list first; empty for a class that is no template or nested in none. A member of the class that writes
+// one of them as its type names the parameter, whatever alias of that spelling exists in the tree (captureFields marks it).
+inline std::vector<std::string> enclosingTemplateParameterNames( TSNode classNode, std::string_view src )
+{
+    std::vector<std::string> names;
+    int                      guard = 0;
+    for( TSNode up = ts_node_parent( classNode ); !ts_node_is_null( up ) && guard < 64; up = ts_node_parent( up ), ++guard )
+    {
+        if( !kindIs( ts_node_type( up ), "template_declaration" ) )
+        {
+            continue;
+        }
+        const TSNode list = fieldChild( up, NodeField::Parameters );
+        if( ts_node_is_null( list ) )
+        {
+            continue;
+        }
+        ChildCursor cursor( list );
+        forEachChild( list, cursor.cur, [ & ]( TSNode p )
+        {
+            if( ts_node_is_named( p ) && !kindIs( ts_node_type( p ), "comment" ) )
+            {
+                names.push_back( cppTemplateParameterName( nodeTextOf( p, src ) ) );
+            }
+            return true;
+        } );
+    }
+    return names;
+}
+
 // S5-E HAS-A composition edges: walk a class/struct node's field_declaration_list and emit a
 // compose RawRef for each typed member variable whose type name matches a known class/struct name.
 // Two sub-relations:
@@ -1322,6 +1402,15 @@ void captureFields( TSNode classNode, std::uint32_t fileId, Lang lang, std::stri
     if( lang != Lang::Cpp )
     {
         return; // C++ only for S5-E; extend for Python/TS later
+    }
+    const std::vector<std::string> templateParams = enclosingTemplateParameterNames( classNode, src );
+    std::string                    classScope     = cppScopePath( classNode, src );   // the members' scope: the class's own, then the class
+    if( classScope != kLocalScope )
+    {
+        if( const std::string className = cppClassNameText( classNode, src ); !className.empty() )
+        {
+            classScope.append( classScope.empty() ? "#" : "::#" ).append( className );
+        }
     }
 
     ChildCursor         cursor( classNode );
@@ -1513,6 +1602,11 @@ void captureFields( TSNode classNode, std::uint32_t fileId, Lang lang, std::stri
             r.qualifier  = writtenTypeNamespace( typeNode, src );   // `std` for `std::string name_;`, "" unqualified
             r.fieldName  = std::move( fieldName );
             r.composeRel = ( isRefOrPtr || declIsRefOrPtr ) ? "uses" : "creates";
+            r.memberRoot = classScope;   // the lexical scope the written type is looked up in (model.h kAnonScopeElement)
+            if( pointee.name.empty() && std::ranges::find( templateParams, r.name ) != templateParams.end() )
+            {
+                r.memberVia = std::string( kTemplateParamMemberType );   // `Handle h_;` under `template <class Handle>`: the parameter, not an alias
+            }
             if( !pointee.name.empty() )
             {
                 r.qualifier = std::string( pointee.qualifier );   // the POINTEE's namespace: `std` for `std::unique_ptr<std::string>`

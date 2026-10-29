@@ -11,9 +11,12 @@
 #
 # THE CONTRACT.
 #   * C++ (LangFacts::aliasPeelsSmartPointer): a member written as an alias of std::shared_ptr<I> / std::unique_ptr<I> —
-#     `using`, `typedef`, or a plain alias of such an alias (chain cap 4) — is I through `->`, exactly like a member written
-#     `std::shared_ptr<I>`: an interface I declines `gate="iface"` with its implementors counted; a concrete I is a typed edge.
-#     Refused (base reading kept): a std pointee, two same-named aliases that disagree, an alias name that is also a class.
+#     `using`, `typedef`, or a plain alias of such an alias (the chain holds at most kAliasPeelDepth = 4 alias DECLARATIONS: the
+#     smart alias plus 3 plain ones) — is I through `->`, exactly like a member written `std::shared_ptr<I>`: an interface I
+#     declines `gate="iface"` with its implementors counted; a concrete I with no derived class is a typed edge.
+#     The alias must be IN SCOPE at the member (resolve.h SmartAliasPeel: the lexical chain, or the written qualifier).
+#     Refused (base reading kept): a std pointee, two same-scope aliases that disagree, an alias name that is also a class, a
+#     template parameter of that name, a concrete I with derived classes (an override must stay a candidate).
 #   * Rust (LangFacts::returnTypedDispatchLet): `let x = r.m( … )` whose call commits ONE proven edge to a callee declared
 #     `-> &dyn T` / `-> Box<dyn T>` / `-> impl T` types x as some implementor of T (the dispatch tier then declines or proves).
 #     A by-name or declined callee types nothing; a generic `-> R` (R: T) is never read.
@@ -32,7 +35,7 @@
 #   B1a a template PARAMETER named like an alias (another namespace; the same namespace; a concrete pointee) keeps the base reading
 #   B1b an alias name that is not visible there (another namespace, a wrong qualifier) keeps the base reading
 #   B1c an external using-declaration `using extlib::SpinPtr;` of the name keeps the base reading
-#   B1d [P] the same namespace, an enclosing namespace, a written qualifier and a using-directive all still peel
+#   B1d [P] the same namespace, an enclosing namespace and a written qualifier still peel; a using-directive is NOT followed (floor)
 #   S1a the chain cap: an alias reached through 3 plain aliases still peels (ch::V3), 4 do not (ch::V4: the base hedge) — a cap lowered to 2 fails V3
 #   S1b the real-class refusal: an alias name that is also an in-tree class (e2::Tank beside f2::Tank) is never peeled
 #   S1c the disagreement refusal: two same-scope aliases of one name with different pointees (dis::QPtr) are never peeled
@@ -98,10 +101,12 @@ o="$( callees "$CPP" "scope.h::WrongQual::go" )"
 say "$( hedge "$o" )" "B1b a written qualifier that names no scope of the alias keeps the by-name rows"
 o="$( callees "$CPP" "scope.h::ExtUser::go" )"
 say "$( hedge "$o" )" "B1c an external using-declaration of the name keeps the by-name rows"
-for f in SameNs InnerNs GlobalQ ViaDirective; do
+for f in SameNs InnerNs GlobalQ; do
   o="$( callees "$CPP" "scope.h::$f::go" )"
   say "$( isiface "$o" )" "B1d $f: the alias in scope still declines gate=iface cands=2"
 done
+o="$( callees "$CPP" "scope.h::ViaDirective::go" )"
+say "$( hedge "$o" )" "B1d a using-directive is not followed (a stated floor): the base by-name rows, never a wrong typed row"
 o="$( callees "$CPP" "scope.h::HoldX::goX" )"
 say "$( isiface "$o" )" "B1e HoldX: its own class's Ptr (shared_ptr<KxI>) declines gate=iface"
 o="$( callees "$CPP" "scope.h::HoldY::goY" )"

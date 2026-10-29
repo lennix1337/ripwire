@@ -1790,17 +1790,20 @@ inline void shadowJavaFieldsOntoMethods( const IngestResult& ing, const JavaFiel
 }
 
 // one member's declared type into Rule 2b's field table: same class-name#field-name with different declared types, or one reached
-// through `->` alone (a smart pointer's pointee) → tombstone. A member written as a C++ smart-pointer ALIAS (lane iface-peel,
-// resolve.h smartPointerAliasPointees) records the alias's pointee, reached by `->` alone, exactly as `std::shared_ptr<I>` would.
-inline void recordMemberTypeFact( HashMap<std::string, FlatRecvType>& table, const std::string& key, const Reference& cr,
-                                  const HashMap<std::string, FlatRecvType>& aliasPointees )
+// through `->` alone (a smart pointer's pointee) → tombstone. A member written as a C++ smart-pointer ALIAS that is in scope at the
+// member (lane iface-peel, resolve.h SmartAliasPeel) records the alias's pointee, reached by `->` alone, exactly as
+// `std::shared_ptr<I>` would. The reader is gated on the MEMBER's language, as the alias records are: a C struct member that
+// spells a C++ alias's name is a C pointer.
+inline void recordMemberTypeFact( HashMap<std::string, FlatRecvType>& table, const std::string& key, const Reference& cr, const SmartAliasPeel& aliases )
 {
-    const bool inStd  = fieldTypeWrittenInStd( cr );
-    const auto peeled = cr.viaArrow || inStd ? aliasPointees.end() : aliasPointees.find( cr.calleeName );
-    if( peeled != aliasPointees.end() )
+    const bool inStd = fieldTypeWrittenInStd( cr );
+    if( !cr.viaArrow && !inStd && langFacts( cr.lang ).aliasPeelsSmartPointer )
     {
-        recordFlatRecvTypeFact( table, key, peeled->second.type, peeled->second.writtenQualified, /*arrowOnly=*/true );
-        return;
+        if( const std::optional<FlatRecvType> peeled = aliases.pointeeOf( cr ) )
+        {
+            recordFlatRecvTypeFact( table, key, peeled->type, peeled->writtenQualified, /*arrowOnly=*/true );
+            return;
+        }
     }
     recordFlatRecvTypeFact( table, key, inStd ? std::string_view{} : std::string_view( cr.calleeName ), !cr.qualifier.empty(), cr.viaArrow );
 }
@@ -1810,8 +1813,8 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing, const 
     PROFILE_SCOPE_DESCRIBE( "buildGraph/2d: Rule-2b field-narrow tables" );
     FieldNarrowTables t;
     std::string       key;   // reused "Class#field" / "<fromSymbol>#var" key buffer
-    // lane iface-peel: a member written as a C++ smart-pointer alias (`Http::FilterSharedPtr handle_;`) is its pointee through `->`
-    const HashMap<std::string, FlatRecvType> aliasPointees = smartPointerAliasPointees( ing );
+    // lane iface-peel: a member written as a C++ smart-pointer alias in scope there (`Http::FilterSharedPtr handle_;`) is its pointee through `->`
+    const SmartAliasPeel aliasPeel( ing );
     for( const Reference& cr : ing.references )
     {
         if( !cr.isCompose || cr.fromSymbol == kNoNode || cr.fieldName.empty() || cr.calleeName.empty() )
@@ -1821,7 +1824,7 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing, const 
         key.clear();
         key.append( ing.symbols[ cr.fromSymbol ].name ).push_back( '#' );
         key.append( cr.fieldName );
-        recordMemberTypeFact( t.fieldTypeByClass, key, cr, aliasPointees );
+        recordMemberTypeFact( t.fieldTypeByClass, key, cr, aliasPeel );
     }
     t.localNameSet.reserve( ing.bindings.size() );
     t.localShadowSpans.reserve( ing.bindings.size() );
@@ -3594,7 +3597,7 @@ inline std::string_view stdElementType( std::string_view written ) noexcept
 // `operator->`, `SP<ns::List>& p; p->size()`, or through a class the tree does not define, `QSharedPointer<ns::List>& p` —
 // their pointee is unrecorded; a `->` through a typedef or using alias whose recorded target is one of those, `typedef
 // std::shared_ptr<ns::List> ListSP; ListSP p; p->size()` (the alias record's target keeps no template argument — a MEMBER
-// written such an alias is typed by its pointee instead, lane iface-peel, resolve.h smartPointerAliasPointees — so `typedef
+// written such an alias is typed by its pointee instead, lane iface-peel, resolve.h SmartAliasPeel — so `typedef
 // std::unique_ptr<std::string> StrUP` keeps the hedge too); `HashMap<K, V> m; m.find( k )` reaching UnionFind::find by name,
 // `std::unique_ptr<std::string> p; p->size()`, `std::vector<int>* pv; pv->size()` and `IntVec* p; p->size()` through
 // `typedef std::vector<int> IntVec` do not keep it); ONE element access of a container whose recorded written type is a std

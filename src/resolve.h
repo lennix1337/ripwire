@@ -46,7 +46,7 @@
 //            because it operates on the resolved file→file include graph, not on any language's name-lookup.
 
 #include "model.h"
-#include "langfacts.h"   // langFacts(l).aliasPeelsSmartPointer — smartPointerAliasPointees (lane iface-peel)
+#include "langfacts.h"   // langFacts(l).aliasPeelsSmartPointer — SmartAliasPeel (lane iface-peel)
 #include "arch.h"        // §B1.3: relForHash — the root-relative path segment canonicalIdRelTo keys on
 #include "smallvec.h"
 #include "infra/namesplit.h"   // stripTemplateArgs — a C++ template-id scope's family (appendTemplateFamilyKey), a `using Base<T>::m;` qualifier (buildUsingReexports)
@@ -4883,111 +4883,258 @@ struct FlatRecvType
     bool        arrowOnly        = false;
 };
 
-// Lane iface-peel (LangFacts::aliasPeelsSmartPointer): a C++ alias NAME → the class its std smart pointer's `->` reaches —
-// `using FilterSharedPtr = std::shared_ptr<Filter>;` / `typedef std::unique_ptr<Filter> FilterPtr;` (the alias record's
-// memberCtor / memberVia, ingest_relations.h emitTypeAlias), through a chain of plain aliases (`using Handle = FilterSharedPtr;`)
-// at most kAliasPeelDepth deep. `type` the pointee's last name, `writtenQualified` whether it was written with a namespace.
-// NO ENTRY (the member keeps its base reading) when: two same-named aliases disagree (a tie is refused, never picked); the
-// pointee was written in `std` (`std::shared_ptr<std::string>`); the chain is longer than the cap or loops; the alias NAME is
-// also a real class somewhere (a class-like symbol at a non-alias site, the addTypeAliasBases rule) — a member written that
-// name may mean the class. Read by buildFieldNarrowTables alone, which records the pointee as reached by `->` only.
-inline constexpr int kAliasPeelDepth = 4;
-inline HashMap<std::string, FlatRecvType> smartPointerAliasPointees( const IngestResult& ing )
+// Lane iface-peel (LangFacts::aliasPeelsSmartPointer): the class a C++ MEMBER written as a smart-pointer ALIAS reaches through `->` —
+// `using FilterSharedPtr = std::shared_ptr<Filter>;` / `typedef std::unique_ptr<Filter> FilterPtr;` (the alias record's memberCtor /
+// memberVia, ingest_relations.h emitTypeAlias), through plain aliases (`using Handle = FilterSharedPtr;`). FlatRecvType: `type` the
+// pointee's last name, `writtenQualified` whether it was written with a namespace, `arrowOnly` always (a `.` reaches the pointer).
+//
+// SCOPE (fix round 1). An alias is found as C++ finds a type name written at the member, never by its bare name repo-wide. The
+// lexical scope of the alias record and of the member record is ingest's (model.h kAnonScopeElement: namespaces and classes, outermost
+// first):
+//   * a QUALIFIED member (`Http::FilterSharedPtr`) reaches the aliases declared in a scope whose innermost name is that qualifier;
+//   * an UNQUALIFIED member reaches the aliases of its lexical chain, innermost first — its own class, the enclosing classes and
+//     namespaces, the global scope; the first level that declares the name decides; an anonymous namespace's aliases are visible
+//     in their own file only;
+//   * a TEMPLATE PARAMETER of the spelling is no alias at all (kTemplateParamMemberType, marked at ingest), and a member inside a
+//     function body has no scope this index models (kLocalScope): both keep the base reading, as does a name some class declares
+//     as a member alias when the member sits in a class (a base class may supply it).
+// FLOORS (the base reading is kept, never a wrong row): a using-directive is not followed (`using namespace sc;`); a using-declaration
+// (`using extlib::Socket;`), a forward declaration or an enum of the alias's name in a NEARER scope than the alias is not seen
+// (the C++ call-result bindings that record them are off, model.h callResultFamilyOf), so an in-tree alias further out would be
+// read there; the same-named class-like symbol guard below is the one global check.
+// NO READING (the member keeps its base reading) when: the reachable aliases disagree (two same-scope aliases of one name with
+// different pointees: a tie is refused, never picked); the pointee was written in `std` (`std::shared_ptr<std::string>`); the chain
+// is longer than kAliasPeelDepth ALIAS DECLARATIONS or loops; the alias NAME is also a real class somewhere (a class-like symbol
+// at a non-alias site, the addTypeAliasBases rule); the pointee is a CONCRETE class that has derived classes (a virtual it
+// declares may be overridden, and the static type would pin the base's body: the override set stays the candidates).
+// kAliasPeelDepth = 4 counts the alias declarations on the chain INCLUDING the smart-pointer alias at its end: a member may sit
+// behind at most 3 plain aliases (`using V3 = V2; using V2 = V1; using V1 = V0; using V0 = std::shared_ptr<I>;`); a 4th does not peel.
+inline constexpr int         kAliasPeelDepth  = 4;
+inline constexpr std::size_t kAliasPeelBranch = 4;   // same-scope declarations of one name a lookup follows; more is "unknown"
+
+class SmartAliasPeel
 {
-    HashMap<std::string, FlatRecvType> out;
-    HashMap<std::string, FlatRecvType> direct;   // alias → pointee; an empty type is a refusal (std pointee, or a disagreement)
-    HashMap<std::string, std::string>  plain;    // alias → its non-std target name; "" is a disagreement
-    HashMap<std::string, char>         sites;    // "file:line:alias" of every alias record (the real-class test)
-    std::string                        key;
-    const auto siteKey = [ & ]( std::uint32_t fileId, std::uint32_t line, std::string_view name )
+public:
+    explicit SmartAliasPeel( const IngestResult& ing )
     {
-        key.assign( std::to_string( fileId ) ).push_back( ':' );
-        key.append( std::to_string( line ) ).push_back( ':' );
-        key.append( name );
-    };
-    for( const Reference& r : ing.references )
-    {
-        if( !isTypeAliasRecord( r ) || r.recvVar.empty() || !langFacts( r.lang ).aliasPeelsSmartPointer )
+        std::string                key;
+        HashMap<std::string, char> sites;   // "file:line:alias" of every alias record (a typedef is itself a class-like symbol there)
+        const auto                 siteKey = [ & ]( std::uint32_t fileId, std::uint32_t line, std::string_view name )
         {
-            continue;
-        }
-        siteKey( r.fileId, r.line, r.recvVar );
-        sites.try_emplace( key, '\0' );
-        if( !r.memberCtor.empty() )
+            key.assign( std::to_string( fileId ) ).push_back( ':' );
+            key.append( std::to_string( line ) ).push_back( ':' );
+            key.append( name );
+        };
+        bool anyPointer = false;
+        for( const Reference& r : ing.references )
         {
-            const FlatRecvType t{ r.memberVia == "std" ? std::string() : r.memberCtor, !r.memberVia.empty(), true };
-            if( const auto [ it, fresh ] = direct.try_emplace( r.recvVar, t ); !fresh && ( it->second.type != t.type || it->second.writtenQualified != t.writtenQualified ) )
+            if( !isTypeAliasRecord( r ) || r.recvVar.empty() || !langFacts( r.lang ).aliasPeelsSmartPointer )
             {
-                it->second.type.clear();
+                continue;
+            }
+            siteKey( r.fileId, r.line, r.recvVar );
+            sites.try_emplace( key, '\0' );
+            Entry e;
+            e.fileId = r.fileId;
+            e.scope  = Scope( r.memberRoot );
+            if( !r.memberCtor.empty() )
+            {
+                e.kind    = r.memberVia == "std" ? Kind::Refused : Kind::Pointer;   // `std::shared_ptr<std::string>`: no in-tree pointee
+                e.pointee = FlatRecvType{ r.memberCtor, !r.memberVia.empty(), true };
+                anyPointer = anyPointer || e.kind == Kind::Pointer;
+            }
+            else if( !fieldTypeWrittenInStd( r ) && !r.calleeName.empty() )
+            {
+                e.kind            = Kind::Plain;
+                e.target          = r.calleeName;
+                e.targetQualifier = r.qualifier;
+            }
+            if( e.scope.inClass() )
+            {
+                classScoped_.try_emplace( r.recvVar, '\0' );
+            }
+            byName_[ r.recvVar ].push_back( std::move( e ) );   // else Refused: `using V = std::vector<Filter>;` is no pointer
+        }
+        if( !anyPointer )
+        {
+            byName_.clear();
+            return;
+        }
+        for( const Symbol& s : ing.symbols )
+        {
+            if( !langFacts( s.lang ).aliasPeelsSmartPointer )
+            {
+                continue;
+            }
+            if( s.kind == SymKind::Class || isStructOrNamedType( s.kind ) || s.kind == SymKind::Interface )
+            {
+                siteKey( s.fileId, s.line, s.name );
+                if( byName_.find( s.name ) != byName_.end() && sites.find( key ) == sites.end() )
+                {
+                    realClass_.try_emplace( s.name, '\0' );
+                }
+            }
+            else if( ( s.kind == SymKind::Method || s.kind == SymKind::Function ) && s.endByte <= s.sigEndByte && !s.scope.empty() )
+            {
+                abstract_.try_emplace( std::string( scopeLastSegment( s.scope ) ), '\0' );   // a bodyless member: the class declares a contract
             }
         }
-        else if( !fieldTypeWrittenInStd( r ) && !r.calleeName.empty() )
+        for( const Reference& r : ing.references )
         {
-            if( const auto [ it, fresh ] = plain.try_emplace( r.recvVar, r.calleeName ); !fresh && it->second != r.calleeName )
+            if( r.isInherit && !r.calleeName.empty() )
             {
-                it->second.clear();
+                bases_.try_emplace( r.calleeName, '\0' );
+            }
+        }
+    }
+
+    // The pointee a MEMBER (a compose record with a field name) written as an alias reaches through `->`; nullopt = the member keeps
+    // its base reading.
+    std::optional<FlatRecvType> pointeeOf( const Reference& member ) const
+    {
+        if( byName_.empty() || member.memberVia == kTemplateParamMemberType || realClass_.find( member.calleeName ) != realClass_.end() )
+        {
+            return std::nullopt;
+        }
+        const std::optional<std::vector<const Entry*>> hits = reach( member.calleeName, member.qualifier, member.fileId, Scope( member.memberRoot ) );
+        std::optional<FlatRecvType>                    t    = hits ? agree( *hits, 0 ) : std::nullopt;
+        if( t && bases_.find( t->type ) != bases_.end() && abstract_.find( t->type ) == abstract_.end() )
+        {
+            return std::nullopt;   // a concrete class with derived classes: a virtual may be overridden, so no single static pin
+        }
+        return t;
+    }
+
+private:
+    enum class Kind : std::uint8_t { Pointer, Plain, Refused };
+
+    // a declaration's lexical scope (model.h kAnonScopeElement), read from its record's memberRoot
+    struct Scope
+    {
+        std::vector<std::string> prefix { std::string() };   // prefix[k]: the path of the outermost k scopes (anonymous namespaces left out)
+        std::vector<char>        isClass;                    // isClass[k - 1]: scope k is a class
+        bool                     anon  = false;
+        bool                     local = false;              // inside a function body: no scope this index models
+
+        Scope() = default;
+        explicit Scope( std::string_view path )
+        {
+            local = path == kLocalScope;
+            for( std::size_t from = 0; !local && !path.empty() && from <= path.size(); )
+            {
+                const std::size_t cut = std::min( path.find( "::", from ), path.size() );
+                std::string_view  el  = path.substr( from, cut - from );
+                from                  = cut + 2;
+                if( el == kAnonScopeElement )
+                {
+                    anon = true;
+                    continue;
+                }
+                const bool cls = el.starts_with( '#' );
+                el.remove_prefix( cls ? 1 : 0 );
+                std::string next = prefix.back();
+                next.append( next.empty() ? "" : "::" ).append( el );
+                prefix.push_back( std::move( next ) );
+                isClass.push_back( cls ? 1 : 0 );
+            }
+        }
+        const std::string& path() const { return prefix.back(); }
+        bool               inClass() const { return !isClass.empty() && isClass.back() != 0; }
+        bool               anyClass() const { return std::ranges::any_of( isClass, []( char c ) { return c != 0; } ); }
+    };
+    struct Entry
+    {
+        Kind          kind   = Kind::Refused;
+        std::uint32_t fileId = 0;
+        FlatRecvType  pointee;                 // Pointer
+        std::string   target;                  // Plain: the alias it names, and the namespace it was written in
+        std::string   targetQualifier;
+        Scope         scope;                   // where the declaration sits
+    };
+
+    // the declarations the name `name` written with `qualifier` in `from` (file `fileId`) reaches; nullopt = unknown (refuse)
+    std::optional<std::vector<const Entry*>> reach( std::string_view name, std::string_view qualifier, std::uint32_t fileId, const Scope& from ) const
+    {
+        const auto all = byName_.find( std::string( name ) );
+        if( all == byName_.end() )
+        {
+            return std::vector<const Entry*>{};
+        }
+        if( from.local )
+        {
+            return std::nullopt;
+        }
+        std::vector<const Entry*> hits;
+        const auto                visible = [ & ]( const Entry& e ) { return !e.scope.local && ( !e.scope.anon || e.fileId == fileId ); };
+        bool                      classLevel = false;
+        if( !qualifier.empty() )
+        {
+            for( const Entry& e : all->second )
+            {
+                if( visible( e ) && scopeLastSegment( e.scope.path() ) == qualifier )
+                {
+                    hits.push_back( &e );
+                }
             }
         }
         else
         {
-            plain.insert_or_assign( r.recvVar, std::string() );   // `using V = std::vector<Filter>;`: a std target that is no pointer
+            for( std::size_t k = from.prefix.size(); k-- > 0 && hits.empty(); )
+            {
+                for( const Entry& e : all->second )
+                {
+                    if( visible( e ) && e.scope.path() == from.prefix[ k ] )
+                    {
+                        hits.push_back( &e );
+                    }
+                }
+                classLevel = !hits.empty() && k > 0 && from.isClass[ k - 1 ] != 0;
+            }
+            if( !hits.empty() && !classLevel && from.anyClass() && classScoped_.find( std::string( name ) ) != classScoped_.end() )
+            {
+                return std::nullopt;   // a base class of the member's class may declare the name
+            }
         }
+        return hits.size() > kAliasPeelBranch ? std::nullopt : std::optional( std::move( hits ) );
     }
-    if( direct.empty() )
+
+    // the one pointee every declaration in `hits` names; nullopt when none does, or two differ
+    std::optional<FlatRecvType> agree( const std::vector<const Entry*>& hits, int depth ) const
     {
+        std::optional<FlatRecvType> out;
+        for( const Entry* e : hits )
+        {
+            const std::optional<FlatRecvType> t = follow( *e, depth );
+            if( !t || ( out && ( out->type != t->type || out->writtenQualified != t->writtenQualified ) ) )
+            {
+                return std::nullopt;
+            }
+            out = t;
+        }
         return out;
     }
-    HashMap<std::string, char> realClass;
-    for( const Symbol& s : ing.symbols )
+
+    // `e` is the (depth + 1)-th alias declaration of its chain
+    std::optional<FlatRecvType> follow( const Entry& e, int depth ) const
     {
-        const bool classLike = s.kind == SymKind::Class || isStructOrNamedType( s.kind ) || s.kind == SymKind::Interface;
-        if( classLike && ( direct.find( s.name ) != direct.end() || plain.find( s.name ) != plain.end() ) )
+        if( e.kind == Kind::Pointer )
         {
-            siteKey( s.fileId, s.line, s.name );
-            if( sites.find( key ) == sites.end() )
-            {
-                realClass.try_emplace( s.name, '\0' );
-            }
+            return e.pointee;
         }
+        if( e.kind != Kind::Plain || depth + 2 > kAliasPeelDepth || realClass_.find( e.target ) != realClass_.end() )
+        {
+            return std::nullopt;   // a refusal, or past the cap (a loop ends here too)
+        }
+        const std::optional<std::vector<const Entry*>> next = reach( e.target, e.targetQualifier, e.fileId, e.scope );
+        return next ? agree( *next, depth + 1 ) : std::nullopt;
     }
-    const auto peel = [ & ]( const std::string& alias ) -> const FlatRecvType*
-    {
-        std::string name = alias;
-        for( int depth = 0; depth < kAliasPeelDepth; ++depth )
-        {
-            if( realClass.find( name ) != realClass.end() )
-            {
-                return nullptr;
-            }
-            if( const auto d = direct.find( name ); d != direct.end() )
-            {
-                return ( d->second.type.empty() || plain.find( name ) != plain.end() ) ? nullptr : &d->second;
-            }
-            const auto p = plain.find( name );
-            if( p == plain.end() || p->second.empty() )
-            {
-                return nullptr;
-            }
-            name = p->second;
-        }
-        return nullptr;   // past the cap (or a loop): no reading
-    };
-    for( const auto& [ alias, target ] : plain )
-    {
-        if( const FlatRecvType* t = peel( alias ) )
-        {
-            out.try_emplace( alias, *t );
-        }
-    }
-    for( const auto& [ alias, t ] : direct )
-    {
-        if( const FlatRecvType* p = peel( alias ) )
-        {
-            out.try_emplace( alias, *p );
-        }
-    }
-    return out;
-}
+
+    HashMap<std::string, std::vector<Entry>> byName_;       // alias name → its declarations
+    HashMap<std::string, char>               realClass_;    // alias names that are also a class-like symbol at a non-alias site
+    HashMap<std::string, char>               classScoped_;  // alias names some class declares as a member
+    HashMap<std::string, char>               bases_;        // every class name written as a base
+    HashMap<std::string, char>               abstract_;     // every class name that declares a bodyless member
+};
 
 // fold one declared type into a flat table: the first type wins, a different later type tombstones, and an agreeing
 // declaration that wrote it qualified marks the entry. `type` is "" for a refused (`std::`) type, which tombstones too. A type

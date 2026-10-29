@@ -363,7 +363,10 @@ constexpr std::uint32_t kCacheVersion = 46;           // 46: train 40 — lane j
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 259;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 260;          // bump on any grammar/.scm/extraction change
+                                                      // 260 = 2026-10-29 PLACEHOLDER (lane iface-peel fix round 1; the train renumbers both steps as one): a C++ MEMBER record whose
+                                                      //   written type is a template parameter of an enclosing `template <…>` carries memberVia = kTemplateParamMemberType
+                                                      //   (ingest_relations.h captureFields). Record layout unchanged (kCacheVersion stays 46).
                                                       // 259 = 2026-10-28 PLACEHOLDER (lane iface-peel; the train renumbers): a C++ smart-pointer
                                                       //   alias record carries its pointee (memberCtor/memberVia, ingest_relations.h emitTypeAlias)
                                                       //   and a Rust `-> &dyn T` / `Box<dyn T>` / `impl T` result records a ReturnType with
