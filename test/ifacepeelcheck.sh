@@ -31,7 +31,7 @@
 #   N5 C++ alias of std::shared_ptr<std::string> types nothing (an in-tree text::string keeps its base by-name row)
 #   N6 Rust: a generic `-> R` (R: Command) is never read as a trait object (no iface row)
 #   fix round 1 (B1, scope.h): an alias is read only where it is IN SCOPE at the member (lexical chain: its own class, the
-#   enclosing namespaces, a using-directive; or the written qualifier names the alias's namespace)
+#   enclosing namespaces; a using-directive is NOT followed; or the written qualifier names the alias's namespace)
 #   B1a a template PARAMETER named like an alias (another namespace; the same namespace; a concrete pointee) keeps the base reading
 #   B1b an alias name that is not visible there (another namespace, a wrong qualifier) keeps the base reading
 #   B1c an external using-declaration `using extlib::SpinPtr;` of the name keeps the base reading
@@ -42,6 +42,10 @@
 #   S1e a member alias a base class declares (Hz1::HP) is never replaced by a global alias of the same name (Hz2 inherits Hz1)
 #   S1d a raw-pointer typedef of the alias's name in another namespace (rp2::Ptr beside rp1::Ptr) is never peeled
 #   N1b an alias of a CONCRETE class that has a virtual method derived classes override is no typed pin: the override set stays
+#   D1 [fix round 2] "the class is an interface" counts a contract only: a bodyless member that is no constructor / destructor and has
+#      no out-of-line definition. A concrete base keeps its override set as hedged candidates (never one typed Base::act pin):
+#      D1a methods defined in the .cc, D1b a declared constructor only, D1c a declared destructor only; D1d a pure-virtual interface
+#      still declines gate="iface". S1b and L-1 also assert a POSITIVE row (a crash or empty output cannot pass them).
 #   L-1 a C member written with the name of a C++ smart alias is a C pointer: the peel is gated on the member's language (lang.c)
 #   B1e [P] class-scoped aliases of one name: each member reads its OWN class's (HoldX → iface, HoldY → the typed KyC::kick)
 set -u
@@ -123,6 +127,7 @@ o="$( callees "$CPP" "scope2.h::Pipe::d4" )"
 say "$( hedge "$o" )" "S1a an alias behind 4 plain aliases is past the cap: the base by-name rows"
 o="$( callees "$CPP" "scope2.h::Rig::go" )"
 say "$( hasnt "$o" 'gate="iface"' )" "S1b an alias name that is also a real class (f2::Tank) is never peeled"
+say "$( has "$o" '<s t="method" n="Tank::flow" p="scope2.h:29"/>' )" "S1b ... the class's own Tank::flow is the row (positive: a crash or empty output fails)"
 o="$( callees "$CPP" "scope2.h::DisUser::go" )"
 say "$( hedge "$o" )" "S1c two same-scope aliases with different pointees are never peeled"
 o="$( callees "$CPP" "scope2.h::Holder::go" )"
@@ -134,8 +139,22 @@ say "$( has "$o" 'Der2::act' )" "N1b ... and Der2::act"
 # ---- fix round 1, L-1: the member reader is language-gated like the ingest ----
 o="$( callees "$CPP" "lang.c:cgo" )"
 say "$( hasnt "$o" 'gate="iface"' )" "L-1 a C struct member named like a C++ smart alias is never read as its pointee (no iface row)"
+say "$( has "$o" 'defs="1"' )" "L-1 ... and cgo is found (positive: a crash or an unmatched selector fails)"
 o="$( callees "$CPP" "scope2.h::Hz2::go" )"
 say "$( hedge "$o" )" "S1e a member of a derived class never takes a global alias when a base class may declare the name"
+# ---- fix round 2, D1: only a CONTRACT makes a class an interface (not a ctor, a dtor or a member defined out of line) ----
+o="$( callees "$CPP" "scope3.cc:UsesOol::go" )"
+say "$( has "$o" 'OolA::act' )" "D1a methods declared in the .h and defined in the .cc: OolA::act stays a candidate (no single typed BaseOol::act)"
+say "$( has "$o" 'OolB::act' )" "D1a ... and OolB::act"
+o="$( callees "$CPP" "scope3.h::UsesCtor::go" )"
+say "$( has "$o" 'CtorA::act' )" "D1b a declared constructor does not make the class an interface: CtorA::act stays"
+say "$( has "$o" 'CtorB::act' )" "D1b ... and CtorB::act"
+o="$( callees "$CPP" "scope3.h::UsesDtor::go" )"
+say "$( has "$o" 'DtorA::act' )" "D1c a declared destructor does not make the class an interface: DtorA::act stays"
+say "$( has "$o" 'DtorB::act' )" "D1c ... and DtorB::act"
+o="$( callees "$CPP" "scope3.h::UsesPure::go" )"
+say "$( isiface "$o" )" "D1d a pure-virtual interface still declines gate=iface cands=2"
+say "$( hasnt "$o" 'via="name"' )" "D1d ... with no by-name guess"
 echo "ifacepeelcheck: $npass passed, $nfail failed"
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"
