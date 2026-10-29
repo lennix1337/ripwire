@@ -262,7 +262,7 @@ inline constexpr std::string_view kEditLinesSkipRead[ 2 ] = {
     "  (or insert-before/after); the receipt carries region, blob_sha, edit_check, tests_to_run + ONE next= — no re-read after it; `--edit-check=SYM --legend=compact` is for a contract question WITHOUT an edit in hand.",
 };
 inline constexpr std::string_view kEditLinesRangedRead[ 2 ] = {
-    "- To edit a symbol: get its line range from ripwire (`l=`/`e=` of a `--for` row, `p=FILE:LINE` of `--defs`), Read only that range (offset/limit), then use your native Edit —",
+    "- To edit a symbol: take its range from ripwire (`--for` row `l=`..`e=`; `--expand=SYM --legend=compact` body from `l=`), Read only that range (offset/limit), then use your native Edit —",
     "  not a whole-file Read. `--edit-check=SYM --legend=compact` before a contract change, and after the edit.",
 };
 

@@ -314,6 +314,13 @@ if grep -qF -- 'native Edit' "$TMP/blurb_claude" && grep -qF -- '--edit-check=' 
 else
     no "claude's blurb does not route an edit through a ranged Read + native Edit, or still names --replace-symbol-body"
 fi
+# fix1 N1: the range the agent is told to Read must have an END. `--defs` prints only a start line (p=FILE:LINE), so the
+# blurb must not offer it as a range source; a `--for` row's l=..e= (or --expand's printed body) does give one.
+if grep -qF -- 'l=`..`e=' "$TMP/blurb_claude" && ! grep -qF -- 'p=FILE:LINE' "$TMP/blurb_claude" && ! grep -qF -- '--defs' "$TMP/blurb_claude"; then
+    ok "claude's blurb names a range with an end (l=..e= of a --for row) and does not offer --defs's start-only line"
+else
+    no "claude's blurb must name l=..e= and must not offer --defs / p=FILE:LINE as a range (it has no end line)"
+fi
 for _peer in $_peers; do
     if grep -qF -- '--replace-symbol-body=SYM' "$TMP/blurb_$_peer" && ! grep -qF -- 'native Edit' "$TMP/blurb_$_peer"; then
         ok "$_peer's blurb keeps the whole-symbol edit line (no read-before-edit rule)"
