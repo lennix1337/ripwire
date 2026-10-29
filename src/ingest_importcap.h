@@ -332,7 +332,8 @@ inline bool webReexportBindOf( TSNode namesNode, TSNode aliasNode, std::string_v
     static constexpr std::string_view kStar = "*";
     const bool star = kindIs( ts_node_type( namesNode ), "string" );
     out.directive   = star ? ts_node_parent( namesNode ) : ts_node_parent( ts_node_parent( ts_node_parent( namesNode ) ) );
-    if( !kindIs( ts_node_type( out.directive ), "export_statement" ) || ( !star && !kindIs( ts_node_type( namesNode ), "identifier" ) ) )
+    if( ts_node_is_null( out.directive ) || !kindIs( ts_node_type( out.directive ), "export_statement" )   // a capture the query did not
+        || ( !star && !kindIs( ts_node_type( namesNode ), "identifier" ) ) )                                // shape this way is refused
     {
         return false;
     }

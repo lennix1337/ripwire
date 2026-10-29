@@ -549,15 +549,16 @@ inline std::vector<std::string_view> reexportTaskTokens( std::string_view task )
     return tokens;
 }
 
-// `NAME from M` with M spelled as a module (`hono/jwt`, `@angular/core`, `./x`): the import spelling, not `path from A to B`.
+// A token spelled as a module (`hono/jwt`, `@angular/core`, `./x`), not a word or a qualified symbol (`Editor::backspace`).
+inline bool reexportModuleLike( std::string_view m )
+{
+    return m.find( '/' ) != std::string_view::npos || m.starts_with( '@' ) || m.starts_with( '.' );
+}
+
+// `NAME from M` with M spelled as a module: the import spelling, not `path from A to B`.
 inline bool reexportFromModule( const std::vector<std::string_view>& tokens, std::size_t i )
 {
-    if( i + 2 >= tokens.size() || tokens[ i + 1 ] != "from" )
-    {
-        return false;
-    }
-    const std::string_view m = tokens[ i + 2 ];
-    return m.find( '/' ) != std::string_view::npos || m.starts_with( '@' ) || m.starts_with( '.' );
+    return i + 2 < tokens.size() && tokens[ i + 1 ] == "from" && reexportModuleLike( tokens[ i + 2 ] );
 }
 
 // Does the task ask where something comes from (a definition's location, an import or re-export, its hops)?
@@ -757,14 +758,32 @@ struct ReexportXml
     }
 };
 
-// The definitions a task word names, in a language whose re-exports this file reads (Rust; the Web dialect).
-inline std::vector<const Symbol*> reexportDefs( const IngestResult& ing, const std::vector<std::string>& names )
+// The package a `from <module>` names (`@angular/core` -> core, `hono/jwt` -> jwt; "" when the task names none): a definition
+// the task asks about then lives under a directory of that name, so a same-named item of another package is not it.
+inline std::string_view reexportFromPackage( const std::vector<std::string_view>& tokens )
+{
+    for( std::size_t i = 0; i + 1 < tokens.size(); ++i )
+    {
+        if( tokens[ i ] == "from" && reexportModuleLike( tokens[ i + 1 ] ) )
+        {
+            const std::string_view m = tokens[ i + 1 ];
+            return m.substr( m.rfind( '/' ) == std::string_view::npos ? 0 : m.rfind( '/' ) + 1 );
+        }
+    }
+    return {};
+}
+
+// The definitions a task word names, in a language whose re-exports this file reads (Rust; the Web dialect), inside the
+// package the task names (`from @angular/core`: a path with a `core/` directory) when it names one.
+inline std::vector<const Symbol*> reexportDefs( const IngestResult& ing, const std::vector<std::string>& names, std::string_view package )
 {
     std::vector<const Symbol*> defs;
+    const std::string          dir = std::string( "/" ).append( package ).append( "/" );
     for( const Symbol& s : ing.symbols )
     {
-        const bool lang = s.lang == Lang::Rust || dependencyDialect( s.lang ) == DepDialect::Web;
-        if( lang && reexportDefKind( s ) && std::ranges::find( names, s.name ) != names.end() )
+        const bool lang  = s.lang == Lang::Rust || dependencyDialect( s.lang ) == DepDialect::Web;
+        const bool inPkg = package.empty() || std::string( "/" ).append( rootRelPath( ing, s.fileId ) ).find( dir ) != std::string::npos;
+        if( lang && inPkg && reexportDefKind( s ) && std::ranges::find( names, s.name ) != names.end() )
         {
             defs.push_back( &s );
         }
@@ -822,8 +841,9 @@ inline std::vector<Chain> reexportChains( Walk& w, const std::vector<const Symbo
 inline std::string renderForReexports( const IngestResult& ing, std::string_view task )
 {
     using namespace reexport_detail;
-    const std::vector<std::string>   names = reexportTaskNames( task );
-    const std::vector<const Symbol*> defs  = names.empty() ? std::vector<const Symbol*>{} : reexportDefs( ing, names );
+    const std::vector<std::string>      names  = reexportTaskNames( task );
+    const std::vector<std::string_view> tokens = reexportTaskTokens( task );
+    const std::vector<const Symbol*>    defs   = names.empty() ? std::vector<const Symbol*>{} : reexportDefs( ing, names, reexportFromPackage( tokens ) );
     if( defs.empty() )
     {
         return {};
@@ -838,8 +858,7 @@ inline std::string renderForReexports( const IngestResult& ing, std::string_view
     }
     const RustCrates rc = rust ? buildRustCrates( ing, files ) : RustCrates{ .crateOf = std::vector<std::uint32_t>( ing.files.size(), kNoFile ) };
     Sources          src{ ing, {} };
-    const std::vector<std::string_view> tokens = reexportTaskTokens( task );
-    const bool                          cued   = reexportTaskCued( tokens );   // otherwise only a chain that reaches a task-named file prints
+    const bool cued = reexportTaskCued( tokens );   // otherwise only a chain that reaches a task-named file prints
     Walk             w{ ing, src, rc, files, {}, {}, {}, {}, reexportTaskFiles( ing, tokens ) };
     indexReexportRecords( ing, rust, web, w );
     ReexportXml xml{ ing, rc, src, {}, {}, {} };

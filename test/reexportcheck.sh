@@ -19,6 +19,7 @@
 #   C1  cycles terminate: core_x a.rs/b.rs glob each other; ts cyc1.ts/cyc2.ts star each other (one row each).
 #   N2  a task spelling `(…)` / `[…]` around file names terminates (the tokenizer once spun on a `)` it never skipped).
 #   N3  no cue word and no task-named file on the chain: no block; a task-named directory (app_main) alone suffices.
+#   P1  `X from <module>` keeps only definitions under that package's directory (`from @x/ts`: ts/…, never core_x/…).
 #   N1  a task with no code-shaped name prints no block; --json prints none; RIPWIRE_NO_REEXPORT_HOPS=1 removes exactly the block.
 #
 # Usage: bash test/reexportcheck.sh [BIN]     (default build/ripwire; exits non-zero on any failure)
@@ -47,6 +48,8 @@ has  "$TMP/r1.xml" "R1 item re-export errors/mod.rs:2"  '<rx p="core_x/src/error
 has  "$TMP/r1.xml" "R1 glob hop lib.rs:4 hedged"        '<rx p="core_x/src/lib.rs" l="4" use="errors::*" at="core_x::Boom" glob="1"/>'
 has  "$TMP/r1.xml" "R1 cross-crate prelude.rs:1"        '<rx p="engine/src/prelude.rs" l="1" use="core_x::Boom" at="engine::prelude::Boom"/>'
 has  "$TMP/r1.xml" "R1 module re-export facade"         '<rx p="facade/src/lib.rs" l="1" use="core_x::errors"'
+n=$( block "$TMP/r1.xml" | grep -o '<rx p="facade/src/lib.rs"' | wc -l | tr -d ' ' )
+[ "$n" = 1 ] && ok "R1 one statement, one row (the module re-export publishes two spellings)" || no "R1 facade/src/lib.rs printed $n times"
 has  "$TMP/r1.xml" "R1 task-named use site main.rs:1"   '<u p="app/src/main.rs" l="1" use="engine::prelude::*" glob="1"/>'
 has  "$TMP/r1.xml" "R2 rename counted (#445)"           'as_skipped="1"'
 hasnt "$TMP/r1.xml" "R2 rename not a row"               'engine/src/alias.rs'
@@ -79,6 +82,10 @@ ask "--for=how does Boom work at runtime" >"$TMP/n3.xml"
 if grep -q '<reexports>' "$TMP/n3.xml"; then no "N3 uncued task, no task-named file: no block"; else ok "N3 uncued task, no task-named file: no block"; fi
 ask "--for=Boom in the app_main example" >"$TMP/n4.xml"
 has  "$TMP/n4.xml" "N3 uncued task whose chain reaches a task-named directory" '<u p="app_main/src/main.rs" l="1"'
+ask "--for=where Shape from @fix/m is defined" >"$TMP/p1.xml"
+has  "$TMP/p1.xml" "P1 a from-module keeps the def in its package"   '<def n="Shape" p="ts/m/impl.ts"'
+ask "--for=where Boom from @fix/ts is defined" >"$TMP/p2.xml"
+if grep -q '<reexports>' "$TMP/p2.xml"; then no "P1 a def outside the named package prints nothing"; else ok "P1 a def outside the named package prints nothing"; fi
 ask "--for=add a new built-in filter command" >"$TMP/n1.xml"
 if grep -q '<reexports>' "$TMP/n1.xml"; then no "N1 no code-shaped name: no block"; else ok "N1 no code-shaped name: no block"; fi
 ask --json "--for=where Boom used in main.rs is defined" >"$TMP/n2.json"
