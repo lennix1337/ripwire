@@ -366,29 +366,99 @@ else
 fi
 
 # (B6) MCP: a soft stop answers with the envelope disclosure, and every answer from that partial index keeps it
-#      WHICH files survive crawl:30 is the filesystem's readdir order (recursive_directory_iterator, no sort before the
-#      stop): APFS keeps a/f02.c, ext4's hashed order can keep it or not (a simulation over random orders keeps it
-#      ~37 % of the time). find_symbol of a name outside the kept files is a JSON-RPC ERROR, which has no
-#      result._memory_stop at all (CI 40671724898 and #458 runs: B6b "_memory_stop=''" on ubuntu only). So the
-#      per-answer assertions below use verbs whose answer is a RESULT on ANY partial index (grep, an empty match is
-#      still an envelope), and the find_symbol probe is asserted only on the shape it actually returned.
-printf '%s\n' \
-    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$FX\",\"pattern\":\"a_01\"}}}" \
-    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$FX\",\"pattern\":\"a_02\"}}}" \
-    "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"$FX\",\"symbol\":\"a_02\"}}}" \
-    | RIPWIRE_TEST_MEMGUARD=crawl:30 mcp_call "$TMP" --max-memory=64M >"$TMP/b6.out"
+#      WHICH files survive crawl:30 used to be the filesystem's readdir order (recursive_directory_iterator, no sort
+#      before the stop): APFS kept a/f02.c, ext4's hashed order could drop it (a simulation over random orders kept it
+#      ~37 % of the time), and find_symbol of a name outside the kept files was a JSON-RPC ERROR with no
+#      result._memory_stop at all (CI 40671724898 and #458 runs: B6b "_memory_stop=''" on ubuntu only). The crawl now
+#      walks in byte order of file names (SortedDirWalk), so the kept set is the same on every filesystem, and EVERY
+#      answer from a cut index — a result or a not-found/refusal error — carries the partial-index sentence.
+#      Kept set at crawl:30 (pre-order; the 30th entry is the one the seam stops AT, so 29 are kept): a, a/f00..f17
+#      (entries 1-19), b, b/f00..f08 (20-29).
+cut_req(){   # $1 = id, $2 = tool, $3 = arguments JSON object
+    printf '{"jsonrpc":"2.0","id":%s,"method":"tools/call","params":{"name":"%s","arguments":%s}}\n' "$1" "$2" "$3"
+}
+{ cut_req 2 grep "{\"path\":\"$FX\",\"pattern\":\"a_01\"}"
+  cut_req 3 grep "{\"path\":\"$FX\",\"pattern\":\"a_02\"}"
+  cut_req 4 find_symbol "{\"path\":\"$FX\",\"symbol\":\"a_02\"}"
+  cut_req 5 grep "{\"path\":\"$FX\",\"pattern\":\"b_08\"}"
+  cut_req 6 grep "{\"path\":\"$FX\",\"pattern\":\"b_09\"}"
+  cut_req 7 find_symbol "{\"path\":\"$FX\",\"symbol\":\"d_17\"}"
+  cut_req 8 find_referencing_symbols "{\"path\":\"$FX\",\"symbol\":\"d_17\"}"
+  cut_req 9 impact "{\"path\":\"$FX\",\"symbol\":\"d_17\"}"
+  cut_req 10 uses "{\"path\":\"$FX\",\"symbol\":\"d_17\"}"
+  cut_req 11 mentions "{\"path\":\"$FX\",\"symbol\":\"d_17\"}"
+  cut_req 12 owners "{\"path\":\"$FX\",\"symbol\":\"d_17\"}"
+  cut_req 13 slice "{\"path\":\"$FX\",\"symbol\":\"d_17\"}"
+  cut_req 14 path_between "{\"path\":\"$FX\",\"from\":\"d_17\",\"to\":\"a_00\"}"
+  cut_req 15 connect "{\"path\":\"$FX\",\"symbols\":[\"d_17\",\"c_17\"]}"
+  cut_req 16 find_symbol "{\"path\":\"$FX\",\"symbol\":\"zzz_nope\"}"
+} | RIPWIRE_TEST_MEMGUARD=crawl:30 mcp_call "$TMP" --max-memory=64M >"$TMP/b6.out"
 ms2="$( mcp_field "$TMP/b6.out" 2 _memory_stop )"; ms3="$( mcp_field "$TMP/b6.out" 3 _memory_stop )"
 case "$ms2" in *"memory guard"*crawl*64M*) ok "(B6) MCP grep under a crawl stop carries _memory_stop";; *) no "(B6) id=2 _memory_stop='${ms2:0:200}' resp: $( head -c 300 "$TMP/b6.out" )";; esac
 case "$ms3" in *"memory guard"*) ok "(B6b) the next answer from the same partial index still carries it";; *) no "(B6b) id=3 _memory_stop='${ms3:0:200}' resp: $( grep '"id":3' "$TMP/b6.out" | head -c 300 )";; esac
-# (B6b2) a third verb on the same index: when the symbol is inside the kept files the answer is a result and must carry
-#        the disclosure; when it is outside them the answer is a not-found ERROR, whose shape (no envelope) is not what
-#        this arm pins — said on a NOTE line, not a PASS, so a reader sees which shape ran
-if [ -n "$( mcp_field "$TMP/b6.out" 4 error )" ]; then
-    printf '  NOTE  (B6b2) find_symbol a_02 fell outside the kept files here (readdir order): a not-found error, no envelope to check\n'
+# (B6b2) a third verb on the same index. a_02 is inside the kept set on EVERY filesystem, so this is always a result
+ms4="$( mcp_field "$TMP/b6.out" 4 _memory_stop )"
+case "$ms4" in *"memory guard"*) ok "(B6b2) find_symbol a_02 (inside the kept files) is a result and carries _memory_stop";; *) no "(B6b2) id=4 error='$( mcp_field "$TMP/b6.out" 4 error )' _memory_stop='${ms4:0:200}'";; esac
+# (B6d) the kept set is the SAME on every filesystem: b_08 (entry 29) is in, b_09 (entry 30, where the seam stops) is out
+hits5="$( mcp_field "$TMP/b6.out" 5 text | grep -oE '"files":[0-9]+' | head -1 )"; hits6="$( mcp_field "$TMP/b6.out" 6 text | grep -oE '"files":[0-9]+' | head -1 )"
+if [ "$hits5" = '"files":1' ] && [ "$hits6" = '"files":0' ]; then
+    ok "(B6d) crawl:30 keeps the 29 entries before the stop in file-name order (b_08 in, b_09 out), whatever the readdir order"
 else
-    ms4="$( mcp_field "$TMP/b6.out" 4 _memory_stop )"
-    case "$ms4" in *"memory guard"*) ok "(B6b2) find_symbol from the same partial index still carries it";; *) no "(B6b2) id=4 _memory_stop='${ms4:0:200}'";; esac
+    no "(B6d) b_08 $hits5 (want 1), b_09 $hits6 (want 0) — the crawl is not walking in name order"
 fi
+# (B6e) an ABSENCE answered from a cut index is never unqualified: d_17 is outside the kept files, so each verb answers
+#       not-found (an error), and every one of those errors names the partial index, the count it covers and the override
+nfbad=""
+for id in 7 8 9 10 11 12 13 14 15 16; do
+    em="$( mcp_field "$TMP/b6.out" $id error )"
+    case "$em" in
+        *"is partial"*"not proof of absence"*"memory guard stopped the crawl"*"covers "*" files"*"max-memory"*) ;;
+        *) nfbad="$nfbad id=$id:'${em:0:160}'" ;;
+    esac
+done
+[ -z "$nfbad" ] && ok "(B6e) 10 not-found / refusal errors from the cut index (find_symbol, refs, impact, uses, mentions, owners, slice, path_between, connect, an unknown name) each name the partial index, its file count and the override" || no "(B6e) errors without the disclosure:$nfbad"
+# (B6e2) the error is still the not-found it was (the disclosure is appended, nothing replaced): the echo and the code survive
+case "$( mcp_field "$TMP/b6.out" 7 error )" in "symbol not found: 'd_17'"*) ok "(B6e2) the not-found keeps its own wording ahead of the disclosure";; *) no "(B6e2) id=7: $( mcp_field "$TMP/b6.out" 7 error | head -c 200 )";; esac
+# (B6f) near miss: a request for ANOTHER, whole index must not inherit the earlier index's cut. $HOMEDIR/proj has 1 file, so
+#       the same crawl:30 seam never fires there; its not-found carries no memory sentence
+{ cut_req 2 grep "{\"path\":\"$FX\",\"pattern\":\"a_01\"}"
+  cut_req 3 find_symbol "{\"path\":\"$HOMEDIR/proj\",\"symbol\":\"zzz_nope\"}"
+} | RIPWIRE_TEST_MEMGUARD=crawl:30 mcp_call "$TMP" --max-memory=64M >"$TMP/b6f.out"
+em="$( mcp_field "$TMP/b6f.out" 3 error )"
+case "$em" in
+    "") no "(B6f) the whole index answered a result, expected a not-found: $( grep '"id":3' "$TMP/b6f.out" | head -c 200 )";;
+    *"memory guard"*|*"partial"*) no "(B6f) a whole index's not-found carries the other index's cut: '${em:0:200}'";;
+    *) ok "(B6f) a not-found from a WHOLE index (another root, same server) carries no memory sentence";;
+esac
+# (B6f2) near miss: an error raised before ANY index is read, for a root that is not the cut one (an unknown field on a
+#        request for $HOMEDIR/proj while the cut $FX is the resident index), says nothing about the guard
+{ cut_req 2 grep "{\"path\":\"$FX\",\"pattern\":\"a_01\"}"
+  cut_req 3 find_symbol "{\"path\":\"$HOMEDIR/proj\",\"symbol\":\"hp\",\"bogus_field\":1}"
+} | RIPWIRE_TEST_MEMGUARD=crawl:30 mcp_call "$TMP" --max-memory=64M >"$TMP/b6f2.out"
+em="$( mcp_field "$TMP/b6f2.out" 3 error )"
+case "$em" in
+    "unknown field"*) case "$em" in *"memory guard"*|*"partial"*) no "(B6f2) a usage error for another root carries the cut index's sentence: '${em:0:200}'";; *) ok "(B6f2) a usage error for a root that is not the cut one carries no memory sentence";; esac;;
+    *) no "(B6f2) id=3 error='${em:0:200}'";;
+esac
+# (B6g) near miss: an uncut server's not-found is the plain one
+printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$FX\",\"pattern\":\"a_01\"}}}" \
+    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"$FX\",\"symbol\":\"zzz_nope\"}}}" \
+    | mcp_call "$TMP" >"$TMP/b6g.out"
+em="$( mcp_field "$TMP/b6g.out" 3 error )"
+case "$em" in
+    "symbol not found"*) case "$em" in *"memory guard"*|*"partial"*) no "(B6g) an uncut not-found mentions the guard: '${em:0:200}'";; *) ok "(B6g) an uncut index's not-found carries no memory sentence";; esac;;
+    *) no "(B6g) id=3 error='${em:0:200}'";;
+esac
+# (B6h) the CLI twin: a not-found-shaped ask against a cut index REFUSES (exit 5, empty stdout, the guard named) instead of
+#       printing a not-found — pinned for a name the cut lost (d_17) and one that never existed
+for sym in d_17 zzz_nope; do
+    run_trip crawl:30 "$FX" --callers=$sym --max-memory=64M --no-cache >"$TMP/b6h.out" 2>"$TMP/b6h.err"; rc=$?
+    if [ "$rc" = 5 ] && [ ! -s "$TMP/b6h.out" ] && grep -q '^ripwire: the memory guard stopped the crawl' "$TMP/b6h.err"; then
+        ok "(B6h) CLI --callers=$sym on a cut index refuses (exit 5, empty stdout) rather than answering not-found"
+    else
+        no "(B6h) $sym rc=$rc stdout=$( head -c 120 "$TMP/b6h.out" ) stderr: $( head -c 200 "$TMP/b6h.err" )"
+    fi
+done
 printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$FX\",\"pattern\":\"a_01\"}}}" \
     | mcp_call "$TMP" >"$TMP/b6c.out"
 if grep -q '_memory_stop' "$TMP/b6c.out"; then

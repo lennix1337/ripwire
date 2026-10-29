@@ -1705,11 +1705,23 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // HEAD tree that was only partly read) — so every error built after a stop carries the guard's sentence too
             const auto memoryStopSuffix = [ & ]( std::string_view msg ) -> std::string
             {
-                if( memguard::stopCounts().recorded.load( std::memory_order_relaxed ) <= stopsAtEntry || msg.find( "memory guard" ) != std::string_view::npos )
+                if( msg.find( "memory guard" ) != std::string_view::npos )
                 {
                     return {};
                 }
-                return "; the memory guard stopped an ingest this request ran, which may be the real cause — " + std::string( memguard::kOverride );
+                if( memguard::stopCounts().recorded.load( std::memory_order_relaxed ) > stopsAtEntry )
+                {
+                    return "; the memory guard stopped an ingest this request ran, which may be the real cause — " + std::string( memguard::kOverride );
+                }
+                // notfound-on-cut: a LATER request served from an index an earlier one found cut. Its not-found / refusal is
+                // an absence claim on a partial corpus, and a result of the same index carries _memory_stop (textResult), so
+                // the error carries the same sentence. Resident slot only — an error never builds or rebuilds an index.
+                const McpIndex& resident = mcpIndexSlot();
+                if( resident.valid && resident.root == path && resident.ing.memoryStop.isSet() )
+                {
+                    return "; " + memguard::partialAbsenceLine( resident.ing );
+                }
+                return {};
             };
             const auto errResult = [ & ]( int code, const char* msg )
             {
