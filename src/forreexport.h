@@ -781,7 +781,8 @@ inline std::vector<const Symbol*> reexportDefs( const IngestResult& ing, const s
     const std::string          dir = std::string( "/" ).append( package ).append( "/" );
     for( const Symbol& s : ing.symbols )
     {
-        const bool lang  = s.lang == Lang::Rust || dependencyDialect( s.lang ) == DepDialect::Web;
+        const DepDialect d    = dependencyDialect( s.lang );
+        const bool       lang = d == DepDialect::Rust || d == DepDialect::Web;
         const bool inPkg = package.empty() || std::string( "/" ).append( rootRelPath( ing, s.fileId ) ).find( dir ) != std::string::npos;
         if( lang && inPkg && reexportDefKind( s ) && std::ranges::find( names, s.name ) != names.end() )
         {
@@ -818,7 +819,7 @@ inline std::vector<Chain> reexportChains( Walk& w, const std::vector<const Symbo
     std::vector<Chain> chains;
     for( const Symbol* d : defs )
     {
-        const bool rust = d->lang == Lang::Rust;
+        const bool rust = dependencyDialect( d->lang ) == DepDialect::Rust;
         if( d->name != name || ( rust && w.rc.crateOf[ d->fileId ] == kNoFile ) )
         {
             continue;
@@ -848,8 +849,9 @@ inline std::string renderForReexports( const IngestResult& ing, std::string_view
     {
         return {};
     }
-    const bool rust = std::ranges::any_of( defs, []( const Symbol* d ) { return d->lang == Lang::Rust; } );
-    const bool web  = std::ranges::any_of( defs, []( const Symbol* d ) { return d->lang != Lang::Rust; } );
+    const auto dialectOf = []( DepDialect want ) { return [ want ]( const Symbol* d ) { return dependencyDialect( d->lang ) == want; }; };
+    const bool rust      = std::ranges::any_of( defs, dialectOf( DepDialect::Rust ) );
+    const bool web       = std::ranges::any_of( defs, dialectOf( DepDialect::Web ) );
     HashMap<std::string, std::uint32_t> files;
     files.reserve( ing.files.size() );
     for( std::uint32_t f = 0; f < ing.files.size(); ++f )

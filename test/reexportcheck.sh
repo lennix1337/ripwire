@@ -49,7 +49,7 @@ has  "$TMP/r1.xml" "R1 glob hop lib.rs:4 hedged"        '<rx p="core_x/src/lib.r
 has  "$TMP/r1.xml" "R1 cross-crate prelude.rs:1"        '<rx p="engine/src/prelude.rs" l="1" use="core_x::Boom" at="engine::prelude::Boom"/>'
 has  "$TMP/r1.xml" "R1 module re-export facade"         '<rx p="facade/src/lib.rs" l="1" use="core_x::errors"'
 n=$( block "$TMP/r1.xml" | grep -o '<rx p="facade/src/lib.rs"' | wc -l | tr -d ' ' )
-[ "$n" = 1 ] && ok "R1 one statement, one row (the module re-export publishes two spellings)" || no "R1 facade/src/lib.rs printed $n times"
+if [ "$n" = 1 ]; then ok "R1 one statement, one row (the module re-export publishes two spellings)"; else no "R1 facade/src/lib.rs printed $n times"; fi
 has  "$TMP/r1.xml" "R1 task-named use site main.rs:1"   '<u p="app/src/main.rs" l="1" use="engine::prelude::*" glob="1"/>'
 has  "$TMP/r1.xml" "R2 rename counted (#445)"           'as_skipped="1"'
 hasnt "$TMP/r1.xml" "R2 rename not a row"               'engine/src/alias.rs'
@@ -69,13 +69,14 @@ if grep -q 'ts/m/index.ts' "$TMP/t2c.xml"; then no "T2 a re-export is never a ca
 
 ask "--for=where cycFn is defined" >"$TMP/c1.xml"; rc1=$?
 ask "--for=where loopyFn is defined" >"$TMP/c2.xml"; rc2=$?
-[ "$rc1" = 0 ] && [ "$rc2" = 0 ] && ok "C1 cyclic globs terminate (rc 0)" || no "C1 rc $rc1 / $rc2"
+if [ "$rc1" = 0 ] && [ "$rc2" = 0 ]; then ok "C1 cyclic globs terminate (rc 0)"; else no "C1 rc $rc1 / $rc2"; fi
 has  "$TMP/c1.xml" "C1 Rust glob cycle one row"         'total="1"'
 has  "$TMP/c2.xml" "C1 TS star cycle one row"           'total="1"'
 
 # N2: a task-file token ending at a break the skip loop did not eat (`)`, `]`) once spun forever (S1 kysely-02 timed out at 900 s)
 ( cd "$FIX" && HOME="$TMP" perl -e 'my $p = fork; if( !$p ) { open STDIN, "<", "/dev/null"; open STDOUT, ">", shift @ARGV; open STDERR, ">", "/dev/null"; exec @ARGV; exit 127 } $SIG{ALRM} = sub { kill 9, $p; waitpid( $p, 0 ); exit 124 }; alarm 120; waitpid( $p, 0 ); exit( $? >> 8 )' "$TMP/n2.xml" "$BIN" "$FIX" --no-cache "--for=where Boom (in main.rs) [see lib.rs] is defined)." )   # the child is KILLED at 120 s, never orphaned
-[ $? = 0 ] && grep -q '<reexports>' "$TMP/n2.xml" && ok "N2 a task with ) and ] terminates" || no "N2 a task with ) and ] did not finish in 120 s (or printed no block)"
+n2rc=$?
+if [ "$n2rc" = 0 ] && grep -q '<reexports>' "$TMP/n2.xml"; then ok "N2 a task with ) and ] terminates"; else no "N2 a task with ) and ] did not finish in 120 s (or printed no block)"; fi
 # N3 (the WHEN gate): a code-shaped name with re-exports, but a task that does not ask where it comes from and names no file
 # on its chain, prints nothing; the same name with only a task-named directory on the chain (no cue word) prints the block
 ask "--for=how does Boom work at runtime" >"$TMP/n3.xml"
@@ -94,7 +95,7 @@ if grep -q 'reexports' "$TMP/n2.json"; then no "N1 --json carries no block"; els
 sed 's|<reexports>.*</reexports>||' "$TMP/r1.xml" >"$TMP/r1.stripped"
 if cmp -s "$TMP/off.xml" "$TMP/r1.stripped"; then ok "N1 the off switch removes exactly the block"; else no "N1 the off switch changed more than the block"; fi
 if command -v xmllint >/dev/null 2>&1; then
-    for f in r1 t1 t2 c1; do xmllint --noout "$TMP/$f.xml" 2>/dev/null && ok "xml well-formed $f" || no "xml malformed $f"; done
+    for f in r1 t1 t2 c1; do if xmllint --noout "$TMP/$f.xml" 2>/dev/null; then ok "xml well-formed $f"; else no "xml malformed $f"; fi; done
 fi
 
 [ "$fail" = 0 ] && { echo "reexportcheck: PASS"; exit 0; }
