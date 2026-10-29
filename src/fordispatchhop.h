@@ -13,7 +13,7 @@
 //   * one <s t= n= p=file:line> row per NON-TEST candidate method (the resolver's own declined list, in its order; a test double
 //     is counted in test=, never shown — a test-path definition, or one whose type only test code names), at most kForDispatchHopRows;
 //   * <s … ctor="Owner::new"> rows: the callers of each shown candidate owner's constructor (a member of the candidate's scope
-//     named as the language spells a constructor — forfold.h isConstructorName), non-test, at most kForDispatchCtorRows in all —
+//     named as the language spells a constructor — forctorhop.h ctor_detail::isCtorName, plus Rust `new`), non-test, at most kForDispatchCtorRows in all —
 //     where a candidate's type is made, which is where the choice is decided;
 //   * the candidate's body when exactly ONE non-test candidate exists (the implementation production code can run there).
 // Hedged by construction: the rows are the declined list, never an edge (which one runs is unproven) — nothing enters a reaches=
@@ -29,7 +29,9 @@
 #include "declinedsites.h"   // declinedSitesMadeBy, orderDeclinedSites
 #include "filter.h"          // isTestSymbol
 #include "forcallerhop.h"    // appendCallerHopRow / CallerHopRowCtx — the caller hop's <s> row
-#include "forfold.h"         // fold_detail::renderOneBody / isConstructorName
+#include "forctorhop.h"     // ctor_detail::isCtorName — the language-gated constructor spelling
+#include "forfold.h"         // fold_detail::renderOneBody
+#include "langfacts.h"       // langFacts( lang ).structuralTyping
 #include "graph.h"
 #include "memberowner.h"
 #include "model.h"
@@ -63,12 +65,13 @@ inline bool forDispatchHopOn()
 
 inline constexpr std::string_view kForDispatchHopLegend =
     "; dispatch call=: the task names a call the served function in= makes at p=file:line through an interface, trait or abstract "
-    "receiver, which the resolver declined: s t= n= p=file:line rows are the implementations that can run there (cands= in all, "
-    "shown= of them, test= test doubles not shown (test code, or a type only test code names), which one runs is unproven, never an edge), s ctor= rows call that candidate "
-    "type's constructor (where it is made), one shown candidate carries its body b, capped=1 if cut, next= lists every definition";
+    "receiver, which the resolver declined: s t= n= p=file:line rows are the implementations that can run there (cands= the in-tree "
+    "candidates, shown= of them, test= test doubles not shown (test code, or a type only test code names), floor=1 the language types structurally so an unlisted "
+    "implementation can run too, which one runs is unproven, never an edge), s ctor= rows call that candidate "
+    "type's constructor (where it is made), one shown candidate carries its body b (never when floor=1), capped=1 if cut, next= lists every definition";
 inline constexpr std::string_view kForCompactDispatchHopLegend =
     "; dispatch call= in= p=: a task-named call declined at an interface/trait receiver, s rows the implementations that can run "
-    "(unproven which), cands= shown= test= doubles, s ctor= rows make that type, one candidate: its body b, capped=1 if cut, next= every definition";
+    "(unproven which), cands= in-tree shown= test= doubles floor=1 unlisted ones can run, s ctor= rows make that type, one candidate: its body b, capped=1 if cut, next= every definition";
 static_assert( kForDispatchHopLegend.find( ';', 1 ) == std::string_view::npos && kForCompactDispatchHopLegend.find( ';', 1 ) == std::string_view::npos
                    && kForDispatchHopLegend.find( "--" ) == std::string_view::npos && kForCompactDispatchHopLegend.find( "--" ) == std::string_view::npos,
                "one clause each, and no \"--\": it rides inside an XML comment" );
@@ -101,10 +104,49 @@ inline std::string_view callSegment( std::string_view tok )
     }
     return tok.substr( cut );
 }
-inline std::vector<std::string_view> taskCallNames( std::string_view task )
+// A named call in the task: the called name and, when the token spells `recv.m` / `recv->m` with an identifier before the
+// separator, that receiver ("" for `Q::m`, `f()->m` and the like: no receiver written).
+struct TaskCall
 {
-    std::vector<std::string_view> out;
-    std::size_t                   i = 0;
+    std::string_view name;
+    std::string_view recv;
+};
+inline std::string_view lastIdent( std::string_view t )
+{
+    std::size_t e = t.size();
+    while( e > 0 && ( std::isalnum( static_cast<unsigned char>( t[e - 1] ) ) || t[e - 1] == '_' ) )
+    {
+        --e;
+    }
+    return t.substr( e );
+}
+inline TaskCall callOfToken( std::string_view tok )
+{
+    const std::string_view seg = callSegment( tok );
+    if( seg.empty() )
+    {
+        return {};
+    }
+    // the prefix before the final segment: `src_->` / `a.b.` / `Q::`; only a `.` or `->` separator carries a receiver
+    std::string_view pre = tok.substr( 0, static_cast<std::size_t>( seg.data() - tok.data() ) );
+    if( pre.ends_with( "->" ) )
+    {
+        pre.remove_suffix( 2 );
+    }
+    else if( pre.ends_with( '.' ) )
+    {
+        pre.remove_suffix( 1 );
+    }
+    else
+    {
+        return { seg, {} };
+    }
+    return { seg, lastIdent( pre ) };
+}
+inline std::vector<TaskCall> taskCallNames( std::string_view task )
+{
+    std::vector<TaskCall> out;
+    std::size_t           i = 0;
     while( i < task.size() )
     {
         while( i < task.size() && ( std::isspace( static_cast<unsigned char>( task[i] ) ) || task[i] == '`' ) )
@@ -116,9 +158,10 @@ inline std::vector<std::string_view> taskCallNames( std::string_view task )
         {
             ++j;
         }
-        if( const std::string_view seg = callSegment( task.substr( i, j - i ) ); !seg.empty() && std::ranges::find( out, seg ) == out.end() )
+        if( const TaskCall c = callOfToken( task.substr( i, j - i ) );
+            !c.name.empty() && std::ranges::none_of( out, [ & ]( const TaskCall& o ) { return o.name == c.name && o.recv == c.recv; } ) )
         {
-            out.push_back( seg );
+            out.push_back( c );
         }
         i = j;
     }
@@ -135,13 +178,101 @@ inline std::span<const NodeId> siteCandidates( const Graph& g, std::uint32_t sit
 }
 }   // namespace dispatch_detail
 
-// The calls the element is about: declined gate="iface" sites with a stored list, made by a callable body candidate, whose called
-// name the task names as a call and which is not the caller's own name. One per called name (a declaration and its definition, or
-// two calls of one name, are one question), at most kForDispatchSites, in the declined rows' served order.
+// Does any production code name the candidate's type? A reference (call, type use, member type, base clause, qualifier) spelling
+// the owner's name from a non-test symbol in a non-test file is production evidence when it comes
+//   * from a file holding none of the owner's members (a registry, a main, a composition root), or
+//   * from INSIDE the owner's own files, by a non-member that production runs: a factory (`Store* MakePg() { return new Pg(); }`)
+//     with a non-test caller, a file-level registrar, `main`, a Go `init` — a type made where it is defined is still made.
+// By name only, so a collision keeps a candidate shown (never the other way): a candidate whose type test code names and nothing
+// else does (ninja's VirtualFileSystem, defined in src/test.cc and used by *_test.cc only) is a test double, counted in test=; a
+// type nothing outside its own members names (a Rust unit struct built in place) keeps its row: no evidence, no demotion.
+inline bool ownerNamedByProduction( const IngestResult& ing, const Graph& g, NodeId cand )
+{
+    const Symbol& c = ing.symbols[ cand ];
+    if( c.scope.empty() )
+    {
+        return true;   // a free function: no type to ask about
+    }
+    const std::size_t      sep   = c.scope.find_last_of( ".:" );
+    const std::string_view owner = sep == std::string::npos ? std::string_view( c.scope ) : std::string_view( c.scope ).substr( sep + 1 );
+    std::vector<std::uint32_t> ownFiles;
+    for( const Symbol& s : ing.symbols )
+    {
+        if( ( s.scope == c.scope || ( s.name == owner && s.lang == c.lang && ReceiverEvidence::classLike( s.kind ) ) ) && std::ranges::find( ownFiles, s.fileId ) == ownFiles.end() )
+        {
+            ownFiles.push_back( s.fileId );
+        }
+    }
+    bool testNames = false;
+    for( const Reference& r : ing.references )
+    {
+        if( ( r.calleeName != owner && r.qualifier != owner ) || r.isDocLink )
+        {
+            continue;
+        }
+        const bool inOwnFiles = std::ranges::find( ownFiles, r.fileId ) != ownFiles.end();
+        if( isTestPath( rootRelPath( ing, r.fileId ) ) || ( r.fromSymbol != kNoNode && isTestSymbol( ing, r.fromSymbol ) ) )
+        {
+            testNames = testNames || !inOwnFiles;
+            continue;
+        }
+        if( !inOwnFiles || r.fromSymbol == kNoNode )
+        {
+            return true;
+        }
+        // inside the owner's own files: only a non-member that production runs counts (the type's own members name it constantly)
+        const Symbol& from = ing.symbols[ r.fromSymbol ];
+        if( from.scope == c.scope || from.name == owner )
+        {
+            continue;
+        }
+        if( from.name == "main" || ( from.lang == Lang::Go && from.name == "init" ) )
+        {
+            return true;
+        }
+        const std::vector<NodeId> fromTarget{ r.fromSymbol };
+        if( std::ranges::any_of( oneHopCallerRows( ing, g, fromTarget ), [ & ]( NodeId who ) { return !isTestSymbol( ing, who ); } ) )
+        {
+            return true;
+        }
+    }
+    return !testNames;   // named by nothing production runs: no evidence either way, so it stays a candidate
+}
+
+// One declined site's candidates split: the production ones (shown) and the count of test doubles (a test-path/test-scope
+// definition, or a type only test code names). Used at decision time (a site with no production candidate carries nothing) and
+// by the renderer, so the answer's header and its element cannot disagree.
+struct DispatchCands
+{
+    std::vector<NodeId> prod;
+    std::size_t         tests = 0;
+};
+inline DispatchCands splitDispatchCands( const IngestResult& ing, const Graph& g, std::uint32_t site )
+{
+    DispatchCands out;
+    for( const NodeId c : dispatch_detail::siteCandidates( g, site ) )
+    {
+        if( isTestSymbol( ing, c ) || !ownerNamedByProduction( ing, g, c ) )
+        {
+            ++out.tests;
+        }
+        else
+        {
+            out.prod.push_back( c );
+        }
+    }
+    return out;
+}
+
+// The calls the element is about: declined gate="iface" sites with a stored list holding at least one production candidate, made
+// by a callable body candidate, whose called name the task names as a call and which is not the caller's own name. Per called
+// name: a task token that writes a receiver (`cache_->Fetch`) picks the site(s) with that receiver, and when none has it the
+// site is answered only if every same-name site carries the SAME candidate list (never another receiver's list); a token with no
+// receiver keeps every same-name site, one per distinct list. At most kForDispatchSites, in the declined rows' served order.
 inline std::vector<std::uint32_t> forDispatchSites( const IngestResult& ing, const Graph& g, std::span<const NodeId> bodyCandidates, std::string_view task )
 {
     std::vector<std::uint32_t> out;
-    const std::vector<std::string_view> names = dispatch_detail::taskCallNames( task );
+    const std::vector<dispatch_detail::TaskCall> names = dispatch_detail::taskCallNames( task );
     if( names.empty() || bodyCandidates.empty() )
     {
         return out;
@@ -156,18 +287,51 @@ inline std::vector<std::uint32_t> forDispatchSites( const IngestResult& ing, con
     }
     std::vector<std::uint32_t> sites = declinedSitesMadeBy( g, callers );
     orderDeclinedSites( ing, g, sites, /*fileFirst=*/false );
-    std::vector<std::string_view> taken;
+    // pass 1: the sites that name a task call and could answer it
+    std::vector<std::uint32_t> eligible;
     for( const std::uint32_t site : sites )
     {
         const Reference& r = ing.references[ g.declinedSiteRef[ site ] ];
-        const std::string_view called = r.calleeName;
-        if( g.declinedSiteKind[ site ] != DeclinedSiteKind::Iface || dispatch_detail::siteCandidates( g, site ).empty()
-            || std::ranges::find( names, called ) == names.end() || ing.symbols[ g.declinedSiteCaller[ site ] ].name == called
-            || std::ranges::find( taken, called ) != taken.end() )
+        if( g.declinedSiteKind[ site ] == DeclinedSiteKind::Iface && !dispatch_detail::siteCandidates( g, site ).empty() && ing.symbols[ g.declinedSiteCaller[ site ] ].name != r.calleeName
+            && std::ranges::any_of( names, [ & ]( const dispatch_detail::TaskCall& t ) { return t.name == r.calleeName; } ) )
+        {
+            eligible.push_back( site );
+        }
+    }
+    const auto sameList = [ & ]( std::uint32_t a, std::uint32_t b ) {
+        return std::ranges::equal( dispatch_detail::siteCandidates( g, a ), dispatch_detail::siteCandidates( g, b ) );
+    };
+    // pass 2: per called name, the receiver the task wrote picks the site; one per distinct list
+    const auto wroteRecv = [ & ]( std::string_view name ) {
+        return std::ranges::any_of( names, [ & ]( const dispatch_detail::TaskCall& t ) { return t.name == name && !t.recv.empty(); } );
+    };
+    const auto exactRecv = [ & ]( std::uint32_t site ) {
+        const Reference& r = ing.references[ g.declinedSiteRef[ site ] ];
+        return std::ranges::any_of( names, [ & ]( const dispatch_detail::TaskCall& t ) {
+            return t.name == r.calleeName && !t.recv.empty() && t.recv == dispatch_detail::lastIdent( r.recvVar );
+        } );
+    };
+    const auto sameName = [ & ]( std::uint32_t a, std::uint32_t b ) {
+        return ing.references[ g.declinedSiteRef[ a ] ].calleeName == ing.references[ g.declinedSiteRef[ b ] ].calleeName;
+    };
+    std::vector<std::uint32_t> kept;
+    for( const std::uint32_t site : eligible )
+    {
+        const Reference& r = ing.references[ g.declinedSiteRef[ site ] ];
+        if( wroteRecv( r.calleeName ) && !exactRecv( site )
+            && std::ranges::any_of( eligible, [ & ]( std::uint32_t o ) { return sameName( o, site ) && ( exactRecv( o ) || !sameList( o, site ) ); } ) )
+        {
+            continue;   // the asked receiver is another site's, or this site cannot be told apart from one with another list
+        }
+        if( std::ranges::any_of( kept, [ & ]( std::uint32_t k ) { return sameName( k, site ) && sameList( k, site ); } ) )
         {
             continue;
         }
-        taken.push_back( called );
+        if( splitDispatchCands( ing, g, site ).prod.empty() )
+        {
+            continue;   // only test doubles: nothing production code runs to name, so no element and no clause
+        }
+        kept.push_back( site );
         out.push_back( site );
         if( out.size() == kForDispatchSites )
         {
@@ -176,7 +340,6 @@ inline std::vector<std::uint32_t> forDispatchSites( const IngestResult& ing, con
     }
     return out;
 }
-
 // The MCP `for` twin's body candidates (it has no auto <bodies> bundle): the r=1 row and every ranked-head row sharing its name and
 // scope — the decl/def pair the CLI's anchor-restricted head holds on the same name-exact route.
 inline std::vector<NodeId> dispatchHeadCandidates( const IngestResult& ing, std::span<const NodeId> head )
@@ -203,7 +366,8 @@ struct DispatchHopRender
     std::size_t bodyBytes = 0;    // the body elements' bytes inside xml (the body rate); the rest is markup
 };
 
-// The constructors of `cand`'s owner: callables of the same scope whose name the language spells a constructor (forfold.h).
+// The constructors of `cand`'s owner: callables of the same scope whose name the language spells a constructor (forctorhop.h
+// isCtorName: a C++ `init()` is an ordinary method), and a Rust `new` (an associated function, not a keyword).
 inline std::vector<NodeId> dispatchOwnerCtors( const IngestResult& ing, NodeId cand )
 {
     std::vector<NodeId> out;
@@ -217,51 +381,13 @@ inline std::vector<NodeId> dispatchOwnerCtors( const IngestResult& ing, NodeId c
     for( NodeId id = 0; id < ing.symbols.size(); ++id )
     {
         const Symbol& s = ing.symbols[id];
-        if( id != cand && s.lang == c.lang && s.scope == c.scope && ReceiverEvidence::callableKind( s.kind ) && fold_detail::isConstructorName( s.name, owner ) )
+        if( id != cand && s.lang == c.lang && s.scope == c.scope && ReceiverEvidence::callableKind( s.kind )
+            && ( ctor_detail::isCtorName( s.lang, s.name, owner ) || ( s.lang == Lang::Rust && s.name == "new" ) ) )
         {
             out.push_back( id );
         }
     }
     return out;
-}
-
-// Does any non-test code outside the candidate's own type name that type? A reference (call, type use, member type, base clause,
-// qualifier) spelling the owner's name, from a file holding none of the owner's members and from a non-test symbol in a non-test
-// file. By name only, so a collision keeps a candidate shown (never the other way): a candidate whose type test code names and
-// nothing else does (ninja's VirtualFileSystem, defined in src/test.cc and used by *_test.cc only) is a test double, counted in
-// test=; a type nothing outside its own files names (a Rust unit struct built in place) keeps its row — no evidence, no demotion.
-inline bool ownerNamedByProduction( const IngestResult& ing, NodeId cand )
-{
-    const Symbol& c = ing.symbols[ cand ];
-    if( c.scope.empty() )
-    {
-        return true;   // a free function: no type to ask about
-    }
-    const std::size_t      sep   = c.scope.find_last_of( ".:" );
-    const std::string_view owner = sep == std::string::npos ? std::string_view( c.scope ) : std::string_view( c.scope ).substr( sep + 1 );
-    std::vector<std::uint32_t> ownFiles;
-    for( const Symbol& s : ing.symbols )
-    {
-        if( ( s.scope == c.scope || ( s.name == owner && s.lang == c.lang && ReceiverEvidence::classLike( s.kind ) ) ) && std::ranges::find( ownFiles, s.fileId ) == ownFiles.end() )
-        {
-            ownFiles.push_back( s.fileId );
-        }
-    }
-    bool testNames = false;
-    for( const Reference& r : ing.references )
-    {
-        if( ( r.calleeName != owner && r.qualifier != owner ) || r.isDocLink || std::ranges::find( ownFiles, r.fileId ) != ownFiles.end() )
-        {
-            continue;
-        }
-        if( isTestPath( rootRelPath( ing, r.fileId ) ) || ( r.fromSymbol != kNoNode && isTestSymbol( ing, r.fromSymbol ) ) )
-        {
-            testNames = true;
-            continue;
-        }
-        return true;
-    }
-    return !testNames;   // named by nothing outside its own files: no evidence either way, so it stays a candidate
 }
 
 // `withBody` false: the MCP `for` twin, which serves no inline body (its bodies ride by fetch_body handle) — rows only.
@@ -276,22 +402,12 @@ inline DispatchHopRender renderForDispatchHop( const IngestResult& ing, const Gr
     {
         const Reference&              r     = ing.references[ g.declinedSiteRef[ site ] ];
         const std::span<const NodeId> cands = dispatch_detail::siteCandidates( g, site );
-        std::vector<NodeId>           prod;
-        std::size_t                   tests = 0;
-        for( const NodeId c : cands )
-        {
-            if( isTestSymbol( ing, c ) || !ownerNamedByProduction( ing, c ) )
-            {
-                ++tests;
-            }
-            else
-            {
-                prod.push_back( c );
-            }
-        }
+        const DispatchCands    split = splitDispatchCands( ing, g, site );
+        const auto&            prod  = split.prod;
+        const std::size_t      tests = split.tests;
         if( prod.empty() )
         {
-            continue;   // only test doubles: nothing production code runs to name
+            continue;   // only test doubles: forDispatchSites never hands such a site over; defensive
         }
         const std::size_t shown = std::min( prod.size(), kForDispatchHopRows );
         // where each shown candidate's type is made: the callers of its constructors, non-test, deduped, capped over the call
@@ -317,6 +433,8 @@ inline DispatchHopRender renderForDispatchHop( const IngestResult& ing, const Gr
             }
         }
         const Symbol&          caller = ing.symbols[ g.declinedSiteCaller[ site ] ];
+        // a structurally typed language (TS/JS/Go): the candidate list is a floor, an unlisted object literal / type can run too
+        const bool isFloor = langFacts( caller.lang ).structuralTyping;
         const std::string_view rp     = bodyIn.rootArg.empty() ? std::string_view( ing.files[ r.fileId ] ) : sarif::rootRelativeUri( ing.files[ r.fileId ], bodyIn.rootArg );
         std::string            x;
         x += "<dispatch call=\"";
@@ -329,6 +447,10 @@ inline DispatchHopRender renderForDispatchHop( const IngestResult& ing, const Gr
         if( tests > 0 )
         {
             x += " test=\"" + std::to_string( tests ) + '"';
+        }
+        if( isFloor )
+        {
+            x += " floor=\"1\"";
         }
         x += " capped=\"";
         x += ( shown < prod.size() || made.size() < madeTotal ) ? "1" : "0";
@@ -343,7 +465,7 @@ inline DispatchHopRender renderForDispatchHop( const IngestResult& ing, const Gr
         {
             appendCallerHopRow( x, rc, who, std::string( " ctor=\"" ) + std::string( escapeXml( qualifiedMemberName( owners, ing.symbols[ ctor ] ), esc ) ) + '"' );
         }
-        if( withBody && prod.size() == 1 )
+        if( withBody && prod.size() == 1 && !isFloor )   // a floor list names no single implementation
         {
             if( const std::optional<std::string> body = fold_detail::renderOneBody( bodyIn, prod.front() ) )
             {

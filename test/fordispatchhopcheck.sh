@@ -28,6 +28,18 @@
 #          the bare subject carries none
 #   X1 [G] determinism  X2 [G] xmllint well-formed  X3 [P] the clause present, no "--" inside a legend comment
 #
+# Fix round 1 (rv-mf1-nx CHANGES blocking; every arm below is RED on lane head 04cbd504, GREEN after):
+#   B1 [P] a production impl made by a FACTORY in its own file (MakePgStore in pg_store.cc) and named elsewhere only by a test is NOT
+#          a test double: shown="2", no single body (fixture factory); B1b [G] twin: a type only *_test.cc names, in NON-test
+#          paths (fixture double), IS a double: shown="1" test="1" + the other candidate's body (kills mutant RV1: demotion removed)
+#   B2 [P] two same-name declined calls on different receivers: the receiver the task wrote picks the site (fixture recv:
+#          cache_->Fetch -> the Cache impls, src_->Fetch -> the Source impls, both tokens -> both elements); a receiver no site
+#          has (other_->Fetch) while the lists differ -> no element, never the wrong list
+#   S1 [P] a C++ two-phase init() is not a constructor: no ctor= row (fixture initm); Rust `new` still is (P3)
+#   S2 [P] a structurally typed language (TS) marks floor="1" and serves no single body (fixture ts); no legend says "in all"
+#   S3 [P] every candidate a test double: no element and no reason=degraded clause, byte-identical to the hop-off answer (alltest)
+#   S4 [P] MCP for: est_tokens prices the element
+#
 # Usage:  bash test/fordispatchhopcheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/fordispatchhopcheck.sh
 # BIN is $1, else RIPWIRE_BIN, else build/ripwire; the first output line names the binary used. Exits non-zero on any failure.
 
@@ -47,7 +59,9 @@ verdict(){ if [ "$1" -eq 0 ]; then ok "$2"; else no "$3"; fi; }   # rc, the PASS
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
 cd "$ROOT"
 F="test/fordispatchhopfix"
-[ -f "$F/cpp/loader.cc" ] && [ -f "$F/cpp1/tests/loader_test.cc" ] && [ -f "$F/rs/src/pick.rs" ] && [ -f "$F/cppwrap/cached.cc" ] && [ -f "$F/ladder/main.py" ] || { echo "fixture $F missing"; exit 2; }
+[ -f "$F/cpp/loader.cc" ] && [ -f "$F/cpp1/tests/loader_test.cc" ] && [ -f "$F/rs/src/pick.rs" ] && [ -f "$F/cppwrap/cached.cc" ] && [ -f "$F/ladder/main.py" ] \
+    && [ -f "$F/factory/pg_store.cc" ] && [ -f "$F/double/loader_test.cc" ] && [ -f "$F/recv/loader.cc" ] && [ -f "$F/initm/loader.cc" ] \
+    && [ -f "$F/ts/src/loader.ts" ] && [ -f "$F/alltest/tests/fakes.cc" ] || { echo "fixture $F missing"; exit 2; }
 
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"; mkdir -p "$HOME"
@@ -99,7 +113,7 @@ run "$F/cpp" "--for=Loader::Load src_->Fetch" --legend=full >"$TMP/p4f"
 if grep -q '; dispatch call=: the task names a call' "$TMP/p4f" && grep -q '; dispatch call= in= p=: a task-named call' "$TMP/p1" \
    && [ -n "$( hop "$TMP/p4f" )" ]; then ok "(P4) the clause rides in both legends with the element"
 else no "(P4) the dispatch clause is missing from a legend that carries the element"; fi
-for a in call in p cands shown test capped next ctor; do
+for a in call in p cands shown test floor capped next ctor; do
     grep -qE "; dispatch ([^;]*[ (])?$a=" "$TMP/p4f" || no "(P4) full clause does not define $a="
     grep -qE "; dispatch ([^;]*[ (])?$a=" "$TMP/p1" || no "(P4) compact clause does not define $a="
 done
@@ -163,6 +177,66 @@ else no "(M1) MCP for: [$M1] vs CLI [$H3]"; fi
 H2M="$( mcp_for "$F/cpp1" "Loader::Load src_->Fetch" >"$TMP/m1b"; hop "$TMP/m1b" )"
 if has "$H2M" 'shown="1" test="1"' && ! has "$H2M" '<b '; then ok "(M1b) MCP for: the one-candidate element carries no inline body"
 else no "(M1b) MCP one-candidate element: [$H2M]"; fi
+
+# ── B1 / B1b ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+run "$F/factory" "--for=Service::Lookup store_->Get" >"$TMP/b1"
+HB1="$( hop "$TMP/b1" )"
+if has "$HB1" 'cands="2" shown="2"' && has "$HB1" 'n="MemStore::Get"' && has "$HB1" 'n="PgStore::Get"' && ! has "$HB1" ' test="' && ! has "$HB1" '<b '; then
+    ok "(B1) a factory-made production impl (MakePgStore in its own file) is not a test double: both candidates, no single body"
+else no "(B1) expected MemStore::Get + PgStore::Get, shown=2, no test=, no <b>: [$HB1]"; fi
+run "$F/double" "--for=Loader::Load src_->Fetch" >"$TMP/b1b"
+HB1B="$( hop "$TMP/b1b" )"
+if has "$HB1B" 'cands="2" shown="1" test="1"' && has "$HB1B" 'n="DiskSource::Fetch"' && ! has "$HB1B" 'ScriptedSource' && has "$HB1B" 'int doubled = k * 2;'; then
+    ok "(B1b) a double in a non-test path that only *_test.cc names is demoted (test=1), the other candidate's body rides"
+else no "(B1b) expected shown=1 test=1, DiskSource::Fetch + body, no ScriptedSource: [$HB1B]"; fi
+
+# ── B2 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+run "$F/recv" "--for=Loader::Load cache_->Fetch" >"$TMP/b2a"
+HB2A="$( hop "$TMP/b2a" )"
+if has "$HB2A" 'call="cache_-&gt;Fetch"' && has "$HB2A" 'n="LruCache::Fetch"' && has "$HB2A" 'n="ArcCache::Fetch"' && ! has "$HB2A" 'DiskSource' && ! has "$HB2A" 'NetSource'; then
+    ok "(B2) cache_->Fetch answers the Cache implementations, not the Source ones"
+else no "(B2) cache_->Fetch: [$HB2A]"; fi
+run "$F/recv" "--for=Loader::Load src_->Fetch" >"$TMP/b2b"
+HB2B="$( hop "$TMP/b2b" )"
+if has "$HB2B" 'call="src_-&gt;Fetch"' && has "$HB2B" 'n="DiskSource::Fetch"' && has "$HB2B" 'n="NetSource::Fetch"' && ! has "$HB2B" 'LruCache' && ! has "$HB2B" 'ArcCache'; then
+    ok "(B2) src_->Fetch answers the Source implementations, not the Cache ones"
+else no "(B2) src_->Fetch: [$HB2B]"; fi
+run "$F/recv" --callees=Loader::Load --legend=full >"$TMP/b2p"
+if [ "$( grep -o '<dc n="Fetch"[^>]*gate="iface"' "$TMP/b2p" | wc -l | tr -d ' ' )" = "2" ]; then ok "(B2pre) both Fetch calls ARE iface-declined, with different lists (the receiver, not the premise, picks the site)"
+else no "(B2pre) the recv fixture does not hold two iface-declined Fetch calls"; fi
+run "$F/recv" "--for=Loader::Load other_->Fetch" >"$TMP/b2d"
+if [ -s "$TMP/b2d" ] && [ -z "$( hop "$TMP/b2d" )" ] && ! grep -q '; dispatch call=' "$TMP/b2d"; then ok "(B2) a receiver no site has, with differing lists: no element (never the wrong site)"
+else no "(B2) other_->Fetch carried an element: [$( hop "$TMP/b2d" )]"; fi
+
+# ── S1 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+run "$F/initm" "--for=Loader::Load src_->Fetch" >"$TMP/s1"
+HS1="$( hop "$TMP/s1" )"
+if has "$HS1" 'n="DiskSource::Fetch"' && ! has "$HS1" 'ctor=' && ! has "$HS1" 'ResetAllSources'; then ok "(S1) a C++ two-phase init() is not a constructor: no ctor= row"
+else no "(S1) init() printed as a constructor: [$HS1]"; fi
+
+# ── S2 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+run "$F/ts" "--for=loadValue src.fetch" >"$TMP/s2"
+HS2="$( hop "$TMP/s2" )"
+if has "$HS2" 'floor="1"' && has "$HS2" 'n="DiskSource.fetch"' && ! has "$HS2" '<b '; then ok "(S2) a structurally typed language marks floor=1 and serves no single body"
+else no "(S2) TS element: [$HS2]"; fi
+run "$F/cpp1" "--for=Loader::Load src_->Fetch" --legend=full >"$TMP/s2n"
+if ! grep -q 'cands= in all' "$TMP/p4f" && ! grep -q 'cands= in all' "$TMP/s2n" && ! has "$( hop "$TMP/s2n" )" 'floor='; then ok "(S2) no legend says cands= in all; a nominal language carries no floor="
+else no "(S2) legend or floor= wrong"; fi
+
+# ── S3 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+run "$F/alltest" "--for=Loader::Load src_->Fetch" >"$TMP/s3a"; off "$F/alltest" "--for=Loader::Load src_->Fetch" >"$TMP/s3b"
+if [ -s "$TMP/s3a" ] && cmp -s "$TMP/s3a" "$TMP/s3b" && ! grep -q 'reason=degraded' "$TMP/s3a"; then ok "(S3) every candidate a test double: byte-identical to the hop-off answer, no reason=degraded clause"
+else no "(S3) all-doubles answer differs from hop-off or carries reason=degraded: $( diff "$TMP/s3a" "$TMP/s3b" | head -c 300 )"; fi
+run "$F/alltest" --callees=Loader::Load --legend=full | grep -q 'gate="iface"'
+verdict $? "(S3pre) the all-doubles fixture IS iface-declined (the demotion, not a missing premise, holds it)" "(S3pre) the all-doubles fixture's call is not iface-declined"
+
+# ── S4 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+est(){ python3 -c 'import re,sys; m=re.search(r"est_tokens=\"(\d+)\"", sys.stdin.read()); print(m.group(1) if m else "")'; }
+mcp_for "$F/rs" "build_book r.render" | est >"$TMP/s4a"
+RIPWIRE_NO_DISPATCH_HOP=1 mcp_for "$F/rs" "build_book r.render" | est >"$TMP/s4b"
+SA="$( cat "$TMP/s4a" )"; SB="$( cat "$TMP/s4b" )"
+case "$SA$SB" in ''|*[!0-9]*) no "(S4) est_tokens missing or non-numeric: on=[$SA] off=[$SB]";;
+    *) if [ "$SA" -gt "$SB" ]; then ok "(S4) MCP for prices the element: est_tokens $SB -> $SA"; else no "(S4) MCP est_tokens does not grow with the element: on=$SA off=$SB"; fi;; esac
 
 # ── X ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 run "$F/rs" "--for=build_book r.render" >"$TMP/x1"
