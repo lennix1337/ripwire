@@ -444,6 +444,18 @@ case "$em" in
     "unknown field"*) case "$em" in *"memory guard"*|*"partial"*) no "(B6f2) a usage error for another root carries the cut index's sentence: '${em:0:200}'";; *) ok "(B6f2) a usage error for a root that is not the cut one carries no memory sentence";; esac;;
     *) no "(B6f2) id=3 error='${em:0:200}'";;
 esac
+# (B6i) a multi-root `paths` workspace over one cut root and one whole root is a cut index (the merged stop): its not-found
+#       carries the sentence; a LATER request for the whole root alone (a different index) does not
+FX2="$TMP/fx2"; mkdir -p "$FX2"; printf 'int hp2( void ) { return 1; }\n' >"$FX2/p.c"
+{ cut_req 2 grep "{\"paths\":[\"$FX\",\"$FX2\"],\"pattern\":\"a_01\"}"
+  cut_req 3 find_symbol "{\"paths\":[\"$FX\",\"$FX2\"],\"symbol\":\"zzz_nope\"}"
+  cut_req 4 find_symbol "{\"paths\":[\"$FX2\"],\"symbol\":\"zzz_nope\"}"
+} | RIPWIRE_TEST_MEMGUARD=crawl:30 mcp_call "$TMP" --max-memory=64M >"$TMP/b6i.out"
+em3="$( mcp_field "$TMP/b6i.out" 3 error )"; em4="$( mcp_field "$TMP/b6i.out" 4 error )"
+case "$em3" in
+    *"is partial"*"memory guard stopped the crawl"*) case "$em4" in "symbol not found"*) case "$em4" in *"memory guard"*|*"partial"*) no "(B6i) the whole root alone inherits the workspace's cut: '${em4:0:200}'";; *) ok "(B6i) a cut workspace's not-found carries the sentence; the whole root alone, asked next, does not";; esac;; *) no "(B6i) id=4 error='${em4:0:200}'";; esac;;
+    *) no "(B6i) id=3 error='${em3:0:240}'";;
+esac
 # (B6g) near miss: an uncut server's not-found is the plain one
 printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$FX\",\"pattern\":\"a_01\"}}}" \
     "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"$FX\",\"symbol\":\"zzz_nope\"}}}" \
