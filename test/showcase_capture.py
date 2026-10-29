@@ -561,8 +561,10 @@ _IN_LIMIT    = 3
 # src/ page could cut. next= is emitted in full since 2026-09-25, so the headroom note above no longer limits a fourth.
 _IN_EXCLUDES = "--exclude=test --exclude=docs --exclude=skills --exclude=changelog.d"
 
-def inCaseCmd( n ):
-    return f"{BIN} . --rank-by=churn-decay --since=HEAD~{n} {_IN_EXCLUDES} --in={_IN_DIR} --limit={_IN_LIMIT}"
+_IN_LIMIT_NARROW = 2   # the page size the last-resort pass tries (see chooseInWindow)
+
+def inCaseCmd( n, limit=_IN_LIMIT ):
+    return f"{BIN} . --rank-by=churn-decay --since=HEAD~{n} {_IN_EXCLUDES} --in={_IN_DIR} --limit={limit}"
 
 # The probe runs at MODULE INITIALISATION, before the capture loop below and therefore before the per-case
 # timeout that loop applies. A non-terminating run here would hang the generator with nothing on stderr and no
@@ -571,14 +573,14 @@ def inCaseCmd( n ):
 # this repo, ~2 s cold) and well under the capture loop's own 600 s cases.
 _IN_PROBE_TIMEOUT_S = 120
 
-def inCaseUnshown( n ):
+def inCaseUnshown( n, limit=_IN_LIMIT ):
     """Which of the caption's promises the PUBLISHED block for HEAD~n does not keep ([] = keeps them all)."""
     try:
-        p = subprocess.run( inCaseCmd( n ), shell=True, cwd=REPO, capture_output=True,
+        p = subprocess.run( inCaseCmd( n, limit ), shell=True, cwd=REPO, capture_output=True,
                             timeout=_IN_PROBE_TIMEOUT_S, stdin=subprocess.DEVNULL )
     except subprocess.TimeoutExpired:
         sys.exit( f"showcase_capture: refusing to write — the --in= window probe did not terminate within "
-                  f"{_IN_PROBE_TIMEOUT_S}s and the window cannot be measured:\n  {inCaseCmd( n )}\n"
+                  f"{_IN_PROBE_TIMEOUT_S}s and the window cannot be measured:\n  {inCaseCmd( n, limit )}\n"
                   f"  run that command by hand; this probe precedes the per-case timeout, so a hang here has "
                   f"no other diagnostic" )
     if p.returncode != 0:
@@ -590,7 +592,7 @@ def inCaseUnshown( n ):
         gone.append( "the scoped <recent scope=> page itself (past the display cut: the global block is too wide)" )
     else:
         if 'capped="1"' not in scoped.group( 0 ):
-            gone.append( f'capped="1" (the window is too narrow for --limit={_IN_LIMIT} to cut)' )
+            gone.append( f'capped="1" (the window is too narrow for --limit={limit} to cut)' )
         if "next=" not in scoped.group( 0 ):
             gone.append( "the scoped page's next= (unexpectedly absent — next= is no longer dropped for length, as of 2026-09-25)" )
     if "<symbols stubbed=" not in shown:
@@ -608,7 +610,9 @@ def inCaseUnshown( n ):
 # of source-free commits that sits right behind a MERGE whose first-parent diff touches source is held by that merge —
 # the miner counts a merge by its first-parent diff, and the PR's own merge commit on main plays the same part. This
 # is a FALLBACK: it is tried only when the scan above found no N, so every train that regenerated before regenerates
-# to the same N.
+# to the same N. A one-merge train that ALSO carries a few source fixes after the merge has a margin of only a few source
+# files (train 41b: three), too few for --limit=3 to cut; the last resort repeats the scan with the page size
+# _IN_LIMIT_NARROW (the command then spells --limit=2), so the case still shows a capped page and its next=.
 def marginHeldByMerge( n, repo, inDir ):
     """True when HEAD~n is a merge whose first-parent diff touches inDir/ and HEAD~n..HEAD touches nothing there."""
     def git( *a ):
@@ -622,24 +626,31 @@ def marginHeldByMerge( n, repo, inDir ):
     return behind is not None and viaMerge is not None and behind.strip() == "" and viaMerge.strip() != ""
 
 def chooseInWindow( lo=1, hi=14, unshown=None, mergeHolds=None ):
+    """Return ( N, page limit )."""
     unshown = unshown or inCaseUnshown
     mergeHolds = mergeHolds or ( lambda n: marginHeldByMerge( n, REPO, _IN_DIR ) )
     tried = []
     for n in range( lo + 1, hi + 1 ):
-        gone, goneMargin = unshown( n ), unshown( n - 1 )
+        gone, goneMargin = unshown( n, _IN_LIMIT ), unshown( n - 1, _IN_LIMIT )
         tried.append( f"HEAD~{n}: {'; '.join(gone) or 'shows everything'} (margin HEAD~{n-1}: {'; '.join(goneMargin) or 'shows everything'})" )
         if not gone and not goneMargin:
             print( f"showcase_capture: --in= case window derived as HEAD~{n} (margin HEAD~{n-1} holds)", file=sys.stderr )
-            return n
+            return n, _IN_LIMIT
     for n in range( lo + 1, hi + 1 ):
-        if not unshown( n ) and mergeHolds( n - 1 ):
+        if not unshown( n, _IN_LIMIT ) and mergeHolds( n - 1 ):
             print( f"showcase_capture: --in= case window derived as HEAD~{n} (margin HEAD~{n-1} holds as the merge "
                    f"HEAD~{n-1}: source-free commits behind it, its first-parent diff counted)", file=sys.stderr )
-            return n
+            return n, _IN_LIMIT
+    for n in range( lo + 1, hi + 1 ):
+        if not unshown( n, _IN_LIMIT_NARROW ) and not unshown( n - 1, _IN_LIMIT_NARROW ):
+            print( f"showcase_capture: --in= case window derived as HEAD~{n} with --limit={_IN_LIMIT_NARROW} (margin HEAD~{n-1} holds; "
+                   f"the margin has too few source files for --limit={_IN_LIMIT})", file=sys.stderr )
+            return n, _IN_LIMIT_NARROW
     sys.exit( "showcase_capture: refusing to write — no --since=HEAD~N in [%d,%d] shows what the --in=%s case promises:\n  %s"
               % ( lo + 1, hi, _IN_DIR, "\n  ".join( tried ) ) )
 
-add(S7, inCaseCmd( chooseInWindow() ), "Scope the recent-changes answer to ONE directory. The global <recent> block stays byte-identical, a second <recent scope=\"src\"> page follows it — n=/of= are its counts (of= IS the total, so the paging half carries no total=), capped=\"1\" has_more=\"1\" next_offset= offset= limit= page it, and next= replays THIS run's own corpus flags (--since/--exclude) so the page it names is a page of the same answer. The symbol map collapses to a disclosed <symbols stubbed=\"1\" would_show= next=/> stub — the map was not asked for and was not ranked at all, which is why the header carries no pr_iters=. merge_bombs_skipped= stays on the global block: it counts the window's skipped commits, not the directory's.")
+_inN, _inLimit = chooseInWindow()
+add(S7, inCaseCmd( _inN, _inLimit ), "Scope the recent-changes answer to ONE directory. The global <recent> block stays byte-identical, a second <recent scope=\"src\"> page follows it — n=/of= are its counts (of= IS the total, so the paging half carries no total=), capped=\"1\" has_more=\"1\" next_offset= offset= limit= page it, and next= replays THIS run's own corpus flags (--since/--exclude) so the page it names is a page of the same answer. The symbol map collapses to a disclosed <symbols stubbed=\"1\" would_show= next=/> stub — the map was not asked for and was not ranked at all, which is why the header carries no pr_iters=. merge_bombs_skipped= stays on the global block: it counts the window's skipped commits, not the directory's.")
 add(S7, f"{BIN} . --rank-by=bogus --top-k=5", "An unknown value REFUSES (exit 1), NAMED, with the supported set listed.")
 add(S7, f"{BIN} . --callers=rankGraphTeleport --format=columnar", "Columnar output: paths table + parallel arrays, ~15-60% fewer tokens on MANY-row lists — small results can be LARGER (the columnar legend is a fixed cost).")
 add(S7, f'{BIN} . --for="cache invalidation" --format=candidates --top-k=5', "Flat top-K export for an external reranker.")

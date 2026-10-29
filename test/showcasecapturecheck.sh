@@ -708,7 +708,7 @@ want = ("chooseInWindow", "marginHeldByMerge")
 funcs = [n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name in want]
 if len(funcs) != 2:
     print("EXTRACT_FAIL got %d of 2 functions" % len(funcs)); sys.exit(0)
-ns = {"subprocess": subprocess, "sys": sys, "REPO": ".", "_IN_DIR": "src"}
+ns = {"subprocess": subprocess, "sys": sys, "REPO": ".", "_IN_DIR": "src", "_IN_LIMIT": 3, "_IN_LIMIT_NARROW": 2}
 exec(compile(ast.Module(body=funcs, type_ignores=[]), "<extract>", "exec"), ns)
 choose, held = ns["chooseInWindow"], ns["marginHeldByMerge"]
 res = []
@@ -720,14 +720,18 @@ def pick(unshown, holds):
         return "refused"
 GONE = ["gone"]
 # one lane merge: N=2 shows, its margin HEAD~1 shows nothing, N>=3 spans the previous train (past the display cut)
-one = lambda n: [] if n == 2 else GONE
-chk("one-merge train: N=2 when the margin is held by the merge", pick(one, lambda m: m == 1) == 2)
+one = lambda n, lim=3: [] if n == 2 else GONE
+chk("one-merge train: N=2 when the margin is held by the merge", pick(one, lambda m: m == 1) == (2, 3))
 chk("one-merge train: the fallback off refuses (red on the pre-fix generator)", pick(one, lambda m: False) == "refused")
 # multi-merge train: the ordinary scan finds N=3 (margin HEAD~2 shows); a true mergeHolds must not pull it down to N=2
-multi = lambda n: GONE if n in (1, 4) else []
-chk("multi-merge train: unchanged N=3 even with mergeHolds always true", pick(multi, lambda m: True) == 3)
-chk("everything shows: unchanged N=2", pick(lambda n: [], lambda m: True) == 2)
-chk("N never accepted when its own window does not show", pick(lambda n: GONE, lambda m: True) == "refused")
+multi = lambda n, lim=3: GONE if n in (1, 4) else []
+chk("multi-merge train: unchanged N=3 even with mergeHolds always true", pick(multi, lambda m: True) == (3, 3))
+chk("everything shows: unchanged N=2, page 3", pick(lambda n, lim=3: [], lambda m: True) == (2, 3))
+chk("N never accepted when its own window does not show", pick(lambda n, lim=3: GONE, lambda m: True) == "refused")
+# a one-merge train with a few source fixes after the merge: the margin holds 3 source files, enough for --limit=2 only
+few = lambda n, lim=3: [] if lim == 2 and n >= 2 else GONE
+chk("few post-merge source files: the last resort derives N=3 with --limit=2", pick(few, lambda m: False) == (3, 2))
+chk("the narrower page is never tried while --limit=3 works", pick(lambda n, lim=3: [] if n >= 3 else GONE, lambda m: False) == (4, 3))
 # the real git predicate on throwaway repos
 def mk(steps):
     d = tempfile.mkdtemp(prefix="rw_j_")
@@ -756,10 +760,10 @@ if printf '%s\n' "$jOut" | grep -q '^EXTRACT_FAIL\|Traceback'; then
     no "(J) could not run the window arms: $( printf '%s' "$jOut" | tail -2 | tr '\n' '|' )"
 else
     jBad="$( printf '%s\n' "$jOut" | grep '^BAD ' || true )"; jOk="$( printf '%s\n' "$jOut" | grep -c '^OK ' || true )"
-    if [ -z "$jBad" ] && [ "$jOk" -eq 9 ]; then
+    if [ -z "$jBad" ] && [ "$jOk" -eq 11 ]; then
         ok "(J) --in= window: a one-merge train derives N=2 from the merge's first-parent diff; multi-merge N unchanged; fallback off refuses ($jOk arms)"
     else
-        no "(J) --in= window arms: ok=$jOk of 9 $( printf '%s' "$jBad" | tr '\n' '|' )"
+        no "(J) --in= window arms: ok=$jOk of 11 $( printf '%s' "$jBad" | tr '\n' '|' )"
     fi
 fi
 if grep -q 'chooseInWindow()' "$SCRIPT"; then
