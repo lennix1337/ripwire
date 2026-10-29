@@ -81,9 +81,7 @@ inline RawRef rawRefAt( TSNode at, std::uint32_t fileId, Lang lang, RefRole role
 // it. A name no enclosing scope declares records nothing here: graph.h then asks the file's imports / includes / package.
 // What it does NOT read: a `using namespace`, a star import, an alias assignment (`Base = make_base()`), a class declared
 // inside a function the reference is not in. Those leave the reference without a local binding — never a wrong one.
-inline constexpr std::uint32_t kBaseBindNone    = 0;            // no enclosing scope declares the name
-inline constexpr std::uint32_t kBaseBindUnknown = 0xFFFFFFFFu;  // a scope was too large to scan: nothing proven either way
-inline constexpr std::uint32_t kBaseBindTemplateParam = 0xFFFFFFFEu;   // fn-slot S2 fix 2: the written base is a TEMPLATE PARAMETER of the deriving class (`template <class B> struct M : B`): it names no declaration
+// kBaseBindNone / kBaseBindUnknown / kBaseBindTemplateParam live in model.h beside RawRef::baseBind (CR 5701607593: three readers share them).
 inline bool                    baseNamesTemplateParameter( TSNode self, std::string_view base, std::string_view src );   // ingest_names.h
 // kBaseScopeScanCap bounds the two SCANS only: the unindexed lookupInScope fallback and the reopened-namespace sibling scan
 // (a runaway guard: past it those two bind nothing and the edge stays name-only). The indexed path (lookupInScopeIndexed,

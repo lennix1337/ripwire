@@ -7860,7 +7860,7 @@ inline void provenBasesOf( const BaseEvidenceTables& t, const Reference& r, cons
         out = cand;   // Ruby's constant lookup placed the base (resolve.h RubyBaseScope): every candidate is that one constant
         return;
     }
-    if( r.baseBind >= 0xFFFFFFFEu )
+    if( r.baseBind >= kBaseBindTemplateParam )   // both sentinels (kBaseBindUnknown is above it)
     {
         return;   // a template parameter names no declaration, or a scope too large to read: the local lookup could not rule a shadowing declaration out
     }
