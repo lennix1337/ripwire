@@ -2626,7 +2626,9 @@ profile (explore, batch, from_trace, impact, uses, fetch_body, edit_check, quali
 instructions teach). A client that loads every tool schema at session start then pays for 8 schemas instead of 33
 (`tools/list` measured at 13,834 bytes instead of 46,368). A call to a tool that is not listed is refused with the
 flag that enables it. The list is not access control: `batch` sub-queries still reach hidden verbs. `ripwire wrap AGENT --mcp-tools=core` writes the flag
-into the recipe it prints. The default stays the full catalog.
+into the recipe it prints. The default stays the full catalog, except in `ripwire wrap claude`'s recipe, which passes
+`--mcp-tools=no-edit` (every tool but the three edit twins: Claude Code must Read before it edits, so it takes a symbol's
+line range from ripwire, Reads that range, and uses its native Edit; `--mcp-tools=full` restores them).
 
 For a socket instead of standard input and output, run `ripwire --listen=HOST:PORT`. A non-loopback
 bind requires `--mcp-token`. The three edit verbs are disabled on a remote bind unless you pass

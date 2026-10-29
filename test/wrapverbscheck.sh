@@ -13,7 +13,8 @@
 #   4. Assert the wrap output names skills/install.sh.
 #   5. Every agent recipe (and every --all stanza) carries the pasteable use-when blurb block,
 #      naming the right context file per client (CLAUDE.md / AGENTS.md / .cursor/rules / …).
-#   6. The blurb body is emitted from ONE shared source — byte-identical across agents.
+#   6. The blurb body is emitted from ONE shared source — byte-identical across agents, except the one
+#      edit-routing line pair an agent with a read-before-edit rule (Claude Code) swaps for the ranged-Read route.
 #   7. The skills-install line is a three-way probe, not an unconditional `bash skills/install.sh`:
 #      (a) cwd has ./skills/install.sh → the checkout line; (b) else <exeDir>/../share/ripwire/
 #      skills/install.sh exists (the curl installer's staged copy) → `bash "<abs path>"`;
@@ -48,9 +49,27 @@ mcp_call() {
 echo
 echo "=== 1. tools/list — collect every live verb name ==="
 
-LIST_OUT="$( mcp_call \
-    '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
-    '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | tail -1 )"
+# `ripwire wrap claude` registers the server with --mcp-tools=no-edit (Claude Code reads before it edits), so the verbs
+# that recipe must name are the ones THAT server lists; section 2b keeps the full-catalog twin on `--mcp-tools=full`.
+mcp_call_flags() {
+    _flags="$1"; shift
+    # shellcheck disable=SC2086
+    printf '%s\n' "$@" | "$BIN" --mcp $_flags 2>/dev/null
+}
+LIST_REQ_INIT='{"jsonrpc":"2.0","id":1,"method":"initialize"}'
+LIST_REQ_LIST='{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+names_of() { python3 -c '
+import sys, json
+resp = json.loads(sys.argv[1])
+if "error" in resp:
+    print("__ERROR__:" + json.dumps(resp["error"]))
+    sys.exit(0)
+for t in resp["result"]["tools"]:
+    print(t["name"])
+' "$1"; }
+FULL_LIST_OUT="$( mcp_call_flags "" "$LIST_REQ_INIT" "$LIST_REQ_LIST" | tail -1 )"
+LIST_OUT="$( mcp_call_flags "--mcp-tools=no-edit" "$LIST_REQ_INIT" "$LIST_REQ_LIST" | tail -1 )"
+names_of "$FULL_LIST_OUT" >"$TMP/full_verbs"
 
 python3 -c '
 import sys, json
@@ -75,6 +94,7 @@ echo
 echo "=== 2. ripwire wrap claude — verb coverage ==="
 
 WRAP_OUT="$( "$BIN" wrap claude 2>&1 )"
+WRAP_FULL_OUT="$( "$BIN" wrap claude --mcp-tools=full 2>&1 )"
 
 missing=0
 while IFS= read -r verb; do
@@ -90,6 +110,38 @@ done <"$TMP/live_verbs"
 
 [ "$missing" -eq 0 ] && ok "all $LIVE_COUNT live verbs are mentioned in 'ripwire wrap claude'" \
                      || no "$missing live verb(s) missing from 'ripwire wrap claude'"
+
+echo
+echo "=== 2b. claude's recipe: the edit twins are NOT registered by default, and --mcp-tools=full gets them back ==="
+
+# The twin of section 2 on the full catalog: with --mcp-tools=full the recipe names every verb the full server lists.
+fullmissing=0
+while IFS= read -r verb; do
+    [ -n "$verb" ] || continue
+    if ! echo "$WRAP_FULL_OUT" | grep -qE "(^|[^A-Za-z0-9_])${verb}([^A-Za-z0-9_]|\$)"; then
+        no "wrap claude --mcp-tools=full is MISSING verb '$verb'"; fullmissing=$(( fullmissing + 1 ))
+    fi
+done <"$TMP/full_verbs"
+[ "$fullmissing" -eq 0 ] && ok "wrap claude --mcp-tools=full names all $( wc -l <"$TMP/full_verbs" | tr -d ' ' ) verbs (edit twins included)" \
+                         || no "$fullmissing verb(s) missing from 'wrap claude --mcp-tools=full'"
+for _edit in replace_symbol_body insert_before_symbol insert_after_symbol; do
+    if echo "$WRAP_OUT" | grep -qE "(^|[^A-Za-z0-9_])${_edit}([^A-Za-z0-9_]|\$)"; then
+        no "wrap claude (default) still lists the edit twin '$_edit' — Claude Code edits through its native Edit"
+    else
+        ok "wrap claude (default) lists no '$_edit'"
+    fi
+    grep -qx "$_edit" "$TMP/live_verbs" && no "the no-edit server still lists '$_edit'" || true
+done
+if echo "$WRAP_OUT" | grep -qE '^claude mcp add ripwire -- .* --mcp --mcp-tools=no-edit$'; then
+    ok "wrap claude (default) registers the server with --mcp-tools=no-edit"
+else
+    no "wrap claude (default) does not register the server with --mcp-tools=no-edit"
+fi
+if echo "$WRAP_FULL_OUT" | grep -qE '^claude mcp add ripwire -- .* --mcp$'; then
+    ok "wrap claude --mcp-tools=full registers the unflagged (full) server"
+else
+    no "wrap claude --mcp-tools=full does not print the plain 'claude mcp add ... --mcp' command"
+fi
 
 echo
 echo "=== 3. skills/install.sh line present ==="
@@ -208,11 +260,36 @@ echo "=== 6. blurb body — one shared source, byte-identical across agents ==="
 "$BIN" wrap claude 2>/dev/null | blurb_body >"$TMP/blurb_claude"
 "$BIN" wrap gemini 2>/dev/null | blurb_body >"$TMP/blurb_gemini"
 "$BIN" wrap aider  2>/dev/null | blurb_body >"$TMP/blurb_aider"
-if cmp -s "$TMP/blurb_claude" "$TMP/blurb_gemini" && cmp -s "$TMP/blurb_claude" "$TMP/blurb_aider"; then
-    ok "blurb body is byte-identical across claude/gemini/aider (single source of truth)"
+"$BIN" wrap codex  2>/dev/null | blurb_body >"$TMP/blurb_codex"
+"$BIN" wrap opencode 2>/dev/null | blurb_body >"$TMP/blurb_opencode"
+if cmp -s "$TMP/blurb_gemini" "$TMP/blurb_aider" && cmp -s "$TMP/blurb_gemini" "$TMP/blurb_codex" \
+   && cmp -s "$TMP/blurb_gemini" "$TMP/blurb_opencode"; then
+    ok "blurb body is byte-identical across gemini/aider/codex/opencode (single source of truth)"
 else
-    no "blurb body DIVERGES between agents — the shared-source contract is broken"
+    no "blurb body DIVERGES between agents without a read-before-edit rule — the shared-source contract is broken"
 fi
+# Claude Code (read-before-edit enforced) swaps ONLY the edit-routing lines; every other blurb line is the shared text.
+# (each side's edit-routing entry is two lines: the one naming the route, plus its continuation)
+sed '/native Edit/{N;d;}'           "$TMP/blurb_claude" >"$TMP/blurb_claude_rest"
+sed '/--replace-symbol-body/{N;d;}' "$TMP/blurb_gemini" >"$TMP/blurb_gemini_rest"
+if cmp -s "$TMP/blurb_claude_rest" "$TMP/blurb_gemini_rest"; then
+    ok "claude's blurb equals the shared blurb outside the edit-routing lines"
+else
+    no "claude's blurb differs from the shared blurb beyond the edit-routing lines: $( diff "$TMP/blurb_claude_rest" "$TMP/blurb_gemini_rest" | head -4 )"
+fi
+if grep -qF -- 'native Edit' "$TMP/blurb_claude" && grep -qF -- '--edit-check=' "$TMP/blurb_claude" \
+   && ! grep -qF -- '--replace-symbol-body' "$TMP/blurb_claude"; then
+    ok "claude's blurb routes an edit through a ranged Read + native Edit (no --replace-symbol-body)"
+else
+    no "claude's blurb does not route an edit through a ranged Read + native Edit, or still names --replace-symbol-body"
+fi
+for _peer in gemini aider codex opencode; do
+    if grep -qF -- '--replace-symbol-body=SYM' "$TMP/blurb_$_peer" && ! grep -qF -- 'native Edit' "$TMP/blurb_$_peer"; then
+        ok "$_peer's blurb keeps the whole-symbol edit line (no read-before-edit rule)"
+    else
+        no "$_peer's blurb lost the --replace-symbol-body line or gained the native-Edit route"
+    fi
+done
 
 # the body must carry the load-bearing verbs of the use-when protocol
 for _needle in '--for=' '--pack-task=' '--from-trace=' '--callers=' '--impact=' '--uses=' \
