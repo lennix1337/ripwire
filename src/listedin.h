@@ -42,6 +42,7 @@
 #include "serialize.h"    // escapeXml, truncateUtf8WithEllipsis
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -177,7 +178,42 @@ inline bool negatedPath( std::string_view line, std::size_t at ) noexcept
     return at > 0 && line[at - 1] == '!';
 }
 
-inline bool boundedFind( std::string_view line, std::string_view tok, std::string_view stem = {}, bool pathToken = false ) noexcept
+// A ROOT anchor right before the token at `at`: `$(top_srcdir)/` / `${CMAKE_SOURCE_DIR}/` (and their abs_ / build-dir / PROJECT_ twins),
+// the `//` opening a Bazel root path or the `//:` of a root label. From a SUBDIRECTORY manifest such a spelling names the ROOT file, never
+// the manifest's own sub/x.c (`$(srcdir)/`, `${CMAKE_CURRENT_SOURCE_DIR}/` and `./` stay the manifest's own directory).
+inline bool rootAnchoredAt( std::string_view line, std::size_t at ) noexcept
+{
+    // line[s], line[s+1] == "//" opening a root path: at the line start or after a byte that is neither a name byte nor '/'
+    const auto rootSlashes = [ & ]( std::size_t s ) { return s == 0 || ( !isNameChar( line[s - 1] ) && line[s - 1] != '/' ); };
+    if( at >= 3 && line[at - 1] == ':' )
+    {
+        return line[at - 2] == '/' && line[at - 3] == '/' && rootSlashes( at - 3 );
+    }
+    if( at < 2 || line[at - 1] != '/' )
+    {
+        return false;
+    }
+    const char before = line[at - 2];
+    if( before == '/' )
+    {
+        return rootSlashes( at - 2 );
+    }
+    if( before != ')' && before != '}' )
+    {
+        return false;
+    }
+    const std::size_t open = line.rfind( before == ')' ? '(' : '{', at - 2 );
+    if( open == std::string_view::npos || open == 0 || line[open - 1] != '$' )
+    {
+        return false;
+    }
+    static constexpr std::array<std::string_view, 8> kRootVars{ "top_srcdir",       "abs_top_srcdir",     "top_builddir",     "abs_top_builddir",
+                                                                "CMAKE_SOURCE_DIR", "PROJECT_SOURCE_DIR", "CMAKE_BINARY_DIR", "PROJECT_BINARY_DIR" };
+    return std::ranges::find( kRootVars, line.substr( open + 1, at - 2 - open - 1 ) ) != kRootVars.end();
+}
+
+inline bool boundedFind( std::string_view line, std::string_view tok, std::string_view stem = {}, bool pathToken = false,
+                         bool refuseRootAnchor = false ) noexcept
 {
     if( tok.empty() )
     {
@@ -190,7 +226,7 @@ inline bool boundedFind( std::string_view line, std::string_view tok, std::strin
                                                 : prev == ':'                ? !colonNamesOtherPackage( line, at - 1 )
                                                                              : !isNameChar( prev ) && prev != '.' && prev != '!' );
         const std::size_t end    = at + tok.size();
-        if( negatedPath( line, at ) )
+        if( negatedPath( line, at ) || ( refuseRootAnchor && rootAnchoredAt( line, at ) ) )
         {
             continue;
         }
@@ -406,7 +442,8 @@ inline void readDirManifests( std::string_view dir, const std::filesystem::path&
 struct Token
 {
     std::string text;
-    bool        isDir = false;
+    bool        isDir      = false;
+    bool        belowSubdir = false;   // the file's path below a SUBDIRECTORY manifest: a root-anchored spelling of it is the root file
 };
 
 inline std::vector<Token> tokensFor( std::string_view fileRel, std::string_view mdir, bool dirTokens )
@@ -417,7 +454,7 @@ inline std::vector<Token> tokensFor( std::string_view fileRel, std::string_view 
                                        ? fileRel.substr( mdir.size() + 1 ) : std::string_view();
     if( !below.empty() )
     {
-        t.push_back( { std::string( below ), false } );
+        t.push_back( { std::string( below ), false, !mdir.empty() } );
         if( !mdir.empty() )
         {
             t.push_back( { std::string( fileRel ), false } );   // a root-relative spelling of a file INSIDE the manifest's directory
@@ -571,7 +608,7 @@ inline std::vector<std::size_t> linesNaming( const std::vector<ManifestLine>& li
     {
         // the first token the line names, in specificity order (path before directory tails)
         const auto k = std::ranges::find_if( toks, [ & ]( const Token& t )
-                                             { return boundedFind( lines[li].code, t.text, t.isDir ? stem : std::string_view(), !t.isDir ); } );
+                                             { return boundedFind( lines[li].code, t.text, t.isDir ? stem : std::string_view(), !t.isDir, t.belowSubdir ); } );
         if( k != toks.end() && !underExclusion( lines, li ) )
         {
             mine.push_back( li );

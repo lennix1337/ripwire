@@ -30,6 +30,8 @@
 #   H5 [P] a CMake #[[ ]] block, list(REMOVE_ITEM) and a trailing # comment are not listings, the live stanza is
 #   ST1 [P] siblings count only inside the SAME top-level stanza (add_library / add_executable on two lines are two)
 #   RP1 [P-mutant] the <listed> re-pick from the rows <sigs> emitted (verbs_for.h): --pack-budget-bytes=1 leaves one row, so no <listed>, no clause
+#   RA [P] a subdirectory manifest's $(top_srcdir)/x.c, ${CMAKE_SOURCE_DIR}/x.c, //:x.cc names the ROOT x.c, never its own sub/x.c
+#       (runtime variants of sb / lbl; twins ${CMAKE_CURRENT_SOURCE_DIR}/ and $(srcdir)/ still list sub/x.c)
 #   DD1 [P] a subdirectory manifest's bare x.c names ITS x.c, never the root one (sb, lbl)   DD2 [P] the root package.json never lists a file in a NESTED package (np; twin np2)
 #   DD3 [P] "!./x" is an exclusion (neg; twin neg2)   DD4 [P] a //pkg:x.cc label names package pkg (lbl; twin lbl2: a bare :x.cc lists)
 #   Z1 [P] a manifest above the crawl size ceiling is not read
@@ -173,6 +175,30 @@ cp -R "$FX/neg" "$FX/neg2" && sed -i.bak 's#"!\./#"./#' "$FX/neg2/package.json" 
 if run neg2 "$T/neg2" "new middleware"; then
     if lst "$T/neg2" | grep -F 'p="package.json"' | grep -qF 'of="src/middleware/'; then ok "DD3 twin: \"./src/...\" without the ! still lists"; else no "DD3 twin: ./ no longer lists: $(lst "$T/neg2")"; fi
 fi
+# ---- RA (train 42a, rv-manifest-delta2 E1): a SUBDIRECTORY manifest's ROOT-anchored spelling names the ROOT file, never its own sub/x.c.
+# Runtime variants of sb (Makefile.am / CMakeLists.txt in sub/) and lbl (other/BUILD); twins keep the manifest-relative anchors listing.
+claims(){ lst "$1" | grep -F "p=\"$2\"" | grep -qE " (of|also)=\"$3"; }   # file p-value prefix: a <listed p=PVALUE> claims a name under PREFIX
+mkra(){   # name manifest-file text: sb copy whose sub/ holds ONLY that manifest
+    cp -R "$FX/sb" "$FX/$1" && rm -f "$FX/$1/sub/Makefile.am" && printf '%b' "$3" >"$FX/$1/sub/$2"
+}
+mkra ra1 Makefile.am 'bin_PROGRAMS = demo\ndemo_SOURCES = \\\n\t$(top_srcdir)/widget-alpha.c \\\n\t$(top_srcdir)/widget-beta.c\n'
+mkra ra2 CMakeLists.txt 'add_library(w\n    ${CMAKE_SOURCE_DIR}/widget-alpha.c\n    ${CMAKE_SOURCE_DIR}/widget-beta.c)\n'
+mkra ra4 CMakeLists.txt 'add_library(w\n    ${CMAKE_CURRENT_SOURCE_DIR}/widget-alpha.c\n    ${CMAKE_CURRENT_SOURCE_DIR}/widget-beta.c)\n'
+mkra ra5 Makefile.am 'bin_PROGRAMS = demo\ndemo_SOURCES = \\\n\t$(srcdir)/widget-alpha.c \\\n\t$(srcdir)/widget-beta.c\n'
+cp -R "$FX/lbl" "$FX/ra3" && rm -f "$FX/ra3/BUILD" && printf 'filegroup(\n    name = "w",\n    srcs = [\n        "//:widget_alpha.cc",\n        "//:widget_beta.cc",\n    ],\n)\n' >"$FX/ra3/other/BUILD"
+grep -qF '$(top_srcdir)/widget-alpha.c' "$FX/ra1/sub/Makefile.am" && grep -qF '"//:widget_alpha.cc"' "$FX/ra3/other/BUILD" || no "RA premise: the runtime manifests were not written"
+for v in "ra1 sub/Makefile.am sub/ \$(top_srcdir)/" "ra2 sub/CMakeLists.txt sub/ \${CMAKE_SOURCE_DIR}/" "ra3 other/BUILD other/ //:"; do
+    set -- $v
+    if run "$1" "$T/$1" "new widget"; then
+        if ! claims "$T/$1" "$2" "$3"; then ok "RA $2's $4x names the ROOT file: never listed as $3x"; else no "RA $2's $4x was claimed as the listing of $3x: $(lst "$T/$1")"; fi
+    fi
+done
+for v in "ra4 sub/CMakeLists.txt \${CMAKE_CURRENT_SOURCE_DIR}/" "ra5 sub/Makefile.am \$(srcdir)/"; do
+    set -- $v
+    if run "$1" "$T/$1" "new widget"; then
+        if lst "$T/$1" | grep -F "p=\"$2\"" | grep -qF 'of="sub/widget-'; then ok "RA twin: $2's $3x still lists sub/x"; else no "RA twin: $2's $3x no longer lists sub/x: $(lst "$T/$1")"; fi
+    fi
+done
 # RP1: the manifest is picked from the rows <sigs> EMITS (epmanifestcheck R1-R3): one emitted row = no sibling = no <listed>, no clause
 if run am "$T/rp1" "new widget" --pack-budget-bytes=1; then
     if grep -q '<sigs shown="1" ' "$T/rp1" && ! has "$T/rp1" '<listed' && ! has "$T/rp1" '; listed p= of='; then ok "RP1 one <sigs> row: no <listed> and no clause over rows <sigs> dropped"; else no "RP1 <listed> rides over a row <sigs> dropped: $(lst "$T/rp1")"; fi
