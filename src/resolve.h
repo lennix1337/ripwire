@@ -4925,7 +4925,9 @@ public:
             key.append( std::to_string( line ) ).push_back( ':' );
             key.append( name );
         };
-        bool anyPointer = false;
+        bool                       anyPointer = false;
+        HashMap<std::string, char> declared;   // "owner\0member" of every bodyless member ('\1': the owner's constructor / destructor)
+        HashMap<std::string, char> defined;    // the same key, for every member that owns a body
         for( const Reference& r : ing.references )
         {
             if( !isTypeAliasRecord( r ) || r.recvVar.empty() || !langFacts( r.lang ).aliasPeelsSmartPointer )
@@ -4974,9 +4976,22 @@ public:
                     realClass_.try_emplace( s.name, '\0' );
                 }
             }
-            else if( ( s.kind == SymKind::Method || s.kind == SymKind::Function ) && s.endByte <= s.sigEndByte && !s.scope.empty() )
+            else if( ( s.kind == SymKind::Method || s.kind == SymKind::Function ) && !s.scope.empty() )
             {
-                abstract_.try_emplace( std::string( scopeLastSegment( s.scope ) ), '\0' );   // a bodyless member: the class declares a contract
+                const std::string owner( scopeLastSegment( s.scope ) );
+                std::string       member = owner;
+                member.append( 1, '\0' ).append( s.name );
+                ( s.endByte <= s.sigEndByte ? declared : defined ).try_emplace( std::move( member ), s.name == owner || s.name.starts_with( '~' ) ? '\1' : '\0' );
+            }
+        }
+        // A class declares a CONTRACT only through a bodyless member that is no constructor / destructor and has no out-of-line
+        // definition (`int Base::act() { … }` in a .cc, same owner and name): a concrete base that merely declares its methods
+        // in the header is still concrete, so its overrides stay candidates (pointeeOf).
+        for( const auto& [ key, ctorOrDtor ] : declared )
+        {
+            if( ctorOrDtor == '\0' && defined.find( key ) == defined.end() )
+            {
+                abstract_.try_emplace( key.substr( 0, key.find( '\0' ) ), '\0' );
             }
         }
         for( const Reference& r : ing.references )
@@ -5136,7 +5151,7 @@ private:
     HashMap<std::string, char>               realClass_;    // alias names that are also a class-like symbol at a non-alias site
     HashMap<std::string, char>               classScoped_;  // alias names some class declares as a member
     HashMap<std::string, char>               bases_;        // every class name written as a base
-    HashMap<std::string, char>               abstract_;     // every class name that declares a bodyless member
+    HashMap<std::string, char>               abstract_;     // every class name that declares a contract: a bodyless member that is no constructor / destructor and has no out-of-line definition
 };
 
 // fold one declared type into a flat table: the first type wins, a different later type tombstones, and an agreeing
