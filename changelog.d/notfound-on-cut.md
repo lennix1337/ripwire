@@ -5,7 +5,9 @@ index has always carried `_memory_stop`. A refusal did not: `find_symbol` on a n
 not-found or error built after the first request, said only "symbol not found", which an agent reads as "the tree does not
 define it". Every error from a cut index now ends with the same disclosure, prefixed with the one thing a not-found reader
 needs: the index is partial, so an absence is unproven. It names the stop, the number of files the answer covers (and how many
-of them were parsed) and the override (`--max-memory`, `RIPWIRE_MAX_MEMORY`, or a smaller root). An error from a whole index,
+of them were parsed) and the override (`--max-memory`, `RIPWIRE_MAX_MEMORY`, or a smaller root). The sentence is the same on every path: the first request that built the cut index (which is often an agent's
+first call), a `batch` sub-query's `err=`, and the `edit_check` / `quality_delta` refusals. A `grep` payload from a cut index
+no longer says `"complete":true`, since a hit may sit in the files that were never read. An error from a whole index,
 including another root served by the same process, is unchanged. The CLI needed no change: every verb except the map already
 refuses a cut index with exit 5.
 
