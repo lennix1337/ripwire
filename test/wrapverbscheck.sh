@@ -144,6 +144,31 @@ else
 fi
 
 echo
+echo "=== 2c. every MCP-capable NON-claude agent still lists the FULL server's verbs (edit twins included) ==="
+
+# fix1 N3: only claude had its verb list held to a server. Dropping insert_after_symbol from codex's "# edit:" line
+# stayed green because the per-row switch (wrapListingFor) was never asserted for the other rows. Each of these
+# agents registers the unflagged server, so its recipe must name every verb the FULL tools/list serves and say
+# "(N total)" with that N. aider has no MCP surface and is excluded.
+FULL_COUNT="$( wc -l <"$TMP/full_verbs" | tr -d ' ' )"
+for _agent in codex cursor windsurf gemini opencode openclaw hermes; do
+    _out="$( "$BIN" wrap "$_agent" 2>&1 )"
+    _miss=""
+    while IFS= read -r verb; do
+        [ -n "$verb" ] || continue
+        echo "$_out" | grep -qE "(^|[^A-Za-z0-9_])${verb}([^A-Za-z0-9_]|\$)" || _miss="$_miss $verb"
+    done <"$TMP/full_verbs"
+    if [ -z "$_miss" ]; then
+        ok "wrap $_agent names all $FULL_COUNT verbs of the full server"
+    else
+        no "wrap $_agent is MISSING verb(s):$_miss (the full server serves them; its recipe must keep them)"
+    fi
+    echo "$_out" | grep -qF "($FULL_COUNT total)" \
+        && ok "wrap $_agent says ($FULL_COUNT total)" \
+        || no "wrap $_agent does not say ($FULL_COUNT total) — its verb list no longer matches the full server"
+done
+
+echo
 echo "=== 3. skills/install.sh line present ==="
 
 if echo "$WRAP_OUT" | grep -q 'skills/install\.sh'; then
@@ -258,15 +283,21 @@ echo
 echo "=== 6. blurb body — one shared source, byte-identical across agents ==="
 
 "$BIN" wrap claude 2>/dev/null | blurb_body >"$TMP/blurb_claude"
-"$BIN" wrap gemini 2>/dev/null | blurb_body >"$TMP/blurb_gemini"
-"$BIN" wrap aider  2>/dev/null | blurb_body >"$TMP/blurb_aider"
-"$BIN" wrap codex  2>/dev/null | blurb_body >"$TMP/blurb_codex"
-"$BIN" wrap opencode 2>/dev/null | blurb_body >"$TMP/blurb_opencode"
-if cmp -s "$TMP/blurb_gemini" "$TMP/blurb_aider" && cmp -s "$TMP/blurb_gemini" "$TMP/blurb_codex" \
-   && cmp -s "$TMP/blurb_gemini" "$TMP/blurb_opencode"; then
-    ok "blurb body is byte-identical across gemini/aider/codex/opencode (single source of truth)"
+# EVERY agent row (fix1 N2: cursor/windsurf/openclaw/hermes were never compared, so a one-byte fork of their
+# blurb stayed green). gemini is the reference; the other seven must be byte-identical to it.
+_peers="gemini aider codex opencode cursor windsurf openclaw hermes"
+for _peer in $_peers; do
+    "$BIN" wrap "$_peer" 2>/dev/null | blurb_body >"$TMP/blurb_$_peer"
+    [ -s "$TMP/blurb_$_peer" ] || no "$_peer: wrap printed no blurb body (the comparison below would pass vacuously)"
+done
+_diverged=""
+for _peer in $_peers; do
+    cmp -s "$TMP/blurb_gemini" "$TMP/blurb_$_peer" || _diverged="$_diverged $_peer"
+done
+if [ -z "$_diverged" ]; then
+    ok "blurb body is byte-identical across all 8 non-claude agents (single source of truth)"
 else
-    no "blurb body DIVERGES between agents without a read-before-edit rule — the shared-source contract is broken"
+    no "blurb body DIVERGES from gemini's for:$_diverged — the shared-source contract is broken"
 fi
 # Claude Code (read-before-edit enforced) swaps ONLY the edit-routing lines; every other blurb line is the shared text.
 # (each side's edit-routing entry is two lines: the one naming the route, plus its continuation)
@@ -283,7 +314,7 @@ if grep -qF -- 'native Edit' "$TMP/blurb_claude" && grep -qF -- '--edit-check=' 
 else
     no "claude's blurb does not route an edit through a ranged Read + native Edit, or still names --replace-symbol-body"
 fi
-for _peer in gemini aider codex opencode; do
+for _peer in $_peers; do
     if grep -qF -- '--replace-symbol-body=SYM' "$TMP/blurb_$_peer" && ! grep -qF -- 'native Edit' "$TMP/blurb_$_peer"; then
         ok "$_peer's blurb keeps the whole-symbol edit line (no read-before-edit rule)"
     else
