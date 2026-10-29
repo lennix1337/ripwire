@@ -2907,9 +2907,8 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
         return std::nullopt;
     }
     std::string out = std::move( *chosen.doc );
-    priceForTaskRoot( out, chosen.cut.rowDropCut && budgetTokens == 0 );   // R1: est_tokens=; over_ceiling="1" only past the runaway guard
     // mf1-nx wave 4 (fordispatchhop.h): the CLI --for's <dispatch> element, rows only (this surface serves no inline body), with its
-    // own clause beside it, before </ctx>; the default regime only (budget_tokens names a size, as the CLI's explicit --token-budget)
+    // own clause beside it, before </ctx>, BEFORE the price (est_tokens prices the element); the default regime only (budget_tokens names a size, as the CLI's explicit --token-budget)
     if( budgetTokens == 0 && isNameExactRouteTag( mcpRouteTag ) && forDispatchHopOn() && out.ends_with( "</ctx>" ) )
     {
         const std::vector<std::uint32_t> sites = forDispatchSites( ing, ix.g, dispatchHeadCandidates( ing, lensSurfaceIds ), task );
@@ -2919,6 +2918,7 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
             out.insert( out.size() - 6, dispatchHopMcpXml( r ) );
         }
     }
+    priceForTaskRoot( out, chosen.cut.rowDropCut && budgetTokens == 0 );   // R1: est_tokens=; over_ceiling="1" only past the runaway guard
     // FOR-ROUTE-DECLINED (src/forgraphverb.h): the CLI --for's <graph_verb endpoints="subject"> block, the same wrapper around
     // this surface's twin of the verb (path_between / find_referencing_symbols / connect), before </ctx>; priced like the CLI's (not)
     if( std::optional<GraphSubjectArgs> gsa = chooseGraphSubjectArgs( ing, task ); gsa && out.ends_with( "</ctx>" ) )
