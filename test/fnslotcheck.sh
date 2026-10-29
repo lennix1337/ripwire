@@ -61,6 +61,8 @@
 #          the source mutant "nearestOf guesses within an ambiguous tier" (review MG1)
 #   N15 [G] `(self.inner.f)( … )` is never typed as Self's field: in_t keeps its caller, out_t (Outer.f) is never via="slot" —
 #          kills the source mutant "slotCallAt types any self.… chain" (review MG2)
+#   N16 [G] a bare CALLEE the enclosing function binds (`fn run( spawn: fn( fn() ) ) { spawn( worker ) }`, `let spawn = |f| f(); spawn( worker )`)
+#          is never the in-tree registrar of that name: the argument row prints, no called_by= (CR 4408459928, harvest 463; RED on af8fc25a)
 #   W1 [P] `std::sync::Arc::new( f )` is the wrapper by its LAST path segment: the value lands in Dyn.g (F-4)
 # fix round 2 (second lens rv-fn-slot-2-lens L-1, L-2; fixture crates selfmod, ga, gx):
 #   S1 [P] `use crate::workspace_settings_module::{self, Other}` (module path past SSO) binds the module: `workspace_settings_module::Ws { … }`
@@ -295,5 +297,11 @@ has   "X10 tier 2 without a glob stays typed" "$o" 'into="Gw.wcb" called_by="fir
 o="$( run --callers=nested_glob_t )"
 has   "X11 a glob inside a brace group hedges: slot-name" "$o" 'into="Gh.hcb" called_by="fire_gh" called_at="crates/gx/src/hk.rs:2" via="slot-name"'
 hasnt "X11b never typed" "$o" 'via="slot"'
+o="$( run --callers=worker_param_callee )"
+has   "N16a a parameter called with a function still prints the argument row" "$o" 'into="spawn#arg0"'
+hasnt "N16 a parameter named like an in-tree registrar is never that registrar" "$o" 'called_by='
+o="$( run --callers=worker_local_callee )"
+has   "N16c a local closure called with a function still prints the argument row" "$o" 'into="spawn#arg0"'
+hasnt "N16b a local closure named like an in-tree registrar is never that registrar" "$o" 'called_by='
 if [ "$fail" -eq 0 ]; then echo "fnslotcheck: PASS"; else echo "fnslotcheck: FAIL"; fi
 exit "$fail"

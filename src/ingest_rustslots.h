@@ -26,7 +26,9 @@
 //     call): Through, scope kValueRefSlotCallScope, name = the root, memberPath = the last field, memberCtor = the impl type
 //     when the root is `self` and the chain is one field, else "" (the name tier).
 // SHADOWING: an identifier bound anywhere in the enclosing function — a parameter, a `let`, closure, `for`, `match` or
-// `if let` pattern — is never a function value (the whole function is one scope here: a conservative floor). An identifier
+// `if let` pattern — is never a function value (the whole function is one scope here: a conservative floor), and a BARE CALLEE it
+// binds (`fn run( spawn: fn( fn() ) ) { spawn( worker ) }`) is never the in-tree registrar of that name: the argument row still
+// prints (the function is used as a value), but names no registrar (recvVar cleared). An identifier
 // that starts upper-case is a constant, a unit struct or a variant (`map( Some )`), never a function: no row.
 // FLOORS: closures and method-call arguments are no rows, nor `let g = f`, an array element or a returned function (Rust
 // value references are path-call arguments and field stores only: --safe-delete / --dead-code may miss the rest); a function
@@ -132,6 +134,7 @@ private:
         RawRef           r;
         std::string_view id;
         bool             store = false;
+        std::string_view callee;   // a bare callee identifier ("" for a path callee or a store): bound in the function ⇒ not a registrar
     };
     struct Fn
     {
@@ -197,6 +200,10 @@ private:
         m_fns.pop_back();
         for( Pending& p : f.pending )
         {
+            if( !p.callee.empty() && std::ranges::count( f.bound, p.callee ) > 0 )
+            {
+                p.r.recvVar.clear();   // a parameter or a local called, never the in-tree function of that name (CR 4408459928)
+            }
             const auto bound = std::ranges::count( f.bound, p.id );
             if( bound == 0 )
             {
@@ -221,11 +228,11 @@ private:
         }
     }
     // A row naming `id` (a bare identifier, "" for a path): to its function's pending list, else (outside a function) out.
-    void land( RawRef&& r, std::string_view id, bool store )
+    void land( RawRef&& r, std::string_view id, bool store, std::string_view callee = {} )
     {
-        if( !id.empty() && !m_fns.empty() )
+        if( ( !id.empty() || !callee.empty() ) && !m_fns.empty() )
         {
-            m_fns.back().pending.push_back( Pending{ std::move( r ), id, store } );
+            m_fns.back().pending.push_back( Pending{ std::move( r ), id, store, callee } );
             return;
         }
         m_out.push_back( std::move( r ) );
@@ -406,12 +413,14 @@ private:
         {
             return;   // `Box::new( f )`: the value lands where the wrapper does (unwrap), not in the wrapper
         }
-        std::string  written;   // the callee as written (`Self` resolved): recvVar
-        std::string  shown;     // without its module path: the row's into=
+        std::string      written;   // the callee as written (`Self` resolved): recvVar
+        std::string      shown;     // without its module path: the row's into=
+        std::string_view bareCallee;   // the callee when it is one bare identifier: a function's own binding of it shadows the registrar
         if( is( callee, "identifier" ) )
         {
-            written = std::string( text( callee ) );
-            shown   = written;
+            written    = std::string( text( callee ) );
+            shown      = written;
+            bareCallee = text( callee );
         }
         else if( is( callee, "scoped_identifier" ) )
         {
@@ -452,7 +461,7 @@ private:
                 r.composeRel    = "#" + std::to_string( pos );
                 r.argCount      = static_cast<std::uint16_t>( std::min<std::uint32_t>( pos, 0xFFFFu ) );
                 r.argCountKnown = true;
-                land( std::move( r ), n.bare ? n.name : std::string_view(), false );
+                land( std::move( r ), n.bare ? n.name : std::string_view(), false, bareCallee );
             }
             ++pos;
             return true;
