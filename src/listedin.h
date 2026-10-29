@@ -144,6 +144,17 @@ inline bool slashBeforePathOk( std::string_view line, std::size_t slash ) noexce
     return before == '.' && ( slash == 1 || ( !isNameChar( line[slash - 2] ) && line[slash - 2] != '.' ) );   // `./`, not `../` or `a./`
 }
 
+// The token at `at` sits inside a negated path: the bytes back to the start of its path word (name bytes, '/' and '.') are preceded by
+// '!' — `"!./src/x"`, `"!dist/x"` in package.json `files` EXCLUDE what they name.
+inline bool negatedPath( std::string_view line, std::size_t at ) noexcept
+{
+    while( at > 0 && ( isNameChar( line[at - 1] ) || line[at - 1] == '/' || line[at - 1] == '.' ) )
+    {
+        --at;
+    }
+    return at > 0 && line[at - 1] == '!';
+}
+
 inline bool boundedFind( std::string_view line, std::string_view tok, std::string_view stem = {}, bool pathToken = false ) noexcept
 {
     if( tok.empty() )
@@ -156,6 +167,10 @@ inline bool boundedFind( std::string_view line, std::string_view tok, std::strin
         const bool        leftOk = at == 0 || ( pathToken && prev == '/' ? slashBeforePathOk( line, at - 1 )
                                                                        : !isNameChar( prev ) && prev != '.' && prev != '!' );
         const std::size_t end    = at + tok.size();
+        if( negatedPath( line, at ) )
+        {
+            continue;
+        }
         bool              rightOk = end == line.size() || !isNameChar( line[end] );
         if( rightOk && !stem.empty() && end < line.size() && line[end] == '/' )
         {
