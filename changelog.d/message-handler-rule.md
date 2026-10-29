@@ -11,7 +11,7 @@ posted classes name a `to=` handler, a reachable="0" `--path` also prints `<hand
 spelling, the functions that read the handler-name attribute with the method each one passes it to (textual:
 `MessagePump._on_message` passes it to `MessagePump._get_dispatch_methods`, the MRO walk), and the posted classes, widest
 first. The handler definitions are listed only when there are at most 16 of them. Above that, the answer gives a count and
-`next=`, never a cut list. This is the post-site half of the name-keyed dispatch that lane string-keyed declined at the lookup.
+`next=`, never a cut list.
 
 The rule is read from the repo's own source, never from a framework list. It needs a Python `__init_subclass__` with ONE
 top-level write `cls.A = f"P{v}"` (not under an `if`/`else`/`for`/`while`/`try`/`match`), where every assignment of the local

@@ -4,8 +4,8 @@ A reached `--path` (and MCP `path_between`) whose chain has 2 hops now prints, a
 middle hop inside `<bodies of="hops">`: the same `<b>` element `--expand` prints, without callee rows. The endpoints never get a
 body. Each body is whole up to 4000 bytes; a longer one is cut at a line end and says so on the element (`truncated="1"
 lines="1-K/T" next=` the call that serves the rest). A chain of more hops prints no body, and its root carries
-`next="--expand=…"` naming the first middle hop. Inside a `--for` answer's graph-verb block, a middle hop whose body the
-answer already prints is not printed twice. `RIPWIRE_NO_HOP_BODY=1` turns it off.
+`next="--expand=…"` naming the first middle hop. Inside a `--for` answer's graph-verb block on the CLI, a middle hop whose body the
+answer already prints is not printed twice (MCP `for` has no served set to compare: a known divergence). `RIPWIRE_NO_HOP_BODY=1` turns it off.
 
 Why: `--path=fetch,compose` on hono named `Hono.fetch -> Hono.#dispatch -> compose` and stopped there, while the whole request
 flow (path extraction, router match, Context, the one-handler fast path, compose, error handling) lives in `#dispatch`'s body.
