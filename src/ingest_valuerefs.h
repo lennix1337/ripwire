@@ -1314,7 +1314,8 @@ private:
             noteSlotTypes( n, a.kind );   // IX-1: the declared struct types, beside the names (inert without a slot row)
         }
         noteStructBody( n, a.kind );      // IX-1: a struct body's field order and facts (m_anc.back() is the parent)
-        if( m_slot != nullptr && m_slot->memberPointers && kindIs( a.kind, "using_declaration" ) )
+        if( m_slot != nullptr && m_slot->memberPointers && kindIs( a.kind, "using_declaration" )
+            && ( m_anc.empty() || !kindIs( m_anc.back().kind, "field_declaration_list" ) ) )   // a class member's `using B::B;` / `using B::m;` names a member, not a class
         {
             m_usings.note( n, m_src );   // FN-SLOT S2 fix 1: where a bare `&Cls::m` may name an external class
         }

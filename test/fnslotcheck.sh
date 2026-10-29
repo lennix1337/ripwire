@@ -106,6 +106,8 @@
 #          (the global-anchored spelling of a class that sits in mine::)
 #   E1f [P] a namesake namespace that only ENDS with the qualifier's text (`&grpc::GServer::gstart` beside the in-tree mygrpc::GServer)
 #          binds nothing (the :: boundary of the suffix match; fix round 2, rv-fss2-delta D-2)
+#   E6 [P] (CR 4415276397) a CLASS-MEMBER using-declaration (`struct D : B { using B::B; };`, inheriting constructors) before a bare
+#          `&B::m` does not decline it as an external class (it names a member, not a class reachable by a bare spelling)
 #   I7 [P] a dependent base that is a template PARAMETER named like an in-tree class (`template <class DBase> struct Mixin : DBase`):
 #          `&Mixin<DReal>::dfoo` names no DBase::dfoo (fix round 2, rv-fss2-delta D-1)
 #   E4 [P] the in-tree class is GLOBAL (GSrv) and `using ext::GSrv;` makes the bare spelling the external one;  E4b [G] the same bare
@@ -429,6 +431,8 @@ hasnt "V6b never the base's bodyless declaration" "$o" '<t n="PB.pv"'
 o="$( run --callers=GSrv::gs_start )"
 hasnt "E4 a using-declaration of an external class beside an in-tree global one of that name binds nothing" "$o" 'called_by="go_gdecl"'
 has   "E4b the same bare spelling without the using stays typed" "$o" 'called_by="go_gok"'
+o="$( run --callers=ICtor::ic_run )"
+has   "E6 a class-member using-declaration (inheriting constructors) does not decline the bare &ICtor::ic_run" "$o" 'called_by="go_ictor"'
 o="$( run --callers=Server::both )"
 has   "E5 a using-directive of the class's own namespace keeps the bare spelling typed" "$o" 'called_by="go_dirin"'
 o="$( run --callers=Server::start )"
