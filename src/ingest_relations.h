@@ -498,6 +498,13 @@ inline std::uint32_t localBaseBinding( TSNode site, TSNode self, const std::vect
     return ts_node_start_byte( foundName ) + 1u;   // never 0 (kBaseBindNone) — and below ~0u: a TSNode byte is a u32 < src.size()
 }
 
+// RawRef::baseBind of a base clause written `text` (segments `segs`): a bare name that is a template parameter of the deriving
+// class is a dependent base (kBaseBindTemplateParam), else the same-file declaration the name binds to.
+inline std::uint32_t baseBindOf( TSNode site, TSNode self, std::string_view text, const std::vector<std::string_view>& segs, bool absolute, std::string_view src )
+{
+    return !absolute && segs.size() == 1 && baseNamesTemplateParameter( self, text, src ) ? kBaseBindTemplateParam : localBaseBinding( site, self, segs, absolute, src );
+}
+
 // Emit one inherit RawRef (derived → base) for a base-type node. startByte sits inside the class header
 // (the type node's own start), so the byte-span enclosing attribution binds fromSymbol = the derived class.
 // `self` is the declaration whose header writes the base (its own name never answers the lookup). lane lego-transitive
@@ -518,8 +525,7 @@ inline void emitBaseRef( TSNode typeNode, std::uint32_t fileId, Lang lang, std::
     {
         bool                                absolute = false;
         const std::vector<std::string_view> segs     = baseSegments( text, absolute );
-        r.baseBind = !absolute && segs.size() == 1 && baseNamesTemplateParameter( self, text, src ) ? kBaseBindTemplateParam
-                                                                                                    : localBaseBinding( typeNode, self, segs, absolute, src );
+        r.baseBind = baseBindOf( typeNode, self, text, segs, absolute, src );
         if( segs.size() > 1 )
         {
             const std::size_t last = text.rfind( segs.back() );
