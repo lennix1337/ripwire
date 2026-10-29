@@ -21,25 +21,27 @@ under the new version's heading.
 
 ## [0.6.9] — 2026-10-29
 
-Twelve merged trains (32a to 41) of reviewed changes. What a user sees (each entry below states its own measurement and its floors):
-- More complete first answers: a short `--path` prints the body of its middle hop, and an unreached `--path` prints the bodies of the route
-  it names; `--for` follows a thin wrapper into the function it calls, names what a constructor calls, the functions a table initializer
-  binds and the members of a shown owner, lists the callers of a function it is about, carries the callers chain of the narrow function
-  a question about an error ranks, and answers a task spelled as a graph question (`path from A to B`, `callers of X`) with that verb.
+Twelve merged batches of reviewed changes (pull requests #424 to #463). What a user sees (each entry below states its own measurement and its floors):
+- Hedged or declined instead of confidently wrong: a call through an interface-, trait- or abstract-typed receiver names the implementors
+  that can run, with a floor stated when the list cannot be complete; a by-name hedge needs an import; hedged hops are never counted as
+  proven; a Rust `&dyn Trait` call, a JS/TS name written after its declaration and a Kotlin scope function (#438) no longer bind a
+  same-named method; `--dead-code` stops over-reporting (`static` outside C-family code, Django and unittest hooks, #437).
+- `--path` prints the bodies that hold its answer: the middle hop of a short path, the route an unreached path names, every reaching
+  definition pair and the other definitions of an endpoint; `--impact` counts who reaches a hedged caller.
 - New and changed verbs: `--defs=NAME[,NAME…]` answers which definitions a name binds, with the spelling that picks each one alone;
-  member rows print their owner (`n="Owner.name"`) on `--callers`, `--callees`, `--impact`, `--path` and signature rows; `--path`
-  lists every reaching definition pair and the other definitions of an endpoint; `--dead-code` lists library functions only tests call;
-  `--affected` adds tests that construct a reached class; `--situ` and `--test-gate` start from the changed symbols (#423).
-- Fewer false edges and more honest hedges: a call through an interface-, trait- or abstract-typed receiver names the implementors that
-  can run; Rust receivers are typed by their written type; Python renamed imports, annotated fields, queue and message hand-offs
-  resolve; JS/TS written-binding, object-literal and private-member names resolve as the rows print them; Kotlin scope functions stay
-  off Java methods (#438); Django and unittest hooks are not dead code (#437); hedged callers compose into `--impact`.
-- Functions stored in struct fields are joined to the calls through those fields in Go, Rust and C / C++.
+  member rows print their owner (`n="Owner.name"`) on `--callers`, `--callees`, `--impact`, `--path` and signature rows, and
+  `Class.method`-style spellings resolve; `--situ` and `--test-gate` start from the changed symbols (#423).
+- Language specifics: Rust receivers typed by their written type; Python renamed imports, annotated fields, queue and message hand-offs;
+  functions stored in struct fields joined to the calls through them in Go, Rust and C / C++; JS/TS object-literal and private-member names.
+- More for a `--for` question: the callers chain of the narrow function an error-shaped question ranks, a thin wrapper followed, a
+  constructor's calls, a table initializer's functions, a shown owner's members, a function's callers, and a task spelled as a graph
+  question answered with that verb.
 - Contributors: `--uses` on a JS/TS literal receiver (#411); Windows `--quality-delta=A..B` and clang-cl PGO builds (#402, #410, #422);
   one order for every multi-definition name answer (#432); the pattern screen refuses overlapping alternation (#397); a changelog
   entry is one file under `changelog.d/`.
 - Upgrade: caches rebuild once (`kParserVer` 259, `kCacheVersion` 46); quality snapshots of the older scheme are not used (scheme 24).
-- Thanks: @lennix1337 (#402, #410, #411, #422), @llvm-x86 (#423, #437, #438), @mpapis (#432), @pt-act (#397) and @liziye627-design (#431).
+- Thanks: @lennix1337 (#402, #410, #411, #422), @llvm-x86 (#423, #437, #438), @mpapis (#432), @pt-act (#397) and @liziye627-design (#431);
+  reports that led to fixes: @hnipps (#228) and @s0undt3ch (#305).
 
 ### Fixed — Kotlin scope functions no longer bind Java methods (#438, thanks @llvm-x86)
 
@@ -60,7 +62,7 @@ Known floors:
   keeps its own binding (`t.run { }` on a `t: Task` binds `Task.run`).
 - A qualified `kotlin.run { }` can still bind an in-tree Kotlin `run`, hedged.
 
-### Fixed — Django and unittest hooks no longer read as dead code (#437, thanks @llvm-x86)
+### Fixed — Django and unittest hooks no longer read as dead code (#437, thanks @llvm-x86; reported by @hnipps in #228)
 
 Before: `--quality-delta` reported a Python hook as dead when no call in the tree named it. unittest and Django call
 `setUp`, `tearDown`, `setUpClass` and `setUpTestData` themselves. The runner calls each `test*` method. A closure inside a
@@ -82,7 +84,7 @@ Limit: the name check ignores types and scope. A method named `setUp`, `tearDown
 
 A closure that binds `self` or `cls` as its own parameter does not count, even for `def cb(self=self)`.
 
-### Security — the pattern screen refuses overlapping alternation, one group deeper
+### Security — the pattern screen refuses overlapping alternation, one group deeper (#397, thanks @pt-act)
 
 A pattern whose group carries a top-level `|` under an unbounded outer quantifier could backtrack catastrophically
 on a subject it fails to match. The screen that guards every user-authored pattern surface (`--regex`,
@@ -149,6 +151,12 @@ criteria: `docs/WINDOWS-PGO.md`. No other compiler changes; no output change.
 ### Fixed — `--uses` on a JS/TS literal receiver no longer lists built-in member calls as uses of a same-named in-tree method (#411, thanks @lennix1337)
 
 - `--uses` on JS/TS literal receivers no longer lists built-in member calls (e.g. `"abc".trim()`) as uses of an in-tree method of the same name; a `declined_literal_calls=` count discloses what was filtered (thanks @lennix1337, #411). A call stays a use when an in-repo definition is a prototype polyfill of that built-in on the same literal type. The MCP `uses` twin, `--safe-delete`, `--verify` and the LSP references / hover answers apply the same filter, and Python literal calls are unchanged.
+
+### Fixed — test infrastructure: a type-3 clone gate arm is renamed so the gate checks it (#431, thanks @liziye627-design)
+
+In `test/type3clonecheck.sh` the arm `p2ok` was named so that the gate's G1 check skipped it; it is now `ok`, with a write
+guard and an explicit `return 0`. Part of the duplicated-helper cleanup asked for in #305 (thanks @s0undt3ch). Test-only; no
+product change.
 
 ### Fixed — test infrastructure: `cppqualcheck` gives a Linux ASan binary the sanitizer alarm (#421)
 
