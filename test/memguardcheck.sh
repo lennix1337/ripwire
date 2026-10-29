@@ -477,6 +477,36 @@ case "$bt" in
     *'ok="0" err="symbol not found'*) case "$bt" in *"memory guard"*|*"partial"*) no "(B6j2) an uncut batch not-found mentions the guard";; *) ok "(B6j2) near miss: an uncut server's batch not-found is plain";; esac;;
     *) no "(B6j2) id=2 expected an ok=0 sub-query: $( printf '%s' "$bt" | head -c 300 )";;
 esac
+# (B6k) the FIRST request, the one that builds the cut index, is not the exception: its not-found carries the same shared clause,
+#       not only the older "the memory guard stopped an ingest this request ran" sentence (find_symbol, edit_check, quality_delta)
+fkbad=""
+for spec in 'find_symbol|{"path":"'"$FX"'","symbol":"d_17"}' 'edit_check|{"path":"'"$FX"'","symbol":"d_17"}' 'quality_delta|{"path":"'"$FX"'"}'; do
+    tool="${spec%%|*}"; args="${spec#*|}"
+    cut_req 2 "$tool" "$args" | RIPWIRE_TEST_MEMGUARD=crawl:30 mcp_call "$TMP" --max-memory=64M >"$TMP/b6k.out"
+    em="$( mcp_field "$TMP/b6k.out" 2 error )"
+    case "$em" in
+        *"is partial"*"not proof of absence"*"covers "*" files"*"max-memory"*) ;;
+        *) fkbad="$fkbad $tool:'${em:0:200}'" ;;
+    esac
+done
+if [ -z "$fkbad" ]; then
+    ok "(B6k) the first request's error (find_symbol, edit_check, quality_delta) carries the shared partial-index clause"
+else
+    no "(B6k) first-request errors without the clause:$fkbad"
+fi
+# (B6k2) near miss: edit_check's own cut ingest is one REQUEST's fact — the next request, for a whole root, is plain
+{ cut_req 2 edit_check "{\"path\":\"$FX\",\"symbol\":\"d_17\"}"
+  cut_req 3 find_symbol "{\"path\":\"$HOMEDIR/proj\",\"symbol\":\"zzz_nope\"}"
+} | RIPWIRE_TEST_MEMGUARD=crawl:30 mcp_call "$TMP" --max-memory=64M >"$TMP/b6k2.out"
+em2="$( mcp_field "$TMP/b6k2.out" 2 error )"; em3="$( mcp_field "$TMP/b6k2.out" 3 error )"
+case "$em2" in
+    *"is partial"*)
+        case "$em3" in
+            "symbol not found"*) case "$em3" in *"memory guard"*|*"partial"*) no "(B6k2) the next request inherits the edit_check ingest's cut: '${em3:0:200}'";; *) ok "(B6k2) near miss: the request after a cut edit_check, for a whole root, carries no memory sentence";; esac;;
+            *) no "(B6k2) id=3 error='${em3:0:200}'";;
+        esac;;
+    *) no "(B6k2) id=2 error='${em2:0:200}'";;
+esac
 # (B6l) a grep from a cut index never says "complete":true in its payload — a hit absent from it may sit in the files that were
 #       never read (a_01: inside the kept set; b_09: outside it); the uncut twin keeps the claim
 cc="$( mcp_field "$TMP/b6.out" 2 text; mcp_field "$TMP/b6.out" 6 text )"

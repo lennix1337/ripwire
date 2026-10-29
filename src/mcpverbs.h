@@ -4567,6 +4567,7 @@ inline QualityDeltaOutcome computeQualityDelta( const std::string& root )
         std::lock_guard<std::mutex> ingestLk( rw::quality::headSnapshotIngestMutex() );
         ing = ingest( root.c_str(), {}, {} );
     }
+    noteOwnIngestCut( ing );   // notfound-on-cut: a refusal below ends with the shared partial-index sentence when this ingest was cut
     const Graph  g   = buildGraph( ing, nullptr );
 
     const std::string sidecar = qualityBaselinePath( root );   // root-qualified (see SIDECAR LOCATION note)
@@ -5050,6 +5051,7 @@ inline EditCheckReply editCheckText( const std::string& root, const std::string&
         std::lock_guard<std::mutex> ingestLk( rw::quality::headSnapshotIngestMutex() );
         ing = ingest( root.c_str(), {}, {} );
     }
+    noteOwnIngestCut( ing );   // notfound-on-cut: a refusal below ends with the shared partial-index sentence when this ingest was cut
     const Graph g = buildGraph( ing, nullptr );
 
     // H1: the decl→def residue, the CLI --edit-check's unproven_defs= — same resolver, same assembler parameter, so the two

@@ -1190,6 +1190,23 @@ inline std::string cutIndexErrorClause( const std::string& root )
     return resident.valid && resident.root == root && resident.ing.memoryStop.isSet() ? "; " + memguard::partialAbsenceLine( resident.ing ) : std::string();
 }
 
+// notfound-on-cut: the verbs that run an ingest of their OWN (edit_check, quality_delta) never fill the resident slot, so on the
+// request that cut it cutIndexErrorClause finds nothing to read. They hand the ingest they answer from to noteOwnIngestCut, and
+// the request's error builder (mcp.h memoryStopSuffix) ends its message with the same shared sentence. One note per request
+// (the dispatcher clears it on entry); the thread that ran the ingest is the thread that builds the error.
+inline std::string& ownIngestCutNote()
+{
+    static thread_local std::string note;
+    return note;
+}
+inline void noteOwnIngestCut( const IngestResult& ing )
+{
+    if( ing.memoryStop.isSet() )
+    {
+        ownIngestCutNote() = "; " + memguard::partialAbsenceLine( ing );
+    }
+}
+
 // the cached index for `root`, rebuilt only when stale (otherwise returned as-is, no parse, no graph rebuild).
 inline const McpIndex& getIndex( const std::string& root )
 {
