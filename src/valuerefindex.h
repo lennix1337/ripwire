@@ -1072,8 +1072,8 @@ private:
 };
 
 // class name → the base names it is written to extend (the inherit references, derived → base), name-keyed; one copy for the
-// value index's member-pointer candidates (structsToo: `struct D : B`) and PatternIndex's class family (classes only).
-inline HashMap<std::string, std::vector<std::string>> inheritEdges( const IngestResult& ing, bool structsToo )
+// value index's member-pointer candidates (`struct D : B` and `class D : B`).
+inline HashMap<std::string, std::vector<std::string>> inheritEdges( const IngestResult& ing )
 {
     HashMap<std::string, std::vector<std::string>> out;
     for( const Reference& r : ing.references )
@@ -1083,7 +1083,7 @@ inline HashMap<std::string, std::vector<std::string>> inheritEdges( const Ingest
             continue;
         }
         const Symbol& from = ing.symbols[ r.fromSymbol ];
-        if( ( from.kind != SymKind::Class && !( structsToo && from.kind == SymKind::Struct ) ) || r.baseBind == 0xFFFFFFFEu )   // 0xFFFFFFFE: a template parameter, no class
+        if( ( from.kind != SymKind::Class && from.kind != SymKind::Struct ) || r.baseBind == 0xFFFFFFFEu )   // 0xFFFFFFFE: a template parameter, no class
         {
             continue;
         }
@@ -1826,7 +1826,7 @@ private:
             return;
         }
         m_hierarchyBuilt = true;
-        m_basesOf        = inheritEdges( m_ing, /*structsToo=*/true );
+        m_basesOf        = inheritEdges( m_ing );
         for( const auto& [ derived, bases ] : m_basesOf )
         {
             for( const std::string& b : bases )
@@ -2178,6 +2178,10 @@ private:
     // Bind one inherit reference's written base name to class definitions: the one of that name in the derived class's file, else all.
     void bindBase( const Reference& r, const HashMap<std::string_view, std::vector<NodeId>>& byName ) const
     {
+        if( r.baseBind == 0xFFFFFFFEu )   // a template parameter (`template <class B> class M : B`): a dependent base names no in-tree class, even one called B
+        {
+            return;
+        }
         const auto named = byName.find( std::string_view( r.calleeName ) );
         if( named == byName.end() )
         {

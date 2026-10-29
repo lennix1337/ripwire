@@ -268,6 +268,10 @@ has   "R7b CallEval.eval holds its four functions (crate tier included)" "$o" 's
 o="$( run --callers=goTarget )"
 has   "X2a the Go slot keeps its own call" "$o" 'called_by="fire" called_at="gox/g.go:11" via="slot-name"'
 hasnt "X2 a Go value never counts a Rust slot's functions" "$o" 'cands='
+o="$( run --callees=SnHold::fire )"
+has   "L4 a Rust typed slot discloses the name-only store behind it (slot_name_also rides beyond C/C++)" "$o" 'slot="SnHold.snfn" via="slot" slot_name_also="1" targets="1" shown="1"'
+o="$( run --callees=SnHold::fire --json )"
+has   "L4j the --json twin carries it" "$o" '"slot_name_also":1'
 o="$( run '--for=how CallEval runs eval_block' )"
 has   "F3 slot_fields= on the crate's CallEval" "$( row "$o" CallEval src/engine/eval.rs )" 'slot_fields="eval=4@CallEval::run"'
 has   "F3b slot_fields= on the twin crate's CallEval" "$( row "$o" CallEval crates/twin/src/lib.rs )" 'slot_fields="eval=1@CallEval::twin_run"'
@@ -385,6 +389,24 @@ o="$( run --callees=Klass_display )"
 has   "H4 a macro of another shape joins by the field name" "$o" 'slot=".writeField" via="slot-name"'
 o="$( run --callees=Fn_display )"
 has   "H5 a function call root joins by the field name" "$o" 'slot=".writeField" via="slot-name"'
+# P: a --path whose TARGET is a slot target (train 41b, ninja `--path=real_main,ToolBrowse`, htop `--path=Row_display,LinuxProcess_rowWriteField`):
+# the bridge row carries the slot hedge; the from= body would be a call through a field, no call to the target, so no route body rides (it
+# printed without via=slot and cost 4-5 KB). The slot crossing in the MIDDLE of a route keeps its hedged body (hopbodycheck R9).
+runp(){
+    local out rc
+    out="$( cd "$FIX" && "$BIN" "$FIX" "$@" --no-cache 2>/dev/null )"; rc=$?
+    if [ "$rc" -ne 0 ] || ! printf '%s' "$out" | grep -q '<path '; then printf 'RUNFAIL rc=%s' "$rc"; return 0; fi
+    printf '%s' "$out"
+}
+o="$( runp --path=real_main,ToolBrowse )"
+has   "P1 ninja shape: the bridge names the slot crossing, hedged" "$o" 'n="ToolBrowse" p="src/tool.cc:16" via="slot" slot_callers="1" slot_fns="2"'
+hasnt "P1b no route body for the caller of a slot into to=" "$o" '<bodies of="route"'
+has   "P1c reachable=0 and the follow-up still names --callers" "$o" 'next="--callers=ToolBrowse"'
+o="$( runp --path=Row_display,Linux_writeField )"
+has   "P2 htop shape: the bridge names the slot crossing, hedged" "$o" 'n="Linux_writeField" p="c/linux.c:2" via="slot" slot_callers="1" slot_fns="1"'
+hasnt "P2b no route body for the caller of a slot into to=" "$o" '<bodies of="route"'
+o="$( runp --path=real_main,ToolBrowse --legend=full )"
+hasnt "P3 the route-body legend clause is absent when no route body rides" "$o" 'bodies of=route proven=0'
 FIX="$ROOT/test/fnslotcpp2"
 [ -d "$FIX" ] || { echo "  FAIL  fixture dir missing: $FIX"; exit 2; }
 o="$( run --callers=VDerived::Act )"
