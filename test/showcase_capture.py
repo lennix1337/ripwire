@@ -390,6 +390,7 @@ add(S2, f"""{BIN} . --graph-query='and(callers(name("rankGraphTeleport"),2),kind
 add(S2, f"{BIN} . --external-surface", "Names referenced but never defined in-corpus (stdlib/third-party surface). The root carries names/shown/capped; the default is a 100-row window now, so total= and a pasteable next= join them when it bites (the explicit --limit form carries the same quintet). The sh BUILTINS (cd/echo/set…) are dropped and COUNTED as builtins_excluded= — grep/sed/git stay, they ARE the surface.")
 add(S2, f"{BIN} . --external-surface --include-builtins", "The restoring knob: --include-builtins keeps the shell builtins in the same 100-row window (they now compete for rows, so the window's tail differs).")
 add(S2, f"{BIN} . --path=main,rankGraphTeleport", "Shortest directed call-path SRC -> DST. CHANGED: now reports from_p/to_p/from_defs and resolves the right `main` (was reachable=\"0\").")
+add(S2, f"{BIN} . --defs=main,rankGraphTeleport", "Which definitions each name binds, one row per definition group with sel= (the spelling that picks it alone in any verb), class=source|test and in= callers; source first.")
 add(S2, f"{BIN} . --connect=rankGraphTeleport,runEval,getIndex", "Minimal connecting subgraph over 3 symbols (finds shared-caller joins).")
 add(S2, f"{BIN} . --impact=rankGraphTeleport", "Transitive blast radius — everything that reaches SYM. NOW carries shown/capped.")
 add(S2, f"{BIN} . --mentions=rankGraphTeleport", "Markdown docs that name SYM in a backtick (doc<->code edges).")

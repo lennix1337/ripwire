@@ -33,3 +33,32 @@ def call_mo_ostar():
 
 def call_mo_global():
     return g7()
+
+
+from mo_ga import f as g8
+from mo_gacond import f as g9
+from mo_gatry import f as g10
+from mo_gadyn import f as g11
+
+
+def call_mo_ga():
+    return g8()
+
+
+def call_mo_gacond():
+    return g9()
+
+
+def call_mo_gatry():
+    return g10()
+
+
+def call_mo_gadyn():
+    return g11()
+
+
+from mo_gadeco import f as g12
+
+
+def call_mo_gadeco():
+    return g12()
