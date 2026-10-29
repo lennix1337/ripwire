@@ -359,6 +359,39 @@ e_churn=$( churn_of_fn "$TMP/for-empty.xml" "emptyMailFn" )
     && ok 'plain.cpp churn=1 — the empty-email commit counts for its own file' \
     || no "plain.cpp churn='$e_churn', want 1 (pre-fix: no row, no churn)"
 
+# ── ARM (g): a merge whose FIRST combined path only STARTS WITH the marker stays attached ──────────
+# rv-pr433 (mutant survivor): the boundary rule compares the field after an empty to the marker as a
+# WHOLE field. A merge's prefix empty is the one place a path follows an empty, so a prefix compare
+# (the old frame's spelling, `rfind( "__C__", 0 )`) would read a merge whose first combined path is
+# `__C__.cpp` as a record boundary and drop the merge's files. The hostile fixture's merges cannot see
+# that: MERGE's first path IS `__C__` (the disclosed collision) and M2's is `Alpha.cpp`. Fixture: one
+# file `__C__.cpp`, conflicting edits on two branches, a merge that resolves it with new content —
+# authors base, side, main, merger (4). Red on a prefix-compare mutant (authors=3, merger missing).
+echo "arm g: a merge whose first combined path starts with the marker bytes keeps its files"
+P="$( mktemp -d )"; trap 'rm -rf "$TMP" "$H" "$G" "$E" "$P"' EXIT
+git -C "$P" init -q -b main
+ID Base base@x.com Base base@x.com; D 2026-06-15T12:00:00
+mkfn pfxFn > "$P/__C__.cpp"; git -C "$P" add -A >/dev/null; git -C "$P" commit -qm "p1" >/dev/null
+git -C "$P" checkout -q -b side
+ID Side side@x.com Side side@x.com; D 2026-06-16T12:00:00
+echo '// side' >> "$P/__C__.cpp"; git -C "$P" commit -qam "p2 side" >/dev/null
+git -C "$P" checkout -q main
+ID Main main@x.com Main main@x.com; D 2026-06-17T12:00:00
+echo '// main' >> "$P/__C__.cpp"; git -C "$P" commit -qam "p3 main" >/dev/null
+ID Merger merger@x.com Merger merger@x.com; D 2026-06-18T12:00:00
+git -C "$P" merge -q --no-ff side -m "PM" >/dev/null 2>&1 || true
+mkfn pfxFn > "$P/__C__.cpp"; echo '// resolved' >> "$P/__C__.cpp"
+git -C "$P" add -A >/dev/null; git -C "$P" commit -qm "PM" >/dev/null
+UC
+g_first=$( "$REAL_GIT" -C "$P" log -1 -c --no-ext-diff --no-textconv --name-only --format= HEAD | head -1 )
+[ "$g_first" = "__C__.cpp" ] && ok "premise: the merge's first combined path is __C__.cpp" \
+                              || no "premise lost: the merge's first combined path is '$g_first', want __C__.cpp"
+"$BIN" --owners --detail=1 --no-cache "$P" > "$TMP/owners-pfx.xml" 2>"$TMP/owners-pfx.err"; g_rc=$?
+g_auth=$( attr_of "$TMP/owners-pfx.xml" '__C__.cpp' authors )
+[ "$g_rc" = 0 ] && [ "$g_auth" = 4 ] \
+    && ok "__C__.cpp has 4 authors — the merge that resolved it is attached (prefix compare: 3)" \
+    || no "__C__.cpp authors='$g_auth' rc=$g_rc, want 4 — the merge's files were dropped"
+
 # ── ARM (d): the honest tree is byte-identical to the pre-change golden ────────────────────────────
 echo "arm d: the honest tree is byte-identical to the golden recorded from the PRE-CHANGE binary"
 {
