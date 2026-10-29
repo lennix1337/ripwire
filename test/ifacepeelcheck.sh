@@ -37,6 +37,7 @@
 #   S1b the real-class refusal: an alias name that is also an in-tree class (e2::Tank beside f2::Tank) is never peeled
 #   S1c the disagreement refusal: two same-scope aliases of one name with different pointees (dis::QPtr) are never peeled
 #   S1d a raw-pointer typedef of the alias's name in another namespace (rp2::Ptr beside rp1::Ptr) is never peeled
+#   N1b an alias of a CONCRETE class that has a virtual method derived classes override is no typed pin: the override set stays
 #   B1e [P] class-scoped aliases of one name: each member reads its OWN class's (HoldX → iface, HoldY → the typed KyC::kick)
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
@@ -119,6 +120,10 @@ o="$( callees "$CPP" "scope2.h::DisUser::go" )"
 say "$( hedge "$o" )" "S1c two same-scope aliases with different pointees are never peeled"
 o="$( callees "$CPP" "scope2.h::Holder::go" )"
 say "$( hedge "$o" )" "S1d a raw-pointer typedef of the alias's name in another namespace is never peeled"
+# ---- fix round 1, N1: a concrete pointee whose virtual a derived class overrides keeps the override set ----
+o="$( callees "$CPP" "scope2.h::UsesBase2::go" )"
+say "$( has "$o" 'Der1::act' )" "N1b an alias of a concrete class with overridden virtuals keeps Der1::act as a candidate (no single typed Base2::act)"
+say "$( has "$o" 'Der2::act' )" "N1b ... and Der2::act"
 echo "ifacepeelcheck: $npass passed, $nfail failed"
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"

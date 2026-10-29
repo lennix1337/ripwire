@@ -1,5 +1,5 @@
 #include <memory>
-// fix round 1 (S1): the chain cap, the real-class refusal, the disagreement refusal, a raw-pointer namesake
+// fix round 1 (S1, N1): the chain cap, the real-class refusal, the disagreement refusal, a raw-pointer namesake, a concrete virtual pointee
 namespace ch {
 class Valve { public: virtual ~Valve() = default; virtual int turnOn(int x) = 0; };
 class ValveImpl : public Valve { public: int turnOn(int x) override { return x; } };
@@ -46,3 +46,8 @@ namespace dis { class Kq { public: virtual ~Kq() = default; virtual int poke(int
   using QPtr = std::shared_ptr<Kq>; }
 namespace dis { class Kr { public: int poke(int x) { return x; } }; using QPtr = std::unique_ptr<Kr>; }   // the same scope, another pointee
 class DisUser { public: int go(int x) { return q_->poke(x); } dis::QPtr q_; };
+class Base2 { public: virtual ~Base2() = default; virtual int act(int x) { return x; } };   // CONCRETE, with a virtual that derived classes override
+class Der1 : public Base2 { public: int act(int x) override { return x + 1; } };
+class Der2 : public Base2 { public: int act(int x) override { return x + 2; } };
+using Base2Ptr = std::shared_ptr<Base2>;
+class UsesBase2 { public: int go(int x) { return b_->act(x); } Base2Ptr b_; };
