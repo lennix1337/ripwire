@@ -25,6 +25,7 @@
 #          string are string SITES (rows), the four real docstrings stay counted (comment="4")
 #   L4b [P] two far-apart sites in one over-ten-line body: ONE window per site, joined by an ellipsis, never the span between
 #   L4c [P] a ten-line body is printed whole (<b>); an eleven-line body is an excerpt [site-1, site+5] plus its signature line
+#   L4d [G] a ten-line body over 3000 bytes is still an excerpt (the byte cap on a short body), the long line left out
 #   L10 [G] caps: ten one-site readers: shown="8" capped="1", exactly three <b>/<x> bodies
 #   L11 [P] the compact legend (the default) is a short form; --legend=full keeps the long text; the payload is the same
 #   L5 [G] no literal: a lower-case word, a ONE-word quoted value ("full", and "detected", which a source string holds), a
@@ -114,6 +115,11 @@ if has "$T10" '<b t="fn" l="3" p="app/mid.py" n="ten_lines">' && ! has "$T10" '<
    && has "$T11" '<x p="app/mid.py" n="eleven_lines" l="15-21" of="15-25"' && ! has "$T11" '<b ' && ! has "$T11" 'eleven 6'; then
     ok "L4c a ten-line body is printed whole; an eleven-line body is an excerpt (15-21 of 15-25)"
 else no "L4c ten/eleven-line boundary wrong: ${T10:0:400} || ${T11:0:600}"; fi
+# ── L4d ──
+LL="$( run --for=APPTOOL_LONG_FLAG | lit )"
+if has "$LL" '<x p="app/longline.py" n="long_line" l="3,11-12" of="3-12"' && ! has "$LL" '<b ' && ! has "$LL" 'ZZZZZZZZ'; then
+    ok "L4d a ten-line body over the 3000-byte cap is an excerpt (3,11-12 of 3-12), the 3.3 KB line left out"
+else no "L4d byte cap on a short body wrong: ${LL:0:500}"; fi
 # ── L10 ──
 M="$( run --for=APPTOOL_MANY_FLAG | lit )"
 nbx="$( grep -o '<[bx] ' <<<"$M" | wc -l | tr -d ' ' )"
