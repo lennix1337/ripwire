@@ -27,6 +27,13 @@
 #   N4 C++ `.` on the alias member reaches the smart pointer, never the pointee (`handle_.reset()` with an I::reset: no iface row)
 #   N5 C++ alias of std::shared_ptr<std::string> types nothing (an in-tree text::string keeps its base by-name row)
 #   N6 Rust: a generic `-> R` (R: Command) is never read as a trait object (no iface row)
+#   fix round 1 (B1, scope.h): an alias is read only where it is IN SCOPE at the member (lexical chain: its own class, the
+#   enclosing namespaces, a using-directive; or the written qualifier names the alias's namespace)
+#   B1a a template PARAMETER named like an alias (another namespace; the same namespace; a concrete pointee) keeps the base reading
+#   B1b an alias name that is not visible there (another namespace, a wrong qualifier) keeps the base reading
+#   B1c an external using-declaration `using extlib::SpinPtr;` of the name keeps the base reading
+#   B1d [P] the same namespace, an enclosing namespace, a written qualifier and a using-directive all still peel
+#   B1e [P] class-scoped aliases of one name: each member reads its OWN class's (HoldX → iface, HoldY → the typed KyC::kick)
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
@@ -70,6 +77,31 @@ o="$( callees "$CPP" "filter.h:nameLen" )"
 say "$( has "$o" '<s t="method" n="string::size" p="filter.h:22" via="name"/>' )" "N5 an alias of shared_ptr<std::string> types nothing: the in-tree namesake text::string stays a by-name row (base reading)"
 o="$( callees "$RS" "src/lib.rs:eval_generic" )"
 say "$( hasnt "$o" 'gate="iface"' )" "N6 a generic -> R result is not read as a trait object"
+# ---- fix round 1, B1 (scope.h): the alias must be in scope where the member is written ----
+isiface() { case "$1" in *'<dc n="'*'cands="2" via="declined" gate="iface"'*) echo 1;; *) echo 0;; esac; }
+hedge()   { case "$1" in *'gate="iface"'*) echo 0;; *'via="name"'*) echo 1;; *) echo 0;; esac; }
+o="$( callees "$CPP" "scope.h::TmplIface::go" )"
+say "$( hedge "$o" )" "B1a a template parameter named like an alias of another namespace keeps the by-name rows (no iface row)"
+o="$( callees "$CPP" "scope.h::TmplSame::go" )"
+say "$( hedge "$o" )" "B1a a template parameter named like an alias of the SAME namespace keeps the by-name rows"
+o="$( callees "$CPP" "scope.h::TmplConc::go" )"
+say "$( has "$o" 'Wheel::turn' )" "B1a a template parameter named like a CONCRETE-pointee alias is no typed Motor::turn pin (the namesake Wheel::turn stays)"
+o="$( callees "$CPP" "scope.h::NotInScope::go" )"
+say "$( hedge "$o" )" "B1b an alias of another namespace is not visible by its bare name"
+o="$( callees "$CPP" "scope.h::WrongQual::go" )"
+say "$( hedge "$o" )" "B1b a written qualifier that names no scope of the alias keeps the by-name rows"
+o="$( callees "$CPP" "scope.h::ExtUser::go" )"
+say "$( hedge "$o" )" "B1c an external using-declaration of the name keeps the by-name rows"
+for f in SameNs InnerNs GlobalQ ViaDirective; do
+  o="$( callees "$CPP" "scope.h::$f::go" )"
+  say "$( isiface "$o" )" "B1d $f: the alias in scope still declines gate=iface cands=2"
+done
+o="$( callees "$CPP" "scope.h::HoldX::goX" )"
+say "$( isiface "$o" )" "B1e HoldX: its own class's Ptr (shared_ptr<KxI>) declines gate=iface"
+o="$( callees "$CPP" "scope.h::HoldY::goY" )"
+say "$( has "$o" 'n="KyC::kick"' )" "B1e HoldY: its own class's Ptr (unique_ptr<KyC>) is the typed KyC::kick"
+say "$( hasnt "$o" 'via="name"' )" "B1e HoldY: no by-name guess beside the typed row"
+say "$( hasnt "$o" 'KxI1::kick' )" "B1e HoldY: HoldX's pointee never reaches it"
 echo "ifacepeelcheck: $npass passed, $nfail failed"
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"
