@@ -18,12 +18,15 @@
 //     line; sites inside a function or method first, then string before code before unclassified, the scan's own path order
 //     within each; in= the innermost definition holding the site and ink= its kind; a string site outside any function (an
 //     error-code table entry) carries the kForLiteralContextLines lines after it (lines=), at most kForLiteralContextRows rows;
-//   * counts beside them for what is NOT a handler: comment= (comment sites in source files, and statement-level triple-quoted
-//     strings, a Python docstring), test= (test or bench paths),
-//     doc= (docs, shell scripts, config files) — counted, never listed as rows here (the grep verb lists them: next=);
-//   * <b> the whole body of the function or method holding a shown site, at most kForLiteralBodies owners in row order,
-//     or <x> an excerpt of the lines around the site when that body is over kForLiteralBodyCapBytes (next= names the whole
-//     body); a body this answer already printed is not repeated (body="above" on its rows).
+//   * counts beside them for what is NOT a handler: comment= (comment sites in source files, and a Python docstring: a triple-quoted
+//     string that is the first statement of a module, class or def body; a string opening a call-argument line is a site),
+//     test= (test or bench paths), doc= (docs, shell scripts, config files) — counted, never listed as rows here (the grep verb
+//     lists them: next=);
+//   * <b> the whole body of the function or method holding a shown site when it is kForLiteralWholeBodyLines lines or fewer
+//     (at most kForLiteralBodies owners in row order), or <x> an excerpt of a longer one: its signature line plus one window
+//     [site-1, site+5] per shown site (windows merged only where they touch; l= lists the ranges, an ellipsis line sits between
+//     them; of= is the body's lines; next= names the whole body); a body this answer already printed is not repeated
+//     (body="above" on its rows).
 // Several sites are always listed with counts: the block never picks one. floor="1" when the scan stopped early (budget,
 // unreadable files): every count is then a floor. No source site, nothing printed (a literal met only in tests, docs or comments
 // anchors nothing; never a "the literal is unused" claim).
@@ -36,7 +39,9 @@
 
 #include "filter.h"          // pathTierOf — source / test / doc, the reader's tier
 #include "layout.h"          // layout::lineOf — a byte offset's line
-#include "hopbody.h"         // renderBodyElement — the --expand body element, no callee rows
+#include "hopbody.h"         // renderBodyElement — the --expand body element, no callee rows; pythonDocstringQuote
+#include "langfacts.h"       // langFacts(...).leadingDocstring — which languages have a docstring convention
+#include "lintrules.h"       // langOfPath
 #include "model.h"
 #include "nextverb.h"        // nextFlag / nextAttrXml
 #include "receiverevidence.h"   // ReceiverEvidence::callableKind
@@ -44,6 +49,7 @@
 #include "search.h"          // grepCollect / grepEnrich / isBareWordCodePath
 #include "serialize.h"       // escapeXml / appendCdataSafe / truncateUtf8WithEllipsis
 
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -51,6 +57,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace rw
@@ -60,13 +67,33 @@ inline constexpr std::size_t kForLiteralRankedRows    = 256;    // source sites 
 inline constexpr std::size_t kForLiteralContextRows   = 2;      // string sites outside any function served with the lines after them
 inline constexpr std::uint32_t kForLiteralContextLines = 2;     // ...this many lines after the site
 inline constexpr std::size_t kForLiteralBodies        = 3;      // owner bodies served, in row order
-inline constexpr std::size_t kForLiteralBodyCapBytes  = 3000;   // a body over this is served as an excerpt <x> around its site
-inline constexpr std::uint32_t kForLiteralExcerptLines = 6;     // lines either side of the site in an excerpt
+inline constexpr std::size_t kForLiteralBodyCapBytes  = 3000;   // a short body over this many bytes is still served as an excerpt <x>
+inline constexpr std::uint32_t kForLiteralWholeBodyLines = 10;  // a body of at most this many lines is served whole; a longer one as an excerpt
+inline constexpr std::uint32_t kForLiteralExcerptBefore = 1;    // lines before a site in its excerpt window
+inline constexpr std::uint32_t kForLiteralExcerptAfter  = 5;    // lines after it: what the code does with a literal follows the read (+2/+3 drops fzf R2)
 inline constexpr std::size_t kForLiteralTierFiles     = 64;     // source hit files classified (k=); past it k="?"
 inline constexpr std::size_t kForLiteralLineBytes     = 200;    // the matched line's text, cut on a UTF-8 boundary
 inline constexpr std::size_t kForLiteralMinQuoted     = 6;
 inline constexpr std::size_t kForLiteralMinConst      = 5;
 inline constexpr std::size_t kForLiteralMinBareCaps   = 10;
+
+// the element's legend comment (X3: no double hyphen inside). The compact form is the default --legend=compact posture; the long
+// text rides --legend=full. Both name every attribute the element prints.
+inline constexpr std::string_view kForLiteralLegend =
+    "<!-- ripwire for lit: a byte-exact index scan for the literal the task names (s=; shape= quoted span or CONST word), after "
+    "the unchanged answer, not in est_tokens (bytes= is its size). ls = one source line holding it, in-function sites first: "
+    "k=string in a string literal, code outside one, ? unclassified; in=/ink= the enclosing definition and kind; CDATA its line "
+    "(lines=a-b: with the lines after it). hits= all matches, src= source lines (shown=, capped=1), comment= comments and "
+    "docstrings, test= test paths, doc= docs, shell, config: counted, never rows. b = a shown site's whole function (10 lines or "
+    "fewer), x = an excerpt of a longer one (l= its line ranges: the signature line and a window around each site, an ellipsis "
+    "line between them; of= the body's lines; next= the whole body); body=above: printed above. floor=1: scan stopped early, "
+    "counts are floors; next= on lit lists every site. -->";
+inline constexpr std::string_view kForCompactLiteralLegend =
+    "<!-- ripwire for lit: byte-exact scan for the task's literal (s=), not in est_tokens. ls: a source line with it (k=string|code|?; "
+    "in=/ink= its def; lines=a-b adds the lines after). comment= test= doc= counted, not rows; floor=1: floors. b whole fn, "
+    "x excerpt (l= ranges, \xE2\x80\xA6 between; of= whole); body=above: printed above. -->";
+static_assert( kForLiteralLegend.find( "--", 4 ) == kForLiteralLegend.size() - 3 && kForCompactLiteralLegend.find( "--", 4 ) == kForCompactLiteralLegend.size() - 3,
+               "the only double hyphen in a legend comment is its closing: one inside is not well-formed XML" );
 
 inline bool forLiteralOn()
 {
@@ -189,30 +216,168 @@ struct Site
     char       k = '?';   // 's' string, 'c' code, '?' unclassified
 };
 
-// a statement-level triple-quoted string opens at `start`: nothing but indentation before it on its line (a Python docstring)
-inline bool isDocstringAt( const std::string& text, std::size_t start ) noexcept
+// text-line helpers for the docstring position test: the previous line of the one starting at `ls` (its start moves back to that
+// line's start), trimmed of '\r'; false at the top of the file
+inline bool prevLine( const std::string& text, std::size_t& ls, std::string_view& line ) noexcept
 {
-    if( start + 3 > text.size() || !( text.compare( start, 3, "\"\"\"" ) == 0 || text.compare( start, 3, "'''" ) == 0 ) )
+    if( ls == 0 )
     {
         return false;
     }
-    for( std::size_t i = start; i > 0; --i )
+    const std::size_t nl = ls - 1;   // text[nl] == '\n'
+    const std::size_t r  = nl == 0 ? std::string::npos : text.rfind( '\n', nl - 1 );
+    const std::size_t pb = r == std::string::npos ? 0 : r + 1;
+    line                 = std::string_view( text ).substr( pb, nl - pb );
+    if( !line.empty() && line.back() == '\r' )
     {
-        const char c = text[i - 1];
-        if( c == '\n' )
+        line.remove_suffix( 1 );
+    }
+    ls = pb;
+    return true;
+}
+
+inline std::size_t indentOf( std::string_view line ) noexcept
+{
+    const std::size_t f = line.find_first_not_of( " \t" );
+    return f == std::string_view::npos ? line.size() : f;
+}
+
+// the previous line that holds code (not blank, not a whole-line # comment)
+inline bool prevCodeLine( const std::string& text, std::size_t& ls, std::string_view& line ) noexcept
+{
+    while( prevLine( text, ls, line ) )
+    {
+        const std::size_t f = line.find_first_not_of( " \t" );
+        if( f != std::string_view::npos && line[f] != '#' )
         {
             return true;
         }
-        if( c != ' ' && c != '\t' )
+    }
+    return false;
+}
+
+// A Python DOCSTRING: a triple-quoted string statement that is the FIRST statement of a module, class or def body — the line
+// before it (comments and blank lines aside) closes a `def` / `async def` / `class` header with a ':' (a signature may span lines),
+// or there is none (the top of the module). The same string opening a call-argument line (`raise E(\n """msg""")`), sitting in an
+// `if` body or following other statements is a string SITE: the parse says String, this decides whether it is documentation. The
+// caller applies it to Python only (langFacts leadingDocstring); another language's triple quote is a raw string, its comments
+// are the parse's own Comment tier.
+inline bool isPythonDocstringAt( const std::string& text, std::size_t start ) noexcept
+{
+    if( start >= text.size() )
+    {
+        return false;
+    }
+    std::size_t ls = start;
+    while( ls > 0 && text[ls - 1] != '\n' )
+    {
+        --ls;
+    }
+    const std::string_view first = std::string_view( text ).substr( ls );
+    const std::size_t      fs    = ls + indentOf( first.substr( 0, start - ls ) );
+    if( fs > start || start - fs > 2 || pythonDocstringQuote( std::string_view( text ).substr( fs, 8 ) ).size() != 3 )
+    {
+        return false;   // not the first thing on its line, or not a triple-quoted string (an r/b/u prefix aside)
+    }
+    const std::size_t ind = fs - ls;
+    std::size_t       pos = ls;
+    std::string_view  line;
+    if( !prevCodeLine( text, pos, line ) )
+    {
+        return true;   // nothing but comments before it: the module docstring
+    }
+    const auto headerEnds = []( std::string_view l )
+    {
+        while( !l.empty() && ( l.back() == ' ' || l.back() == '\t' ) )
+        {
+            l.remove_suffix( 1 );
+        }
+        if( const std::size_t h = l.rfind( '#' ); h != std::string_view::npos )
+        {
+            std::string_view before = l.substr( 0, h );
+            while( !before.empty() && ( before.back() == ' ' || before.back() == '\t' ) )
+            {
+                before.remove_suffix( 1 );
+            }
+            if( before.ends_with( ':' ) )
+            {
+                return true;   // def f():  # comment
+            }
+        }
+        return l.ends_with( ':' );
+    };
+    if( !headerEnds( line ) )
+    {
+        return false;
+    }
+    // the header's first line: the nearest code line indented LESS than the string (a multi-line signature closes with `) -> T:` at
+    // the def's own indent; its parameters sit deeper or at the string's indent)
+    for( std::size_t steps = 0; indentOf( line ) >= ind && steps < 200; ++steps )
+    {
+        if( !prevCodeLine( text, pos, line ) )
         {
             return false;
         }
     }
-    return true;
+    if( indentOf( line ) >= ind )
+    {
+        return false;
+    }
+    std::string_view t = line.substr( indentOf( line ) );
+    if( !t.empty() && ( t[0] == ')' || t[0] == ']' || t[0] == '}' ) )   // `) -> None:` — on to the line that opened it
+    {
+        const std::size_t hind = indentOf( line );
+        for( std::size_t steps = 0; steps < 200; ++steps )
+        {
+            if( !prevCodeLine( text, pos, line ) )
+            {
+                return false;
+            }
+            if( indentOf( line ) <= hind )
+            {
+                break;
+            }
+        }
+        t = line.substr( indentOf( line ) );
+    }
+    return t.starts_with( "def " ) || t.starts_with( "async def " ) || t.starts_with( "class " );
 }
 
-// lines [a, b] of `text` (1-based, inclusive), newline-joined: the grep verb's own slicing core (search.h grepLineRangeText)
-inline std::string linesOf( const std::string& text, std::uint32_t a, std::uint32_t b )
+using LineRange = std::pair<std::uint32_t, std::uint32_t>;   // inclusive, 1-based
+
+// the excerpt of a body: its signature line `first` plus a window [site-before, site+after] per site line, clipped to
+// [first, last], overlapping or touching windows merged; ascending and disjoint
+inline std::vector<LineRange> excerptRanges( const std::vector<std::uint32_t>& siteLines, std::uint32_t first, std::uint32_t last )
+{
+    std::vector<LineRange> w{ LineRange{ first, first } };
+    for( const std::uint32_t l : siteLines )
+    {
+        const std::uint32_t a = std::max( first, l > kForLiteralExcerptBefore ? l - kForLiteralExcerptBefore : 1u );
+        const std::uint32_t b = std::min( last, l + kForLiteralExcerptAfter );
+        if( a <= b )
+        {
+            w.push_back( LineRange{ a, b } );
+        }
+    }
+    std::sort( w.begin(), w.end() );
+    std::vector<LineRange> merged;
+    for( const LineRange& r : w )
+    {
+        if( !merged.empty() && r.first <= merged.back().second + 1 )
+        {
+            merged.back().second = std::max( merged.back().second, r.second );
+        }
+        else
+        {
+            merged.push_back( r );
+        }
+    }
+    return merged;
+}
+
+// the lines of every range of `text`, each range newline-joined (the grep verb's own slicing core, search.h grepLineRangeText),
+// the ranges joined by a line holding one ellipsis
+inline std::string linesOfRanges( const std::string& text, const std::vector<LineRange>& ranges )
 {
     std::vector<std::size_t> starts{ 0 };
     for( std::size_t i = 0; i < text.size(); ++i )
@@ -223,15 +388,40 @@ inline std::string linesOf( const std::string& text, std::uint32_t a, std::uint3
         }
     }
     const std::uint32_t count = grepRealLineCount( text, starts );
-    b = std::min( b, count );
-    return a < 1 || a > b ? std::string() : grepLineRangeText( text, starts, count, a, b );
+    std::string         out;
+    for( const LineRange& r : ranges )
+    {
+        const std::uint32_t b = std::min( r.second, count );
+        if( r.first < 1 || r.first > b )
+        {
+            continue;
+        }
+        out += out.empty() ? std::string_view() : std::string_view( "\n\xE2\x80\xA6\n" );
+        out += grepLineRangeText( text, starts, count, r.first, b );
+    }
+    return out;
+}
+
+inline std::string rangesAttr( const std::vector<LineRange>& ranges )
+{
+    std::string out;
+    for( const LineRange& r : ranges )
+    {
+        out += out.empty() ? "" : ",";
+        out += std::to_string( r.first );
+        if( r.second > r.first )
+        {
+            out += "-" + std::to_string( r.second );
+        }
+    }
+    return out;
 }
 }   // namespace lit_detail
 
 // THE BLOCK. `served` = the answer's own bytes after <sigs> (bodies, fold, slot, hops): a body whose <b … l= p= n=> head is in it
-// is not printed again. `useMemo` = the span-tier memo (false under --no-cache).
+// is not printed again. `useMemo` = the span-tier memo (false under --no-cache). `compactLegend` = the default --legend=compact dialect.
 inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLiteral& lit, std::string_view rootArg, std::string_view served,
-                                          RedactCounts* redact, bool useMemo )
+                                          RedactCounts* redact, bool useMemo, bool compactLegend )
 {
     ForLiteralRender out;
     if( lit.text.empty() || ing.files.empty() )
@@ -302,9 +492,9 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
                 ++commentHits;
                 continue;
             }
-            if( t == SpanTier::String )
+            if( t == SpanTier::String && langFacts( langOfPath( ing.files[s.raw.fileId] ) ).leadingDocstring )
             {
-                // a statement-level triple-quoted string (a Python docstring): documentation, counted with the comments
+                // a Python docstring (the first statement of a module / class / def body): documentation, counted with the comments
                 const auto        it    = std::upper_bound( m.startByte.begin(), m.startByte.end(), s.raw.byteOffset );
                 const std::size_t start = it == m.startByte.begin() ? 0 : m.startByte[std::size_t( it - m.startByte.begin() ) - 1];
                 if( loadedFile != s.raw.fileId )
@@ -312,7 +502,7 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
                     loadedFile = s.raw.fileId;
                     loadedText = docparse::detail::readWholeFile( diskPath( ing, s.raw.fileId ) ).value_or( std::string() );
                 }
-                if( lit_detail::isDocstringAt( loadedText, start ) )
+                if( lit_detail::isPythonDocstringAt( loadedText, start ) )
                 {
                     ++commentHits;
                     continue;
@@ -399,14 +589,6 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
         {
             continue;
         }
-        std::optional<std::string> body = renderBodyElement( ing, h.enclosingId, /*capBytes=*/0, /*compress=*/false, redact, rootArg, nullptr );
-        if( body && body->size() <= kForLiteralBodyCapBytes )
-        {
-            bodiesXml += *body;
-            ++out.bodies;
-            continue;
-        }
-        // an excerpt around every shown site this owner holds (merged windows), clipped to the owner's own lines
         const std::string text = docparse::detail::readWholeFile( diskPath( ing, s.fileId ) ).value_or( std::string() );
         if( text.empty() )
         {
@@ -414,29 +596,34 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
         }
         const std::uint32_t first = layout::lineOf( text, s.sigStartByte );
         const std::uint32_t last  = layout::lineOf( text, s.endByte > 0 ? s.endByte - 1 : 0 );
-        std::uint32_t       a = UINT32_MAX, b = 0;
+        if( last >= first && last - first < kForLiteralWholeBodyLines )   // a short body is served whole (nothing to leave out)
+        {
+            std::optional<std::string> body = renderBodyElement( ing, h.enclosingId, /*capBytes=*/0, /*compress=*/false, redact, rootArg, nullptr );
+            if( body && body->size() <= kForLiteralBodyCapBytes )
+            {
+                bodiesXml += *body;
+                ++out.bodies;
+                continue;
+            }
+        }
+        // an excerpt of a longer body: its signature line and one window per shown site this owner holds (never the span between)
+        std::vector<std::uint32_t> siteLines;
         for( const GrepHit& o : hits )
         {
             if( o.enclosingId == h.enclosingId )
             {
-                a = std::min( a, o.line > kForLiteralExcerptLines ? o.line - kForLiteralExcerptLines : 1u );
-                b = std::max( b, o.line + kForLiteralExcerptLines );
+                siteLines.push_back( o.line );
             }
         }
-        a = std::max( a, first );
-        b = std::min( b, last );
-        if( a > b )
-        {
-            continue;
-        }
+        const std::vector<lit_detail::LineRange> ranges = lit_detail::excerptRanges( siteLines, first, last );
         std::string x = "<x p=\"";
         x += escapeXml( path, esc );
         x += "\" n=\"";
         x += escapeXml( s.name, esc );
-        x += "\" l=\"" + std::to_string( a ) + "-" + std::to_string( b ) + "\" of=\"" + std::to_string( first ) + "-" + std::to_string( last ) + "\"";
+        x += "\" l=\"" + lit_detail::rangesAttr( ranges ) + "\" of=\"" + std::to_string( first ) + "-" + std::to_string( last ) + "\"";
         x += nextAttrXml( nextFlag( "--expand=", path + ":" + std::to_string( s.line ) + ":" + s.name ) );
         x += "><![CDATA[";
-        appendCdataSafe( lit_detail::linesOf( text, a, b ), x );
+        appendCdataSafe( lit_detail::linesOfRanges( text, ranges ), x );
         x += "]]></x>";
         bodiesXml += x;
         ++out.bodies;
@@ -479,7 +666,7 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
             const std::uint32_t b = std::min( h.line + kForLiteralContextLines, lastLine );
             if( !text.empty() && b > h.line )
             {
-                line = lit_detail::linesOf( text, h.line, b );
+                line = lit_detail::linesOfRanges( text, { lit_detail::LineRange{ h.line, b } } );
                 truncateUtf8WithEllipsis( line, kForLiteralLineBytes * ( kForLiteralContextLines + 1 ) );
                 rowsXml += " lines=\"" + std::to_string( h.line ) + "-" + std::to_string( b ) + "\"";
                 ++contextRows;
@@ -491,12 +678,7 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
     }
 
     std::string& x = out.xml;
-    x = "<!-- ripwire for lit: a byte-exact index scan for the literal the task names (s=; shape= quoted span or CONST word), after "
-        "the unchanged answer, not in est_tokens (bytes= is its size). ls = one source line holding it, in-function sites first: "
-        "k=string in a string literal, code outside one, ? unclassified; in=/ink= the enclosing definition and kind; CDATA its line "
-        "(lines=a-b: with the lines after it). hits= all matches, src= source lines (shown=, capped=1), comment= comments and "
-        "docstrings, test= test paths, doc= docs/config: counted, never rows. b = a shown site's whole function, x = an excerpt "
-        "(l=, of= the body's lines, next= the whole body); body=above: printed above. floor=1: scan stopped early, counts are floors; next= on lit lists every site. -->";
+    x = compactLegend ? std::string( kForCompactLiteralLegend ) : std::string( kForLiteralLegend );
     x += "<lit s=\"";
     x += escapeXml( lit.text, esc );
     x += "\" shape=\"";

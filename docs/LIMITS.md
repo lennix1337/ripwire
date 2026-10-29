@@ -424,7 +424,7 @@ Discloses: `capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
-| `kForLiteralBodyCapBytes` | `3000` | — | a body over this is served as an excerpt <x> around its site |
+| `kForLiteralBodyCapBytes` | `3000` | — | a short body over this many bytes is still served as an excerpt <x> |
 | `kForLiteralContextRows` | `2` | — | string sites outside any function served with the lines after them |
 | `kForLiteralMinBareCaps` | `10` | — | — |
 | `kForLiteralRankedRows` | `256` | — | source sites ordered for the rows (past it: counted in src=, not ranked) |

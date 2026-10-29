@@ -2709,7 +2709,7 @@ inline void appendLiteralAnchorBlock( const MainDispatch& d, std::string_view ro
     {
         return;
     }
-    const rw::ForLiteralRender r = rw::renderForLiteral( d.ing, *lit, rootArg, served, d.redactPtr, /*useMemo=*/!cfg.noCache );
+    const rw::ForLiteralRender r = rw::renderForLiteral( d.ing, *lit, rootArg, served, d.redactPtr, /*useMemo=*/!cfg.noCache, /*compactLegend=*/cfg.legend == "compact" );
     std::fwrite( r.xml.data(), 1, r.xml.size(), stdout );
 }
 
