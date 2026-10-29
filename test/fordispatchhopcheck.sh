@@ -21,7 +21,7 @@
 #   P5 [P] prefix identity: the answer minus <dispatch> and its clause, est_tokens masked, equals RIPWIRE_NO_DISPATCH_HOP=1
 #   P6 [G] next= pasted (--whereis=Fetch) lists every candidate the element names
 #   N1 [G] no element: the bare subject (build_book), the call as a bare word (Loader::Load the Fetch), a wrapper calling its own
-#          name (CachedSource::Fetch inner_->Fetch), a type subject (DiskSource src_->Fetch), a call declined for another
+#          name (CachedSource::Fetch inner_->Fetch), a member-access token naming another call (build_book out.push_str), a type subject (DiskSource src_->Fetch), a call declined for another
 #          reason (Python job.run: the ladder tier, no gate — dispatch_job job.run)
 #   N2 [G] no element, byte-identical to RIPWIRE_NO_DISPATCH_HOP=1: --json, --signatures-only, --token-budget=3000
 #   M1 [P] MCP `for` parity: the same element (rows, no inline body — that surface serves bodies by handle) with its own clause;
@@ -128,6 +128,7 @@ n1 "$F/rs" "build_book" "the bare subject (name-exact, its body makes the iface 
 run "$F/rs" --for=build_book | grep -q 'route="name-exact(build_book)'
 verdict $? "(N1pre) the bare subject routes name-exact (the task-names guard, not the route, holds it)" "(N1pre) build_book did not route name-exact"
 n1 "$F/cpp" "Loader::Load the Fetch" "the call as a bare word"
+n1 "$F/rs" "build_book out.push_str" "a member-access token naming a different call (push_str, not the declined render)"
 n1 "$F/cppwrap" "CachedSource::Fetch inner_->Fetch" "a wrapper calling its own name"
 n1 "$F/cpp" "DiskSource src_->Fetch" "a type subject"
 n1 "$F/ladder" "dispatch_job job.run" "a call declined by the ladder tier (not gate=iface)"
