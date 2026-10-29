@@ -168,7 +168,7 @@ rrun routeslot '--path=start_job,sink_write' --legend=full >"$TMP/r9f"
 ( cd "$TMP/route" && RIPWIRE_NO_HOP_BODY=1 "$BIN" "$TMP/route" --no-cache '--path=post_message,on_*' 2>/dev/null ) >"$TMP/r1.off"
 
 cat > "$TMP/chk.py" <<'PY'
-import html, re, shlex, subprocess, sys, os
+import html, re, shlex, shutil, subprocess, sys, os
 T, BIN, ROOT = sys.argv[1], sys.argv[2], sys.argv[3]
 fails = 0
 def rd(n): return open(os.path.join(T, n), "rb").read().decode("utf-8", "replace")
@@ -316,8 +316,11 @@ r10 = rd("r10"); printed10 = {(b[0].get("p"), b[0].get("l")) for b in bodies(rou
 check(("pump.py", "10") in printed10 and root(r10).get("from_defs") == "2", "(R10pre) the route body prints pump.py:10 post_message and the endpoint binds 2 definitions")
 check(alts_p(r10) == ["other.py:2"], "(R10) <alts side=from> lists the other class's post_message only, never the one a route body printed: %r" % alts_p(r10))
 check(all(a.split(":")[0] + ":" + a.split(":")[1] not in {p + ":" + l for p, l in printed10} for a in alts_p(r10)), "(R10) no <alts> row repeats a printed <b>")
-for f in ("h1", "r1", "r2", "r3"):
-    check(subprocess.run(["xmllint", "--noout", os.path.join(T, f)], capture_output=True).returncode == 0, "(X2) %s well-formed" % f)
+if shutil.which("xmllint"):   # CR 4408459933: the shell X2 arm below skips cleanly without xmllint; so does this one
+    for f in ("h1", "r1", "r2", "r3"):
+        check(subprocess.run(["xmllint", "--noout", os.path.join(T, f)], capture_output=True).returncode == 0, "(X2) %s well-formed" % f)
+else:
+    print("  SKIP  (X2) xmllint absent")
 # X3
 for f in ("p1", "p1f", "p3f", "p4", "f1", "f1f", "h1f", "r1f", "h9f"):
     check(all("--" not in c for c in re.findall(r'<!--(.*?)-->', rd(f), re.S)), "(X3) %s: no -- inside a legend comment" % f)
