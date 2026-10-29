@@ -279,13 +279,6 @@ inline bool isCommentLine( std::string_view l ) noexcept
     return i < l.size() && ( l[i] == '#' || l.substr( i ).starts_with( "//" ) );
 }
 
-// The token of `toks` the line names (first match, specificity order), or nullptr.
-inline const Token* lineMatches( std::string_view line, const std::vector<Token>& toks )
-{
-    const auto it = std::ranges::find_if( toks, [ & ]( const Token& t ) { return boundedFind( line, t.text ); } );
-    return it == toks.end() ? nullptr : &*it;
-}
-
 }   // namespace listeddetail
 
 namespace listeddetail
@@ -342,8 +335,13 @@ inline std::vector<std::size_t> linesNaming( const std::vector<ManifestLine>& li
     dirOnly = true;
     for( std::size_t li = 0; li < lines.size(); ++li )
     {
-        const Token* k = isCommentLine( lines[li].text ) ? nullptr : lineMatches( lines[li].text, toks );
-        if( k != nullptr )
+        if( isCommentLine( lines[li].text ) )
+        {
+            continue;
+        }
+        // the first token the line names, in specificity order (path before directory tails)
+        const auto k = std::ranges::find_if( toks, [ & ]( const Token& t ) { return boundedFind( lines[li].text, t.text ); } );
+        if( k != toks.end() )
         {
             mine.push_back( li );
             dirOnly = dirOnly && k->isDir;
