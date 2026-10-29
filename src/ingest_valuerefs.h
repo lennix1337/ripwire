@@ -1314,11 +1314,7 @@ private:
             noteSlotTypes( n, a.kind );   // IX-1: the declared struct types, beside the names (inert without a slot row)
         }
         noteStructBody( n, a.kind );      // IX-1: a struct body's field order and facts (m_anc.back() is the parent)
-        if( m_slot != nullptr && m_slot->memberPointers && kindIs( a.kind, "using_declaration" )
-            && ( m_anc.empty() || !kindIs( m_anc.back().kind, "field_declaration_list" ) ) )   // a class member's `using B::B;` / `using B::m;` names a member, not a class
-        {
-            m_usings.note( n, m_src );   // FN-SLOT S2 fix 1: where a bare `&Cls::m` may name an external class
-        }
+        noteUsing( n, a.kind );           // FN-SLOT S2 fix 1: where a bare `&Cls::m` may name an external class (m_anc.back() is the parent)
         if( m_fwdArmed )
         {
             noteForwardProof( n, a.kind );
@@ -2636,6 +2632,21 @@ private:
 
     // A struct / union / class BODY as the walk enters its specifier: its field order (positional initializers), its
     // function-pointer fields (the C++ gate) and one slot fact per field declared with a struct type.
+    // A file-scope or block-scope `using ns::Cls;` / `using namespace ns;` (C++ member-pointer rows only) feeds m_usings. A CLASS MEMBER's
+    // `using B::B;` (inheriting constructors) / `using B::m;` names a member, never a class a bare spelling reaches: its parent is the
+    // class body (field_declaration_list), and noting it would make the later bare `&B::m` decline as an external class (CR 4415276397).
+    void noteUsing( TSNode n, const char* t )
+    {
+        if( m_slot == nullptr || !m_slot->memberPointers || !kindIs( t, "using_declaration" ) )
+        {
+            return;
+        }
+        if( !m_anc.empty() && kindIs( m_anc.back().kind, "field_declaration_list" ) )
+        {
+            return;
+        }
+        m_usings.note( n, m_src );
+    }
     void noteStructBody( TSNode n, const char* t )
     {
         if( m_slot == nullptr || !( kindIs( t, "struct_specifier" ) || kindIs( t, "union_specifier" ) || kindIs( t, "class_specifier" ) ) )
