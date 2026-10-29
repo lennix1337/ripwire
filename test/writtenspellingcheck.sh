@@ -65,6 +65,7 @@ bind   ts 'RuntimeDriver.#dispatch' tsPrivHelper tsOtherPrivHelper
 bind   ts 'Other.#dispatch' tsOtherPrivHelper tsPrivHelper
 bind   ts 'src/driver/runtime-driver.ts:RuntimeDriver.#dispatch' tsPrivHelper tsOtherPrivHelper
 bind   ts '#dispatch' tsPrivHelper                 # the bare name: both, as before (a union)
+bind   ts '#dispatch' tsOtherPrivHelper            # ... and the other one too: a union names BOTH definitions' callees (CR 4408459940)
 refuse ts 'Missing.#dispatch'                     # no owner of that name
 refuse ts 'RuntimeDriver.#nope'                   # no such private member
 refuse ts 'RuntimeDriver.dispatch'                # the '#' is part of the name: the unprefixed spelling names nothing
