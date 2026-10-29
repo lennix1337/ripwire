@@ -601,13 +601,40 @@ def inCaseUnshown( n ):
 # HEAD~N with N >= 3 spans a whole earlier train (train 34: 37+ indexed files) and its global <recent> block pushes the
 # scoped page past the display cut; HEAD~2 (margin HEAD~1) spans only this train's own merges. Every promise is still
 # measured as before; only the smallest N tried moved.
-def chooseInWindow( lo=1, hi=14 ):
+#
+# ONE-MERGE TRAINS (train 41b): a train whose only source change arrives as ONE lane merge has, after it, commits that
+# touch no source (the pin, the capture itself), so the margin HEAD~(N-1) = HEAD~1 holds no source file at all and every
+# N >= 3 spans the previous train. The margin exists to survive the commit that lands the capture; a margin made only
+# of source-free commits that sits right behind a MERGE whose first-parent diff touches source is held by that merge —
+# the miner counts a merge by its first-parent diff, and the PR's own merge commit on main plays the same part. This
+# is a FALLBACK: it is tried only when the scan above found no N, so every train that regenerated before regenerates
+# to the same N.
+def marginHeldByMerge( n, repo, inDir ):
+    """True when HEAD~n is a merge whose first-parent diff touches inDir/ and HEAD~n..HEAD touches nothing there."""
+    def git( *a ):
+        p = subprocess.run( [ "git", *a ], cwd=repo, capture_output=True, text=True, stdin=subprocess.DEVNULL )
+        return p.stdout if p.returncode == 0 else None
+    parents = git( "rev-list", "--parents", "-n", "1", f"HEAD~{n}" )
+    if parents is None or len( parents.split() ) < 3:
+        return False
+    behind = git( "diff", "--name-only", f"HEAD~{n}", "HEAD", "--", f"{inDir}/" )
+    viaMerge = git( "diff", "--name-only", f"HEAD~{n}^1", f"HEAD~{n}", "--", f"{inDir}/" )
+    return behind is not None and viaMerge is not None and behind.strip() == "" and viaMerge.strip() != ""
+
+def chooseInWindow( lo=1, hi=14, unshown=None, mergeHolds=None ):
+    unshown = unshown or inCaseUnshown
+    mergeHolds = mergeHolds or ( lambda n: marginHeldByMerge( n, REPO, _IN_DIR ) )
     tried = []
     for n in range( lo + 1, hi + 1 ):
-        gone, goneMargin = inCaseUnshown( n ), inCaseUnshown( n - 1 )
+        gone, goneMargin = unshown( n ), unshown( n - 1 )
         tried.append( f"HEAD~{n}: {'; '.join(gone) or 'shows everything'} (margin HEAD~{n-1}: {'; '.join(goneMargin) or 'shows everything'})" )
         if not gone and not goneMargin:
             print( f"showcase_capture: --in= case window derived as HEAD~{n} (margin HEAD~{n-1} holds)", file=sys.stderr )
+            return n
+    for n in range( lo + 1, hi + 1 ):
+        if not unshown( n ) and mergeHolds( n - 1 ):
+            print( f"showcase_capture: --in= case window derived as HEAD~{n} (margin HEAD~{n-1} holds as the merge "
+                   f"HEAD~{n-1}: source-free commits behind it, its first-parent diff counted)", file=sys.stderr )
             return n
     sys.exit( "showcase_capture: refusing to write — no --since=HEAD~N in [%d,%d] shows what the --in=%s case promises:\n  %s"
               % ( lo + 1, hi, _IN_DIR, "\n  ".join( tried ) ) )
