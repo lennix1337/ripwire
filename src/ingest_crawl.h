@@ -1737,8 +1737,8 @@ struct CrawlResult
 };
 
 // The crawl's directory walk in a DETERMINISTIC order: pre-order, each directory's entries visited in byte order of
-// their file name. fs::recursive_directory_iterator yields the filesystem's readdir order (APFS name order, ext4 hash
-// order, tmpfs creation order), and the memory guard stops the walk after N entries — so WHICH files survive a cut
+// their file name. fs::recursive_directory_iterator yields the filesystem's own readdir order (ext4: hash order, tmpfs:
+// creation order, APFS: neither, measured), and the memory guard stops the walk after N entries — so WHICH files survive a cut
 // depended on the filesystem: the same tree under the same limit answered from different corpora (notfound-on-cut; CI
 // memguardcheck B6b on ubuntu only). Sorting the finished list afterwards cannot fix that, the cut is already made.
 // Same surface as the iterator the loop used (*it, it->, disable_recursion_pending, increment(ec), != end): symlinked
@@ -1757,8 +1757,10 @@ inline std::vector<fs::directory_entry> sortedDirEntries( const fs::path& dir, f
     {
         ec.clear();
     }
+    // the whole native path, not filename(): every entry here shares `dir` + separator as a prefix, so the order is the file-name
+    // order and a comparison allocates nothing (filename() builds a path per call)
     std::sort( entries.begin(), entries.end(), []( const fs::directory_entry& a, const fs::directory_entry& b )
-               { return a.path().filename().native() < b.path().filename().native(); } );
+               { return a.path().native() < b.path().native(); } );
     return entries;
 }
 
