@@ -704,10 +704,10 @@ fi
 cat >"$TMP/j_window.py" <<'PYEOF'
 import ast, subprocess, sys, os, tempfile, shutil
 src = open(sys.argv[1], encoding="utf-8").read()
-want = ("chooseInWindow", "marginHeldByMerge")
+want = ("chooseInWindow", "marginHeldByMerge", "firstWindow")
 funcs = [n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name in want]
-if len(funcs) != 2:
-    print("EXTRACT_FAIL got %d of 2 functions" % len(funcs)); sys.exit(0)
+if len(funcs) != 3:
+    print("EXTRACT_FAIL got %d of 3 functions" % len(funcs)); sys.exit(0)
 ns = {"subprocess": subprocess, "sys": sys, "REPO": ".", "_IN_DIR": "src", "_IN_LIMIT": 3, "_IN_LIMIT_NARROW": 2}
 exec(compile(ast.Module(body=funcs, type_ignores=[]), "<extract>", "exec"), ns)
 choose, held = ns["chooseInWindow"], ns["marginHeldByMerge"]

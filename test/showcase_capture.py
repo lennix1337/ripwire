@@ -625,27 +625,29 @@ def marginHeldByMerge( n, repo, inDir ):
     viaMerge = git( "diff", "--name-only", f"HEAD~{n}^1", f"HEAD~{n}", "--", f"{inDir}/" )
     return behind is not None and viaMerge is not None and behind.strip() == "" and viaMerge.strip() != ""
 
+def firstWindow( lo, hi, ok ):
+    """The smallest N in (lo, hi] with ok( N ), else None."""
+    return next( ( n for n in range( lo + 1, hi + 1 ) if ok( n ) ), None )
+
 def chooseInWindow( lo=1, hi=14, unshown=None, mergeHolds=None ):
     """Return ( N, page limit )."""
     unshown = unshown or inCaseUnshown
     mergeHolds = mergeHolds or ( lambda n: marginHeldByMerge( n, REPO, _IN_DIR ) )
-    tried = []
-    for n in range( lo + 1, hi + 1 ):
-        gone, goneMargin = unshown( n, _IN_LIMIT ), unshown( n - 1, _IN_LIMIT )
-        tried.append( f"HEAD~{n}: {'; '.join(gone) or 'shows everything'} (margin HEAD~{n-1}: {'; '.join(goneMargin) or 'shows everything'})" )
-        if not gone and not goneMargin:
-            print( f"showcase_capture: --in= case window derived as HEAD~{n} (margin HEAD~{n-1} holds)", file=sys.stderr )
-            return n, _IN_LIMIT
-    for n in range( lo + 1, hi + 1 ):
-        if not unshown( n, _IN_LIMIT ) and mergeHolds( n - 1 ):
-            print( f"showcase_capture: --in= case window derived as HEAD~{n} (margin HEAD~{n-1} holds as the merge "
-                   f"HEAD~{n-1}: source-free commits behind it, its first-parent diff counted)", file=sys.stderr )
-            return n, _IN_LIMIT
-    for n in range( lo + 1, hi + 1 ):
-        if not unshown( n, _IN_LIMIT_NARROW ) and not unshown( n - 1, _IN_LIMIT_NARROW ):
-            print( f"showcase_capture: --in= case window derived as HEAD~{n} with --limit={_IN_LIMIT_NARROW} (margin HEAD~{n-1} holds; "
-                   f"the margin has too few source files for --limit={_IN_LIMIT})", file=sys.stderr )
-            return n, _IN_LIMIT_NARROW
+    both = lambda n, lim: not unshown( n, lim ) and not unshown( n - 1, lim )
+    passes = [
+        ( _IN_LIMIT, lambda n: both( n, _IN_LIMIT ), lambda n: f"margin HEAD~{n-1} holds" ),
+        ( _IN_LIMIT, lambda n: not unshown( n, _IN_LIMIT ) and mergeHolds( n - 1 ),
+          lambda n: f"margin HEAD~{n-1} holds as the merge HEAD~{n-1}: source-free commits behind it, its first-parent diff counted" ),
+        ( _IN_LIMIT_NARROW, lambda n: both( n, _IN_LIMIT_NARROW ),
+          lambda n: f"--limit={_IN_LIMIT_NARROW}, margin HEAD~{n-1} holds; the margin has too few source files for --limit={_IN_LIMIT}" ),
+    ]
+    for lim, ok, why in passes:
+        n = firstWindow( lo, hi, ok )
+        if n is not None:
+            print( f"showcase_capture: --in= case window derived as HEAD~{n} ({why( n )})", file=sys.stderr )
+            return n, lim
+    tried = [ f"HEAD~{n}: {'; '.join( unshown( n, _IN_LIMIT ) ) or 'shows everything'} (margin HEAD~{n-1}: {'; '.join( unshown( n - 1, _IN_LIMIT ) ) or 'shows everything'})"
+              for n in range( lo + 1, hi + 1 ) ]
     sys.exit( "showcase_capture: refusing to write — no --since=HEAD~N in [%d,%d] shows what the --in=%s case promises:\n  %s"
               % ( lo + 1, hi, _IN_DIR, "\n  ".join( tried ) ) )
 
