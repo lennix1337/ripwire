@@ -5081,8 +5081,9 @@ private:
         }
         else
         {
-            for( std::size_t k = from.prefix.size(); k-- > 0 && hits.empty(); )
+            for( std::size_t level = from.prefix.size(); level > 0 && hits.empty(); )
             {
+                const std::size_t k = --level;   // from the innermost scope out to the global one (index 0); no unsigned wrap past it
                 for( const Entry& e : all->second )
                 {
                     if( visible( e ) && e.scope.path() == from.prefix[ k ] )
