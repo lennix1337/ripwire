@@ -201,7 +201,7 @@ struct Manifest
     std::string code;   // `text` with every comment byte blanked to a space (line breaks kept): the view names are matched in
     bool        gen = false;
     bool        dirTokens = true;   // false for make / CMake / meson / Bazel BUILD: they list sources by FILE path; a directory there is a
-                                    // command argument or a dep label
+                                    // command's argument or a dep label
 };
 
 struct ManifestLine
