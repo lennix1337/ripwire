@@ -30,6 +30,8 @@
 #   H5 [P] a CMake #[[ ]] block, list(REMOVE_ITEM) and a trailing # comment are not listings, the live stanza is
 #   ST1 [P] siblings count only inside the SAME top-level stanza (add_library / add_executable on two lines are two)
 #   RP1 [P-mutant] the <listed> re-pick from the rows <sigs> emitted (verbs_for.h): --pack-budget-bytes=1 leaves one row, so no <listed>, no clause
+#   DD1 [P] a subdirectory manifest's bare x.c names ITS x.c, never the root one (sb, lbl)   DD2 [P] the root package.json never lists a file in a NESTED package (np; twin np2)
+#   DD3 [P] "!./x" is an exclusion (neg; twin neg2)   DD4 [P] a //pkg:x.cc label names package pkg (lbl; twin lbl2: a bare :x.cc lists)
 #   Z1 [P] a manifest above the crawl size ceiling is not read
 #   N1 [G] no creation word ("widget alpha"): no <listed>, no clause
 #   N2 [G] a glob listing ($(wildcard *.c)) is a floor: no <listed>
@@ -135,6 +137,41 @@ if run h5 "$T/h5" "new widget"; then
 fi
 if run st "$T/st" "new widget"; then
     if ! has "$T/st" '<listed'; then ok "ST1 two names in two stanzas (add_library / add_executable) are not siblings"; else no "ST1 siblings from different stanzas: $(lst "$T/st")"; fi
+fi
+# ---- DD1-DD4 (delta-review fix round 2: a name resolves from the manifest's OWN directory; nested package, `!./` and `//pkg:` label)
+outside(){   # file p-value prefix: every of=/also= name of the <listed p=PVALUE> elements starts with PREFIX (none = pass)
+    lst "$1" | grep -F "p=\"$2\"" | python3 -c "
+import re, sys
+bad = []
+for l in sys.stdin:
+    for a in re.findall(r' (?:of|also)=\"([^\"]*)\"', l):
+        bad += [n for n in a.split(',') if not n.startswith(sys.argv[1])]
+sys.exit(1 if bad else 0)" "$3"
+}
+if run sb "$T/sb" "new widget"; then
+    if outside "$T/sb" 'sub/Makefile.am' 'sub/'; then ok "DD1 sub/Makefile.am's bare widget-alpha.c is sub/widget-alpha.c: the root file and the other widget-*.c are never claimed"; else no "DD1 a subdirectory manifest claimed a file outside its directory: $(lst "$T/sb")"; fi
+fi
+if run lbl "$T/lbl" "new widget"; then
+    if outside "$T/lbl" 'other/BUILD' 'other/'; then ok "DD1 other/BUILD's exports_files lists other/widget_*.cc, never the root files"; else no "DD1 other/BUILD claimed a root file: $(lst "$T/lbl")"; fi
+    if ! lst "$T/lbl" | grep -qF 'p="BUILD"'; then ok "DD4 the label //other:widget_alpha.cc names package other, not the root widget_alpha.cc"; else no "DD4 a //pkg: label was listed as the root file: $(lst "$T/lbl")"; fi
+fi
+cp -R "$FX/lbl" "$FX/lbl2" && sed -i.bak 's#//other:#:#' "$FX/lbl2/BUILD" && rm -f "$FX/lbl2/BUILD.bak"
+if run lbl2 "$T/lbl2" "new widget"; then
+    if lst "$T/lbl2" | grep -F 'p="BUILD"' | grep -qF 'of="widget_alpha.cc"'; then ok "DD4 twin: a bare :widget_alpha.cc label still lists the package's own file"; else no "DD4 twin: a bare label no longer lists: $(lst "$T/lbl2")"; fi
+fi
+if run np "$T/np" "new middleware"; then
+    if ! lst "$T/np" | grep -F 'p="package.json"' | grep -qF 'packages/b/'; then ok "DD2 the root package.json's directory tails never reach a file inside a nested package"; else no "DD2 the root package.json listed a nested package's file: $(lst "$T/np")"; fi
+fi
+cp -R "$FX/np" "$FX/np2" && rm -f "$FX/np2/packages/b/package.json"
+if run np2 "$T/np2" "new middleware"; then
+    if lst "$T/np2" | grep -F 'p="package.json"' | grep -qF 'packages/b/'; then ok "DD2 twin: without the nested package.json the root one lists by directory"; else no "DD2 twin: the root package.json no longer lists packages/b: $(lst "$T/np2")"; fi
+fi
+if run neg "$T/neg" "new middleware"; then
+    if ! has "$T/neg" '<listed'; then ok "DD3 \"!./src/...\" in package.json files is an exclusion, never a listing"; else no "DD3 a ./ negation was listed: $(lst "$T/neg")"; fi
+fi
+cp -R "$FX/neg" "$FX/neg2" && sed -i.bak 's#"!\./#"./#' "$FX/neg2/package.json" && rm -f "$FX/neg2/package.json.bak"
+if run neg2 "$T/neg2" "new middleware"; then
+    if lst "$T/neg2" | grep -F 'p="package.json"' | grep -qF 'of="src/middleware/'; then ok "DD3 twin: \"./src/...\" without the ! still lists"; else no "DD3 twin: ./ no longer lists: $(lst "$T/neg2")"; fi
 fi
 # RP1: the manifest is picked from the rows <sigs> EMITS (epmanifestcheck R1-R3): one emitted row = no sibling = no <listed>, no clause
 if run am "$T/rp1" "new widget" --pack-budget-bytes=1; then
