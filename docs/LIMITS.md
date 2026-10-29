@@ -409,6 +409,15 @@ Discloses: **none**
 | --- | --- | --- | --- |
 | `kForCtorHopCap` | `16` | — | callee names listed on ctor_calls=; the rest counted in ctor_calls_more= |
 
+### `src/fordispatchhop.h`
+
+Discloses: `capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kForDispatchCtorRows` | `4` | — | constructor-caller rows per call |
+| `kForDispatchHopRows` | `8` | — | candidate rows per call |
+
 ### `src/forfold.h`
 
 Discloses: **none**

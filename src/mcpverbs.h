@@ -41,6 +41,7 @@
 #include "slice.h"         // lane/tc-sliceat: the shared --slice / MCP slice def-use core (sliceBundleText — ONE emitter, two surfaces)
 #include "fielduses.h"     // the member-variable round: the ONE --uses=Owner.field renderer (renderFieldUses — CLI ≡ MCP)
 #include "testmap.h"       // lane/t10-mcp-coverage: writeAffectedReport — the shared --affected / `affected` verb renderer
+#include "fordispatchhop.h"   // mf1-nx wave 4: the dispatch element (the CLI twin's rows)
 #include "forgraphverb.h"   // FOR-ROUTE-DECLINED: the `for` verb's subject-read graph-verb block (the CLI twin's wrapper)
 #include "pathgaps.h"      // PATH-GAP: the shared gap analysis + clause of --path / path_between
 #include "hopbody.h"       // PATH-HOP-BODY: the middle hops' bodies of a reached path_between
@@ -2909,6 +2910,17 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
         return std::nullopt;
     }
     std::string out = std::move( *chosen.doc );
+    // mf1-nx wave 4 (fordispatchhop.h): the CLI --for's <dispatch> element, rows only (this surface serves no inline body), with its
+    // own clause beside it, before </ctx>, BEFORE the price (est_tokens prices the element); the default regime only (budget_tokens names a size, as the CLI's explicit --token-budget)
+    if( budgetTokens == 0 && isNameExactRouteTag( mcpRouteTag ) && forDispatchHopOn() && out.ends_with( "</ctx>" ) )
+    {
+        const std::vector<std::uint32_t> sites = forDispatchSites( ing, ix.g, dispatchHeadCandidates( ing, lensSurfaceIds ), task );
+        if( !sites.empty() )
+        {
+            const DispatchHopRender r = renderForDispatchHop( ing, ix.g, sites, BodyFoldInputs{ ing, task, kNoNode, lensRank, flRootArg, redact, false }, /*withBody=*/false );
+            out.insert( out.size() - 6, dispatchHopMcpXml( r ) );
+        }
+    }
     priceForTaskRoot( out, chosen.cut.rowDropCut && budgetTokens == 0 );   // R1: est_tokens=; over_ceiling="1" only past the runaway guard
     // FOR-ROUTE-DECLINED (src/forgraphverb.h): the CLI --for's <graph_verb endpoints="subject"> block, the same wrapper around
     // this surface's twin of the verb (path_between / find_referencing_symbols / connect), before </ctx>; priced like the CLI's (not)
