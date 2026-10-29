@@ -8,7 +8,7 @@ classified) with the definition holding each (`in=`, `ink=`), sites inside a fun
 paths and doc, shell or config files are counted (`comment=`, `test=`, `doc=`), never listed as a handler. The function holding a
 shown site is printed whole (`<b>`, at most three), or as an excerpt around the site when its body is over 3,000 bytes (`<x>`,
 `next=` the whole body); a body the answer already printed is not repeated (`body="above"`). Several sites are always listed
-with counts; nothing found, nothing printed. The element carries its own legend and its size (`bytes=`, not in `est_tokens`);
+with counts; a literal with no source site (found only in tests, docs or comments, or not at all) carries no block. The element carries its own legend and its size (`bytes=`, not in `est_tokens`);
 everything before it is byte-identical to the answer without it (`RIPWIRE_NO_LITERAL_ANCHOR=1`); `--json`, `--columnar`,
 `--candidates` and an explicit `--token-budget` carry none. A `--flag` spelling is not read as a literal. Gate:
 `test/forliteralcheck.sh`.

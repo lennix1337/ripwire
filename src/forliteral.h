@@ -25,7 +25,8 @@
 //     or <x> an excerpt of the lines around the site when that body is over kForLiteralBodyCapBytes (next= names the whole
 //     body); a body this answer already printed is not repeated (body="above" on its rows).
 // Several sites are always listed with counts: the block never picks one. floor="1" when the scan stopped early (budget,
-// unreadable files): every count is then a floor. Nothing found, nothing printed (never a "the literal is unused" claim).
+// unreadable files): every count is then a floor. No source site, nothing printed (a literal met only in tests, docs or comments
+// anchors nothing; never a "the literal is unused" claim).
 //
 // WHEN. The default regime of the XML dialect, a single root: an explicit --token-budget, --json, --columnar and --candidates
 // carry none. The literal is read from the task: the first "double-quoted" span of at least 6 bytes holding a letter and a space
@@ -362,9 +363,9 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
         rows = std::move( lines );
     }
     out.sites = rows.size();
-    if( rows.empty() && testHits + docHits + commentHits == 0 )
+    if( rows.empty() )
     {
-        return out;
+        return out;   // no source site: nothing to anchor on (test/doc/comment counts alone answer nothing; measured as noise, ld2-django-09)
     }
     const std::size_t ranked = std::min( rows.size(), kForLiteralRankedRows );
     for( std::size_t i = 0; i < ranked; ++i )
@@ -512,16 +513,12 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
     }
 
     std::string& x = out.xml;
-    x = "<!-- ripwire for lit: the task names a literal (s=, from its quotes or a CONST_SHAPED word; shape=) and this block is a "
-        "byte-exact scan of the index for it, after the answer above (unchanged, and these bytes are not in est_tokens: bytes= counts "
-        "them). ls rows are its sites in source files: k=string inside a string literal, k=code outside one (an "
-        "identifier or key use), k=? a file not classified; in= the innermost definition holding the site, ink= its kind; the CDATA "
-        "is the site's line (lines=a-b: a string site outside any function, with the lines after it); sites inside a function come "
-        "first. hits= every match; src= source lines holding it (shown= of them as rows, capped=1 if cut); comment= source comment "
-        "and docstring sites, test= test or bench paths, doc= docs, shell and config files: counted, never a handler row. b is the whole body of a "
-        "row's function, x an excerpt of its lines around the site (l= the excerpt, of= the body's lines, next= the whole body); "
-        "body=above: already printed in this answer. floor=1: the scan stopped early, so every count is a floor. next= lists every "
-        "site. -->";
+    x = "<!-- ripwire for lit: a byte-exact index scan for the literal the task names (s=; shape= quoted span or CONST word), after "
+        "the unchanged answer, not in est_tokens (bytes= is its size). ls = one source line holding it, in-function sites first: "
+        "k=string in a string literal, code outside one, ? unclassified; in=/ink= the enclosing definition and kind; CDATA its line "
+        "(lines=a-b: with the lines after it). hits= all matches, src= source lines (shown=, capped=1), comment= comments and "
+        "docstrings, test= test paths, doc= docs/config: counted, never rows. b = a shown site's whole function, x = an excerpt "
+        "(l=, of= the body's lines, next= the whole body); body=above: printed above. floor=1: scan stopped early, counts are floors; next= on lit lists every site. -->";
     x += "<lit s=\"";
     x += escapeXml( lit.text, esc );
     x += "\" shape=\"";

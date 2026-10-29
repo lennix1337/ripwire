@@ -12,14 +12,17 @@
 #            --json and --token-budget carry none (byte-identical to RIPWIRE_NO_LITERAL_ANCHOR=1).
 #
 # Arms:
-#   L1 [P] --for=APPTOOL_RENDER_MODE: shape="const"; config.py k="string" in="read_mode" and runner.py in="debug_mode" rows (src="2",
-#          several sites listed, never one picked); the read_mode body is printed whole
+#   L1 [P] --for=APPTOOL_RENDER_MODE: shape="const"; config.py k="string" in="read_mode", runner.py in="debug_mode" and the
+#          a_table.py rows (src="3", several sites listed, never one picked); the read_mode body is printed whole
+#   L1b [P] the first row is the site inside a function (config.py), not a_table.py, which the scan's path order puts first
+#   L1c [P] the a_table.py string site (outside any function) carries lines="3-5" and the entry after it
 #   L2 [P] the counts: comment="2" (a # comment and a docstring), test="1", doc="1"; none of those files' lines is an <ls> row
 #   L3 [P] a quoted message ("dependency cycle detected" error): shape="quoted", the check_cycle row; the ranked answer already
 #          prints check_cycle's body, so the row says body="above" and the body appears exactly once
 #   L4 [P] a body over the cap (big_dispatch): an <x> excerpt holding the site line, of= the body's lines, next="--expand=…big_dispatch"
 #   L5 [G] no literal: a lower-case word, a ONE-word quoted value ("full"), a backticked span, a 4-byte CONST (ABC_D): no <lit
 #   L6 [G] a CONST_SHAPED literal with no hit: no <lit (never a "the literal is unused" claim)
+#   L6b [P] a literal met only in a test path and a README (APPTOOL_TEST_ONLY): no <lit (counts alone anchor nothing)
 #   L7 [G] prefix identity: the answer minus the legend comment and <lit>…</lit> equals RIPWIRE_NO_LITERAL_ANCHOR=1 byte for byte
 #   L8 [G] --json and --token-budget=3000: no <lit, byte-identical to RIPWIRE_NO_LITERAL_ANCHOR=1
 #   L9 [G] bytes= is the element's own size (open tag to </lit>)
@@ -50,11 +53,18 @@ has(){ grep -qF -- "$2" <<<"$1"; }
 # ── L1 ──
 A="$( run --for=APPTOOL_RENDER_MODE )"; rc=$?
 L="$( lit <<<"$A" )"
-if [ "$rc" -eq 0 ] && [ -n "$L" ] && has "$L" 's="APPTOOL_RENDER_MODE" shape="const"' && has "$L" 'src="2"' \
+if [ "$rc" -eq 0 ] && [ -n "$L" ] && has "$L" 's="APPTOOL_RENDER_MODE" shape="const"' && has "$L" 'src="3"' \
    && has "$L" '<ls p="app/config.py" l="5" k="string" in="read_mode" ink="fn"' && has "$L" 'in="debug_mode"' \
    && has "$L" '<b t="fn" l="4" p="app/config.py" n="read_mode">'; then
-    ok "L1 const literal: both source sites listed (src=2), read_mode body printed"
+    ok "L1 const literal: every source site listed (src=3), read_mode body printed"
 else no "L1 const literal block wrong (rc=$rc): ${L:0:600}"; fi
+# ── L1b / L1c ──
+first="$( grep -o '<ls p="[^"]*" l="[0-9]*"' <<<"$L" | head -1 )"
+if [ "$first" = '<ls p="app/config.py" l="5"' ]; then ok "L1b a site inside a function is the first row (a_table.py sorts earlier by path)"
+else no "L1b first row is not the function site: $first"; fi
+if has "$L" '<ls p="app/a_table.py" l="3" k="string" lines="3-5">' && has "$L" '"OTHER": "flag",'; then
+    ok "L1c a string site outside any function carries the lines after it (lines=3-5)"
+else no "L1c table row context wrong: ${L:0:600}"; fi
 # ── L2 ──
 if has "$L" 'comment="2"' && has "$L" 'test="1"' && has "$L" 'doc="1"' && ! has "$L" 'p="tests/' && ! has "$L" 'p="README.md"' \
    && ! has "$L" 'in="helper"' && ! has "$L" 'l="7" k='; then
@@ -74,11 +84,11 @@ if has "$X" '<x p="app/big.py" n="big_dispatch"' && has "$X" 'of="1-' && has "$X
 else no "L4 excerpt wrong: ${X:0:600}"; fi
 # ── L5 / L6 ──
 neg=0
-for t in 'apptool_render_mode' '"full" mode' 'the `APPTOOL` switch' 'ABC_D toggle' 'NOPE_NOT_HERE_ANYWHERE'; do
+for t in 'apptool_render_mode' '"full" mode' 'the `APPTOOL` switch' 'ABC_D toggle' 'NOPE_NOT_HERE_ANYWHERE' 'APPTOOL_TEST_ONLY'; do
     o="$( run "--for=$t" )"
     if has "$o" '<lit '; then neg=1; no "L5/L6 a block rode on: $t"; fi
 done
-[ "$neg" -eq 0 ] && ok "L5/L6 no block: lower-case word, one-word quote, backticked word, short CONST, CONST with no hit"
+[ "$neg" -eq 0 ] && ok "L5/L6/L6b no block: lower-case word, one-word quote, backticked word, short CONST, CONST with no hit, test/doc-only CONST"
 # ── L7 ──
 for t in APPTOOL_RENDER_MODE '"dependency cycle detected" error' APPTOOL_BIG_FLAG; do
     a="$( run "--for=$t" | python3 -I -c 'import sys,re;s=sys.stdin.read();print(re.sub(r"<!-- ripwire for lit:.*?-->(<lit .*?</lit>)","",s,flags=re.S),end="")' )"
