@@ -543,6 +543,30 @@ inline std::vector<std::size_t> linesNaming( const std::vector<ManifestLine>& li
     return mine;
 }
 
+// Does a package-family manifest (package.json, jsr.json, deno.json, Cargo.toml) of its own sit in a directory of `rel` strictly below the
+// manifest's directory `mdir`? Then `rel` belongs to that NESTED package: the outer package's directory tails (build outputs, export
+// keys) do not name it.
+inline bool inNestedPackage( const IngestResult& ing, std::uint32_t fileId, std::string_view rel, std::string_view mdir )
+{
+    std::filesystem::path disk = std::filesystem::path( diskPath( ing, fileId ) ).parent_path();
+    std::string_view      dir  = rel.substr( 0, rel.rfind( '/' ) == std::string_view::npos ? 0 : rel.rfind( '/' ) );
+    while( dir.size() > mdir.size() )
+    {
+        for( const char* name : { "package.json", "jsr.json", "deno.json", "Cargo.toml" } )
+        {
+            std::error_code ec;
+            if( std::filesystem::is_regular_file( disk / name, ec ) && !ec )
+            {
+                return true;
+            }
+        }
+        const std::size_t cut = dir.rfind( '/' );
+        dir  = cut == std::string_view::npos ? std::string_view() : dir.substr( 0, cut );
+        disk = disk.parent_path();
+    }
+    return false;
+}
+
 // One manifest's hit: the first shown file it names (and those lines), and the other shown files that are its SIBLINGS: named in the
 // same top-level stanza as one of its lines (a registry lists the exemplar's siblings together; `add_executable(ninja src/ninja.cc)` and
 // a different `add_library(libninja …)` are not a list). found=false: no shown file is named.
@@ -555,7 +579,11 @@ inline bool manifestHit( const IngestResult& ing, const std::vector<std::uint32_
     {
         const std::string_view rel = rootRelPath( ing, files[fi] );
         bool                   dirOnly = true;
-        std::vector<std::size_t> mine = rel == man.rel ? std::vector<std::size_t>{} : linesNaming( h.lines, rel, man.dir, man.dirTokens, dirOnly );   // never itself
+        std::vector<std::size_t> mine;   // never the manifest itself
+        if( rel != man.rel )
+        {
+            mine = linesNaming( h.lines, rel, man.dir, man.dirTokens && !inNestedPackage( ing, files[fi], rel, man.dir ), dirOnly );
+        }
         if( mine.empty() )
         {
             continue;
