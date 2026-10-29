@@ -416,7 +416,11 @@ for id in 7 8 9 10 11 12 13 14 15 16; do
         *) nfbad="$nfbad id=$id:'${em:0:160}'" ;;
     esac
 done
-[ -z "$nfbad" ] && ok "(B6e) 10 not-found / refusal errors from the cut index (find_symbol, refs, impact, uses, mentions, owners, slice, path_between, connect, an unknown name) each name the partial index, its file count and the override" || no "(B6e) errors without the disclosure:$nfbad"
+if [ -z "$nfbad" ]; then
+    ok "(B6e) 10 not-found / refusal errors from the cut index (find_symbol, refs, impact, uses, mentions, owners, slice, path_between, connect, an unknown name) each name the partial index, its file count and the override"
+else
+    no "(B6e) errors without the disclosure:$nfbad"
+fi
 # (B6e2) the error is still the not-found it was (the disclosure is appended, nothing replaced): the echo and the code survive
 case "$( mcp_field "$TMP/b6.out" 7 error )" in "symbol not found: 'd_17'"*) ok "(B6e2) the not-found keeps its own wording ahead of the disclosure";; *) no "(B6e2) id=7: $( mcp_field "$TMP/b6.out" 7 error | head -c 200 )";; esac
 # (B6f) near miss: a request for ANOTHER, whole index must not inherit the earlier index's cut. $HOMEDIR/proj has 1 file, so
