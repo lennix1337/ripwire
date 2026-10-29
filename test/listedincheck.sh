@@ -141,7 +141,7 @@ if run am "$T/rp1" "new widget" --pack-budget-bytes=1; then
     if grep -q '<sigs shown="1" ' "$T/rp1" && ! has "$T/rp1" '<listed' && ! has "$T/rp1" '; listed p= of='; then ok "RP1 one <sigs> row: no <listed> and no clause over rows <sigs> dropped"; else no "RP1 <listed> rides over a row <sigs> dropped: $(lst "$T/rp1")"; fi
 fi
 # Z1: a manifest above the crawl size ceiling (4 MB) is not read
-cp -R "$FX/am" "$FX/big" && python3 -c "
+cp -R "$FX/am" "$FX/big" && rm -f "$FX/big/Makefile" && python3 -c "
 import sys
 p=sys.argv[1]; t=open(p).read(); open(p,'w').write(t+'# '+'x'*(4*1024*1024+100)+'\n')" "$FX/big/Makefile.am"
 if run big "$T/z1" "new widget"; then
