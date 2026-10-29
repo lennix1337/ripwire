@@ -688,6 +688,11 @@ PREREVIEW = '''def _stop_group(p):
 # run_gate() as e442a5d8 had it: the stop was checked only after a STOP_POLL_SEC wait, so a gate admitted as the signal
 # was recorded ran that long before anything looked. Re-spelled 2026-09-11 against the file-backed capture; the defect is
 # the ORDER of the two checks, not how the output is collected.
+# The first wait is 3.0 s here, not STOP_POLL_SEC (0.5 s): the arm needs the probe gate (bash start + a 0.3 s sleep, then its
+# "late" line) to get past its 0.3 s mark INSIDE that wait. At 0.5 s the 0.2 s of slack is eaten by process starts on a loaded host
+# (the (I control) admission arm FAILED 3 of 3 runs at load average 9-13 on unmodified main 12056c16, "late recorded: False") and
+# the mutant was stopped before it could show its defect. A longer wait changes no ordering: the defect is still
+# "wait first, look at the stop second"; the fixed run_gate() checks the stop before any wait and is not affected.
 READFIRST = '''def run_gate(argv, env, limit):
     deadline = time.monotonic() + limit
     fd, capture = tempfile.mkstemp(prefix="ripwire-pargates-capture-", suffix=".out")
@@ -697,7 +702,7 @@ READFIRST = '''def run_gate(argv, env, limit):
              subprocess.Popen(argv, cwd=root, env=env, stdout=fh, stderr=subprocess.STDOUT,
                               start_new_session=True) as p:
             while True:
-                if _wait_for(p, max(0.0, min(STOP_POLL_SEC, deadline - time.monotonic()))):
+                if _wait_for(p, max(0.0, min(3.0, deadline - time.monotonic()))):
                     return p.returncode, _capture_read(capture), "exited"
                 if stop_signal is not None:
                     _stop_group(p)

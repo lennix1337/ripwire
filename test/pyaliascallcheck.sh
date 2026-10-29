@@ -13,6 +13,10 @@
 #     c_cond.py      if X: from m import f as g ; g()                   one conditional import: the only target it can bind
 #     c_class.py     from m import Widget as Gadget ; Gadget()          a class (target m.py:9 Widget)
 #     c_shadow.py    names = [g for g in fs] ; return g()               a comprehension target does not leak: the call after it is the import
+#     c_override.py  mo_ga.py: f's def + a module `def __getattr__`     PEP 562: __getattr__ answers only names m lacks, so it cannot
+#                                                                       override the def (PY-ALIAS-SPLIT-MARKER; target mo_ga.py:1);
+#                    mo_gadeco.py: the same with a decorated def        a decorator is not a conditional (target mo_gadeco.py:6)
+#     c_getattr.py   the CALLER file defines `__getattr__`              never consulted for a name the file binds (target m.py:1)
 #   NEAR MISSES (must NOT bind m.py's f)
 #     c_param.py     def call_param(g): g()                             a parameter shadows the import
 #     c_local.py     g = other ; g()                                    a local assignment shadows it
@@ -30,7 +34,9 @@
 #     c_override.py  the TARGET module rebinds f after its def: mo_import.py (`from fast_over import f`), mo_try.py (try-import),
 #                    mo_star.py (`from mstar import *` with an f), mo_assign.py (`f = other`), mo_dyn.py (`globals()["f"] = len`),
 #                    mo_ostar.py (a star import of a file outside the tree: unknown), mo_global.py (`global f` in a def): m.f is not
-#                    provably the live name, so no pin (the unchanged ladder); each caller must not reach its target's line-1 f
+#                    provably the live name, so no pin (the unchanged ladder); each caller must not reach its target's line-1 f.
+#                    With a module `__getattr__`: mo_gacond.py (f's def under `if`), mo_gatry.py (under `try`) may not run, so
+#                    __getattr__ may answer f; mo_gadyn.py (`globals()["f"] = len` too) still withholds (PY-ALIAS-SPLIT-MARKER)
 #     c_shadow.py    [g() for g in fs] / list(g() for g in fs) / lambda g: g()   a comprehension target or lambda parameter named g
 #                    covers the call (the site-spanned records localNameSet skips)
 #     c_member.py    o.gm() / self.gm() through the alias spelling       a member call is not the bare name: never m.py:1
@@ -60,7 +66,7 @@ callees(){ ( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --callees="$1" --lege
 # ── 0. presence: every fixture file parses (a fixture that fails to parse would pass the near misses inert) ──
 ( cd "$FIX" || exit 1; "$BIN" "$FIX" --no-cache --skipped --legend=compact ) >"$TMP/skipped" 2>/dev/null
 perl -pe 's/<!--.*?-->//g' "$TMP/skipped" >"$TMP/skipped.body"
-if ! grep -q 'degraded_parse="0"' "$TMP/skipped.body" || ! grep -q 'indexed="37"' "$TMP/skipped.body" || grep -q '<f \|<h ' "$TMP/skipped.body"; then no "a fixture file was skipped or degraded"; sed 's/^/        | /' "$TMP/skipped" | head -5
+if ! grep -q 'degraded_parse="0"' "$TMP/skipped.body" || ! grep -q 'indexed="43"' "$TMP/skipped.body" || grep -q '<f \|<h ' "$TMP/skipped.body"; then no "a fixture file was skipped or degraded"; sed 's/^/        | /' "$TMP/skipped" | head -5
 else ok "every fixture file indexed with no parse degrade"; fi
 
 # ── 1. positive arms ──
@@ -80,6 +86,18 @@ else no "call_class: expected m.py:9 Widget"; sed 's/<!--.*-->//; s/^/        | 
 if grep -q 'n="call_plain"' "$TMP/callers" && grep -q 'n="call_cond"' "$TMP/callers"; then ok "--callers=m.py:f names call_plain and call_cond"
 else no "--callers=m.py:f misses an aliased caller"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/callers"; fi
 
+# ── 1b. a module `__getattr__` cannot override a def that exists (PY-ALIAS-SPLIT-MARKER): target side mo_ga.py:1, caller side m.py:1 ──
+for a in "call_mo_ga mo_ga.py:1" "call_mo_gadeco mo_gadeco.py:6" "call_cgetattr m.py:1"; do
+    set -- $a
+    callees "$1"
+    row=$( grep -o "<s [^>]*p=\"$2\"[^>]*/>" "$TMP/$1" )
+    if [ -n "$row" ] && ! printf '%s' "$row" | grep -q 'via=' && ! grep -q 'p="decoy.py' "$TMP/$1"; then
+        ok "$1 binds $2 f as a proven edge although a module __getattr__ is present"
+    else
+        no "$1: expected $2 f (proven, no via=) and no decoy row"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/$1"
+    fi
+done
+
 # ── 2. near misses: never m.py's f ──
 for c in call_param call_local call_rebind call_dynamic call_star call_twomod call_fnimport call_inner call_disagree call_reexport call_nested call_external call_twice call_comp call_gen call_lambda call_obj call_self; do
     callees "$c" || continue
@@ -87,6 +105,15 @@ for c in call_param call_local call_rebind call_dynamic call_star call_twomod ca
     if grep -q 'p="m.py:1"\|p="m2.py:1"\|p="m.py:10"\|p="m3.py\|p="jsonish.py' "$TMP/$c" || { [ "$c" = call_disagree ] && grep -q 'p="m.py:5"' "$TMP/$c"; }; then
         no "$c: bound through the renamed import (must stay undecided)"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/$c"
     else ok "$c: no import-pinned edge"; fi
+done
+
+# ── 2a. a module `__getattr__` with a def that may not run (if / try), or with a globals() write: no pin ──
+for a in "call_mo_gacond mo_gacond.py:4" "call_mo_gatry mo_gatry.py:2" "call_mo_gadyn mo_gadyn.py:1"; do
+    set -- $a
+    callees "$1"
+    if grep -q "p=\"$2\"" "$TMP/$1"; then
+        no "$1: pinned $2 though __getattr__ may answer f (must stay undecided)"; sed 's/<!--.*-->//; s/^/        | /' "$TMP/$1"
+    else ok "$1: no pin to $2"; fi
 done
 
 # ── 2b. the target module rebinds f after its def: a def-line pin to mo_*.py:1 would name the overridden def ──

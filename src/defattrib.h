@@ -980,15 +980,18 @@ struct PathEndpointBinding
 // How many definitions an endpoint really names: its groups (a definition with its declarations is one), less the untied
 // declarations (defGroupUntied) — a prototype the identity rule cannot prove is the same function is no second candidate here,
 // exactly as it is silent on a 1-hop answer no row ties it to.
+inline std::size_t candidateGroupCount( const DefGroups& groups )
+{
+    const std::size_t untied = std::size_t( std::count( groups.untied.begin(), groups.untied.end(), char( 1 ) ) );
+    return std::max<std::size_t>( 1, groups.size() - untied );
+}
 inline std::size_t endpointDefinitionCount( const IngestResult& ing, std::span<const NodeId> defs )
 {
     if( defs.size() < 2 )
     {
         return defs.size();
     }
-    const DefGroups groups = defGroupsOf( ing, defs );
-    const std::size_t untied = std::size_t( std::count( groups.untied.begin(), groups.untied.end(), char( 1 ) ) );
-    return std::max<std::size_t>( 1, groups.size() - untied );
+    return candidateGroupCount( defGroupsOf( ing, defs ) );
 }
 // a hop row (i > 0) whose edge into it is a split arm (Q1: on every path, whatever the endpoints' defs=)
 inline bool pathHopSplitArm( const Graph& g, std::span<const NodeId> path, std::size_t i ) noexcept

@@ -1,7 +1,7 @@
 #pragma once
 // forgraphverb.h — FOR-ROUTE-DECLINED: a --for task SPELLED as a graph question (`path from A to B`, `callers of X`,
 // `common callers of A and B`) gets the graph verb it names appended after its ordinary answer, run on the
-// already-built index (CLI src/verbs_for.h appendSubjectGraphVerb, MCP `for` src/mcpverbs.h forTaskText — one wrapper).
+// already-built index (CLI src/verbs_for.h appendSubjectGraphVerbBlock, MCP `for` src/mcpverbs.h forTaskText — one wrapper).
 //
 // WHY. The ranked --for bundle answers these by subtoken overlap and misses the chain between the two names; the
 // verb answers them from the call graph. Measured (ORCH reports/for-route-s0.md, train-39 binary, LARGE-DEV): appending
