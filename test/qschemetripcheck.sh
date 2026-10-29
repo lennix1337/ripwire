@@ -76,6 +76,8 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   -> the pin above). Watched text: kParserVer 226 -> 228 and kCacheVersion 40 -> 41 — both PLACEHOLDERS
 #   above every live value (the train renumbers them), with quality.h's two mirrors moved in the feature commit. The
 #   kMinRefRecordBytes 60 -> 61 change rode with them. kQSnapCacheScheme stays 22: no watched quality.h function moved.
+# 2026-10-28, lane iface-peel: RE-PINNED ONCE with UPDATE_GOLDEN=1 after kParserVer 251 -> 259 (a PLACEHOLDER; the train renumbers it and
+#   re-pins again) with quality.h's kIngestParserVerMirror in the same commit. kQSnapCacheScheme stays: no watched quality.h function moved.
 # 2026-10-25, #437 maintainer finish (#228): RE-PINNED ONCE with UPDATE_GOLDEN=1 (e0519551… -> 957e1fb2…) after pythonFrameworkInvokedSymbol
 #   gained the pytest xunit hooks (kXunitHooks, shared with pythonRunnerRoot) and pythonReceiverParameters / pythonDispatchRequests moved
 #   from the frameworkEntryHooks fact to its own closureReceiverDispatch fact (no behavior change). kQSnapCacheScheme stays 23, the

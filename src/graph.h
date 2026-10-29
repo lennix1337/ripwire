@@ -3593,7 +3593,8 @@ inline std::string_view stdElementType( std::string_view written ) noexcept
 // `std::unique_ptr<ns::List> up; up->size()` (kCppStdArrowTemplates); a `->` through an in-tree class with its own
 // `operator->`, `SP<ns::List>& p; p->size()`, or through a class the tree does not define, `QSharedPointer<ns::List>& p` —
 // their pointee is unrecorded; a `->` through a typedef or using alias whose recorded target is one of those, `typedef
-// std::shared_ptr<ns::List> ListSP; ListSP p; p->size()` (the alias record keeps no template argument, so `typedef
+// std::shared_ptr<ns::List> ListSP; ListSP p; p->size()` (the alias record's target keeps no template argument — a MEMBER
+// written such an alias is typed by its pointee instead, lane iface-peel, resolve.h smartPointerAliasPointees — so `typedef
 // std::unique_ptr<std::string> StrUP` keeps the hedge too); `HashMap<K, V> m; m.find( k )` reaching UnionFind::find by name,
 // `std::unique_ptr<std::string> p; p->size()`, `std::vector<int>* pv; pv->size()` and `IntVec* p; p->size()` through
 // `typedef std::vector<int> IntVec` do not keep it); ONE element access of a container whose recorded written type is a std
