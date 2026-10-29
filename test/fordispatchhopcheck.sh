@@ -41,6 +41,7 @@
 #   S4 [P] MCP for: est_tokens prices the element
 #
 #   D1 [P] fix round 2: a task receiver bound by name (never declined) does not answer another receiver's declined call (fixture recvbound)
+#   D2 [P] a non-test-file double named by tests and an uncalled helper stays demoted (fixture dumpfs)
 #
 # Usage:  bash test/fordispatchhopcheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/fordispatchhopcheck.sh
 # BIN is $1, else RIPWIRE_BIN, else build/ripwire; the first output line names the binary used. Exits non-zero on any failure.
@@ -63,7 +64,7 @@ cd "$ROOT"
 F="test/fordispatchhopfix"
 [ -f "$F/cpp/loader.cc" ] && [ -f "$F/cpp1/tests/loader_test.cc" ] && [ -f "$F/rs/src/pick.rs" ] && [ -f "$F/cppwrap/cached.cc" ] && [ -f "$F/ladder/main.py" ] \
     && [ -f "$F/factory/pg_store.cc" ] && [ -f "$F/double/loader_test.cc" ] && [ -f "$F/recv/loader.cc" ] && [ -f "$F/initm/loader.cc" ] \
-    && [ -f "$F/ts/src/loader.ts" ] && [ -f "$F/alltest/tests/fakes.cc" ] && [ -f "$F/recvbound/rc.cc" ] || { echo "fixture $F missing"; exit 2; }
+    && [ -f "$F/ts/src/loader.ts" ] && [ -f "$F/alltest/tests/fakes.cc" ] && [ -f "$F/recvbound/rc.cc" ] && [ -f "$F/dumpfs/src/test.cc" ] || { echo "fixture $F missing"; exit 2; }
 
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"; mkdir -p "$HOME"
@@ -244,6 +245,11 @@ done
 run "$F/recvbound" "--for=L::Load y_->F" >"$TMP/d1y"
 if has "$( hop "$TMP/d1y" )" 'call="y_-&gt;F"' && has "$( hop "$TMP/d1y" )" 'n="Lru::F"'; then ok "(D1) the declined receiver y_->F is still answered"
 else no "(D1) y_->F lost its element: [$( hop "$TMP/d1y" )]"; fi
+run "$F/dumpfs" "--for=Builder::Run disk_->ReadFile" >"$TMP/d2"
+HD2="$( hop "$TMP/d2" )"
+if has "$HD2" 'cands="2" shown="1" test="1"' && has "$HD2" 'n="RealDisk::ReadFile"' && ! has "$HD2" 'VirtualFS' && has "$HD2" 'p * 7 + 1'; then
+    ok "(D2) a double in a non-test file named only by tests and an UNCALLED helper stays demoted (test=1), the other candidate's body rides"
+else no "(D2) uncalled helper un-demoted the double: [$HD2]"; fi
 
 # ── S4 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 est(){ python3 -c 'import re,sys; m=re.search(r"est_tokens=\"(\d+)\"", sys.stdin.read()); print(m.group(1) if m else "")'; }
