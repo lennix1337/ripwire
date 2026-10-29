@@ -9,9 +9,9 @@
 // the source files. Measured before this code (reports/manifest-noncode.md Stage 0): mf1-tmux-01, mf1-hono-03 and ld-envoy-07
 // printed no manifest line although the shown exemplar files ARE listed in one.
 //
-// WHAT. <listed p= of= by=[ also= also_total=][ lines_total= capped="1"]><ln l=>LINE</ln>…</listed>, after the file tail and
-// beside <ep>: one element per manifest (at the root or an ancestor directory of a shown file) with at least one line naming a
-// shown file. of= the FIRST shown file (rank order) the manifest names, and every line naming it, byte-exact (XML-escaped), each
+// WHAT. <listed p= of= by= also=[ also_total=][ lines_total= capped="1"]><ln l=>LINE</ln>…</listed>, after the file tail and
+// beside <ep>: one element per manifest (at the root or an ancestor directory of a shown file) whose lines name TWO or more shown
+// files — a list of the exemplar's siblings; a manifest naming one shown file (package.json "main") is not one (fire table koa/fastify). of= the FIRST shown file (rank order) the manifest names, and every line naming it, byte-exact (XML-escaped), each
 // preceded once by its nearest less-indented line above (the stanza it sits in: the `dist_tmux_SOURCES = \` assignment, the
 // `"./timing": {` key, the `EXTENSIONS = {` dict). by="path" the line names of='s path (relative to the manifest's directory, or
 // root-relative); by="dir" it names of='s directory by a tail of two or more path segments (package.json lists a build output
@@ -20,14 +20,18 @@
 // non-name character on both sides), so `middleware/log` never matches `middleware/logger`. gen="1": the manifest says it was
 // generated (an automake Makefile.in, a configure-written Makefile) — the file to edit is its source.
 //
-// GATE (present-only): the task has a creation word (new, add, adding, register, registration, create, creating, plugin, plugins,
-// extension, extensions) as a whole word (not inside an identifier: `Plan::AddTarget`, `new_local`, `createX` do not fire); the DEFAULT regime and the XML dialect only, as the caller hop and
+// GATE (present-only): the task has a creation word (new, add, adding, register, registration, plugin, plugins, extension,
+// extensions) as a whole word (not inside an identifier: `Plan::AddTarget`, `new_local`, `createX` do not fire); the DEFAULT regime and the XML dialect only, as the caller hop and
 // <ep>. RIPWIRE_NO_LISTED_IN (any value) turns it off — the A/B handle.
 // FLOORS: a manifest that lists a file by a glob or a variable (`$(wildcard src/*.c)`, `glob(["*.cc"])`), a list keyed by a
 // registered NAME string (a man page's command list, a docs index — mf1-lit's literal anchors), a manifest outside the shown
-// files' ancestor directories, a multi-root run. Files under vendor/, third_party/, node_modules/ are never read (vendored).
+// files' ancestor directories, a multi-root run. Files under vendor/, third_party/, node_modules/, bower_components/ are vendored: neither a shown file
+// there nor a manifest there is read.
 
+#include "darkflags.h"    // forEachLine — the one line splitter over raw file text (CR stripped)
 #include "docparse.h"     // readRegularFile — a fixed-name file in the tree, refused when it is not a regular file
+#include "lintrules.h"    // lintdetail::indentOf — the leading-blank count of a raw line
+#include "taskroute.h"    // taskroute::wordByte — the word byte (alnum or _)
 #include "model.h"        // IngestResult, rootRelPath, diskPath
 #include "serialize.h"    // escapeXml, truncateUtf8WithEllipsis
 
@@ -75,8 +79,9 @@ namespace listeddetail
 // symbol, it does not ask to add one. "hono/<new-middleware>" → new.
 inline bool isCreationTask( std::string_view task )
 {
-    static constexpr std::string_view kWords[] = { "new", "add", "adding", "register", "registration", "create", "creating",
-                                                    "plugin", "plugins", "extension", "extensions" };
+    // Not "create": "how does Koa create the per-request ctx" asks how code runs, not what to add (fire table koa-13).
+    static constexpr std::string_view kWords[] = { "new", "add", "adding", "register", "registration", "plugin", "plugins", "extension",
+                                                    "extensions" };
     std::string word;
     const auto  flush = [ & ]()
     {
@@ -109,8 +114,7 @@ inline bool isCreationTask( std::string_view task )
 
 inline bool isNameChar( char c ) noexcept
 {
-    const unsigned char u = static_cast<unsigned char>( c );
-    return std::isalnum( u ) || c == '_' || c == '-';
+    return taskroute::wordByte( c ) || c == '-';   // a path segment's name bytes: a word byte or '-' (cmd-new-session)
 }
 
 // `tok` occurs in `line` bounded on both sides: the byte before is not a name character or '.', the byte after is not a name
@@ -142,7 +146,8 @@ inline std::size_t segmentCount( std::string_view p ) noexcept
 
 inline bool isVendoredDir( std::string_view dir ) noexcept
 {
-    for( const std::string_view seg : { std::string_view( "vendor" ), std::string_view( "third_party" ), std::string_view( "node_modules" ) } )
+    for( const std::string_view seg : { std::string_view( "vendor" ), std::string_view( "third_party" ), std::string_view( "node_modules" ),
+                                        std::string_view( "bower_components" ) } )
     {
         if( dir == seg || dir.starts_with( std::string( seg ) + "/" ) || dir.find( "/" + std::string( seg ) + "/" ) != std::string_view::npos
             || dir.ends_with( "/" + std::string( seg ) ) )
@@ -264,91 +269,39 @@ inline std::vector<Token> tokensFor( std::string_view fileRel, std::string_view 
 inline std::vector<ManifestLine> splitLines( std::string_view text )
 {
     std::vector<ManifestLine> lines;
-    std::uint32_t             n = 0;
-    std::size_t               start = 0;
-    while( start <= text.size() )
-    {
-        std::size_t end = text.find( '\n', start );
-        if( end == std::string_view::npos )
-        {
-            end = text.size();
-        }
-        std::string_view l = text.substr( start, end - start );
-        if( !l.empty() && l.back() == '\r' )
-        {
-            l.remove_suffix( 1 );
-        }
-        ++n;
-        if( !( end == text.size() && l.empty() ) )
-        {
-            lines.push_back( { n, l } );
-        }
-        if( end == text.size() )
-        {
-            break;
-        }
-        start = end + 1;
-    }
+    darkflags::forEachLine( text, [ & ]( std::string_view l, std::uint32_t n ) { lines.push_back( { n, l } ); } );
     return lines;
-}
-
-inline std::size_t indentOf( std::string_view l ) noexcept
-{
-    std::size_t i = 0;
-    while( i < l.size() && ( l[i] == ' ' || l[i] == '\t' ) )
-    {
-        ++i;
-    }
-    return i;
 }
 
 inline bool isCommentLine( std::string_view l ) noexcept
 {
-    const std::size_t i = indentOf( l );
+    const std::size_t i = lintdetail::indentOf( l );
     return i < l.size() && ( l[i] == '#' || l.substr( i ).starts_with( "//" ) );
 }
 
-// Which token of `toks` the line names (first match, specificity order), or -1.
-inline int lineMatches( std::string_view line, const std::vector<Token>& toks )
+// The token of `toks` the line names (first match, specificity order), or nullptr.
+inline const Token* lineMatches( std::string_view line, const std::vector<Token>& toks )
 {
-    for( std::size_t k = 0; k < toks.size(); ++k )
-    {
-        if( boundedFind( line, toks[k].text ) )
-        {
-            return int( k );
-        }
-    }
-    return -1;
+    const auto it = std::ranges::find_if( toks, [ & ]( const Token& t ) { return boundedFind( line, t.text ); } );
+    return it == toks.end() ? nullptr : &*it;
 }
 
 }   // namespace listeddetail
 
-// The <listed> elements for the shown rows (rank order). Empty unless the task is a creation task and a manifest names a shown file.
-inline ListedRender renderForListedIn( const IngestResult& ing, std::span<const NodeId> shown, std::string_view task )
+namespace listeddetail
 {
-    using namespace listeddetail;
-    ListedRender out;
-    if( ing.crawlRoot.empty() || shown.empty() || !isCreationTask( task ) )
-    {
-        return out;
-    }
-    // distinct shown files, rank order
-    std::vector<std::uint32_t> files;
-    for( const NodeId id : shown )
-    {
-        if( id < ing.symbols.size() && std::ranges::find( files, ing.symbols[id].fileId ) == files.end() && files.size() < kListedShownFiles )
-        {
-            files.push_back( ing.symbols[id].fileId );
-        }
-    }
-    // the manifests of every shown file's directory and ancestors, nearest first, each directory once
+
+// The manifests of every shown file's directory and ancestors, nearest first, each directory once (vendored directories never read).
+inline std::vector<Manifest> manifestsAbove( const IngestResult& ing, const std::vector<std::uint32_t>& files )
+{
     std::vector<std::string> seenDirs;
     std::vector<Manifest>    manifests;
     for( const std::uint32_t f : files )
     {
         const std::string_view rel  = rootRelPath( ing, f );
         std::filesystem::path  disk = std::filesystem::path( diskPath( ing, f ) ).parent_path();
-        std::string_view       dir  = rel.substr( 0, rel.rfind( '/' ) == std::string_view::npos ? 0 : rel.rfind( '/' ) );
+        const std::size_t      cut  = rel.rfind( '/' );
+        std::string_view       dir  = rel.substr( 0, cut == std::string_view::npos ? 0 : cut );
         while( true )
         {
             if( std::ranges::find( seenDirs, dir ) == seenDirs.end() )
@@ -368,140 +321,166 @@ inline ListedRender renderForListedIn( const IngestResult& ing, std::span<const 
             disk = disk.parent_path();
         }
     }
-    struct Hit
+    return manifests;
+}
+
+struct Hit
+{
+    std::size_t               m = 0;
+    std::size_t               firstFile = 0;   // index into files
+    bool                      byDir = false;
+    std::vector<std::size_t>  lineIx;          // matched lines of the first file (indices into lines)
+    std::vector<std::string>  also;            // other shown files named
+    std::vector<ManifestLine> lines;
+};
+
+// The non-comment lines of `lines` naming `rel` (from a manifest in `mdir`), and whether every one names only its directory.
+inline std::vector<std::size_t> linesNaming( const std::vector<ManifestLine>& lines, std::string_view rel, std::string_view mdir, bool& dirOnly )
+{
+    const std::vector<Token> toks = tokensFor( rel, mdir );
+    std::vector<std::size_t> mine;
+    dirOnly = true;
+    for( std::size_t li = 0; li < lines.size(); ++li )
     {
-        std::size_t               m = 0;
-        std::size_t               firstFile = 0;   // index into files
-        bool                      byDir = false;
-        std::vector<std::size_t>  lineIx;          // matched lines of the first file (indices into lines)
-        std::vector<std::string>  also;            // other shown files named
-        std::vector<ManifestLine> lines;
+        const Token* k = isCommentLine( lines[li].text ) ? nullptr : lineMatches( lines[li].text, toks );
+        if( k != nullptr )
+        {
+            mine.push_back( li );
+            dirOnly = dirOnly && k->isDir;
+        }
+    }
+    return mine;
+}
+
+// One manifest's hit: the first shown file it names (and those lines), the other shown files it names. found=false: none.
+inline bool manifestHit( const IngestResult& ing, const std::vector<std::uint32_t>& files, const Manifest& man, Hit& h )
+{
+    h.lines    = splitLines( man.text );
+    bool found = false;
+    for( std::size_t fi = 0; fi < files.size(); ++fi )
+    {
+        const std::string_view rel = rootRelPath( ing, files[fi] );
+        bool                   dirOnly = true;
+        std::vector<std::size_t> mine = rel == man.rel ? std::vector<std::size_t>{} : linesNaming( h.lines, rel, man.dir, dirOnly );   // never itself
+        if( mine.empty() )
+        {
+            continue;
+        }
+        if( found )
+        {
+            h.also.emplace_back( rel );
+            continue;
+        }
+        found       = true;
+        h.firstFile = fi;
+        h.byDir     = dirOnly;
+        h.lineIx    = std::move( mine );
+    }
+    return found;
+}
+
+// The printed line indices: each matched line, preceded once by its stanza opener (the nearest less-indented, non-blank line above;
+// none when that line is a lone bracket).
+inline std::vector<std::size_t> printedLines( const Hit& h )
+{
+    std::vector<std::size_t> print;
+    const auto addOnce = [ & ]( std::size_t li )
+    {
+        if( std::ranges::find( print, li ) == print.end() )
+        {
+            print.push_back( li );
+        }
     };
-    std::vector<Hit> hits;
+    for( const std::size_t li : h.lineIx )
+    {
+        const std::size_t ind = lintdetail::indentOf( h.lines[li].text );
+        for( std::size_t up = li; ind > 0 && up-- > 0; )
+        {
+            const std::string_view t     = h.lines[up].text;
+            const std::size_t      upInd = lintdetail::indentOf( t );
+            if( upInd < t.size() && upInd < ind )
+            {
+                if( lintdetail::trim( t ).size() > 1 )   // a bare `{` / `[` opens the whole file: it names no stanza
+                {
+                    addOnce( up );
+                }
+                break;
+            }
+        }
+        addOnce( li );
+    }
+    std::ranges::sort( print );
+    return print;
+}
+
+inline void appendListed( std::string& x, const IngestResult& ing, const std::vector<std::uint32_t>& files, const Manifest& man, const Hit& h,
+                          std::string_view manifestsCap, std::vector<char>& esc )
+{
+    const std::vector<std::size_t> print = printedLines( h );
+    x += std::format( "<listed p=\"{}\"", escapeXml( man.rel, esc ) );
+    x += std::format( " of=\"{}\" by=\"{}\"", escapeXml( rootRelPath( ing, files[h.firstFile] ), esc ), h.byDir ? "dir" : "path" );
+    x += man.gen ? " gen=\"1\"" : "";
+    if( !h.also.empty() )
+    {
+        std::string also;
+        for( std::size_t a = 0; a < h.also.size() && a < kListedAlsoNames; ++a )
+        {
+            also += ( a ? "," : "" ) + h.also[a];
+        }
+        x += std::format( " also=\"{}\"", escapeXml( also, esc ) );
+        x += h.also.size() > kListedAlsoNames ? std::format( " also_total=\"{}\"", h.also.size() ) : std::string();
+    }
+    x += print.size() > kListedLines ? std::format( " capped=\"1\" lines_total=\"{}\"", print.size() ) : std::string();
+    x += manifestsCap;
+    x += ">";
+    for( std::size_t pi = 0; pi < print.size() && pi < kListedLines; ++pi )
+    {
+        std::string text( h.lines[ print[pi] ].text );
+        truncateUtf8WithEllipsis( text, kListedLineBytes );
+        x += std::format( "<ln l=\"{}\">{}</ln>", h.lines[ print[pi] ].line, escapeXml( text, esc ) );
+    }
+    x += "</listed>";
+}
+
+}   // namespace listeddetail
+
+// The <listed> elements for the shown rows (rank order). Empty unless the task is a creation task and a manifest names a shown file.
+inline ListedRender renderForListedIn( const IngestResult& ing, std::span<const NodeId> shown, std::string_view task )
+{
+    using namespace listeddetail;
+    ListedRender out;
+    if( ing.crawlRoot.empty() || shown.empty() || !isCreationTask( task ) )
+    {
+        return out;
+    }
+    std::vector<std::uint32_t> files;   // distinct shown files, rank order
+    for( const NodeId id : shown )
+    {
+        if( id < ing.symbols.size() && std::ranges::find( files, ing.symbols[id].fileId ) == files.end() && files.size() < kListedShownFiles
+            && !isVendoredDir( rootRelPath( ing, ing.symbols[id].fileId ) ) )   // a vendored copy's own manifest is its upstream's, not the repo's
+        {
+            files.push_back( ing.symbols[id].fileId );
+        }
+    }
+    const std::vector<Manifest> manifests = manifestsAbove( ing, files );
+    std::vector<Hit>            hits;
     for( std::size_t mi = 0; mi < manifests.size(); ++mi )
     {
         Hit h;
-        h.m     = mi;
-        h.lines = splitLines( manifests[mi].text );
-        bool found = false;
-        for( std::size_t fi = 0; fi < files.size(); ++fi )
-        {
-            const std::string_view   rel  = rootRelPath( ing, files[fi] );
-            if( rel == manifests[mi].rel )
-            {
-                continue;   // a manifest never lists itself
-            }
-            const std::vector<Token> toks = tokensFor( rel, manifests[mi].dir );
-            std::vector<std::size_t> mine;
-            bool                     dirOnly = true;
-            for( std::size_t li = 0; li < h.lines.size(); ++li )
-            {
-                if( isCommentLine( h.lines[li].text ) )
-                {
-                    continue;
-                }
-                const int k = lineMatches( h.lines[li].text, toks );
-                if( k >= 0 )
-                {
-                    mine.push_back( li );
-                    dirOnly = dirOnly && toks[ std::size_t( k ) ].isDir;
-                }
-            }
-            if( mine.empty() )
-            {
-                continue;
-            }
-            if( !found )
-            {
-                found       = true;
-                h.firstFile = fi;
-                h.byDir     = dirOnly;
-                h.lineIx    = std::move( mine );
-            }
-            else
-            {
-                h.also.emplace_back( rel );
-            }
-        }
-        if( found )
+        h.m = mi;
+        if( manifestHit( ing, files, manifests[mi], h ) && !h.also.empty() )   // a registry: it lists the exemplar AND a shown sibling
         {
             hits.push_back( std::move( h ) );
         }
     }
-    if( hits.empty() )
-    {
-        return out;
-    }
     // A manifest naming more shown files first (a registry of the exemplar's siblings), then nearest-first discovery order.
     std::ranges::stable_sort( hits, []( const Hit& a, const Hit& b ) { return a.also.size() > b.also.size(); } );
-    const std::size_t total = hits.size();
     std::vector<char> esc;
     for( std::size_t hi = 0; hi < hits.size() && hi < kListedManifests; ++hi )
     {
-        const Hit&      h   = hits[hi];
-        const Manifest& man = manifests[h.m];
-        // the printed lines: each matched line, preceded once by its stanza opener (nearest less-indented, non-blank line above)
-        std::vector<std::size_t> print;
-        for( const std::size_t li : h.lineIx )
-        {
-            const std::size_t ind = indentOf( h.lines[li].text );
-            if( ind > 0 )
-            {
-                for( std::size_t up = li; up-- > 0; )
-                {
-                    const std::string_view t = h.lines[up].text;
-                    if( indentOf( t ) < t.size() && indentOf( t ) < ind )
-                    {
-                        if( std::ranges::find( print, up ) == print.end() )
-                        {
-                            print.push_back( up );
-                        }
-                        break;
-                    }
-                }
-            }
-            if( std::ranges::find( print, li ) == print.end() )
-            {
-                print.push_back( li );
-            }
-        }
-        std::ranges::sort( print );
-        const std::size_t printTotal = print.size();
-        out.xml += std::format( "<listed p=\"{}\"", escapeXml( man.rel, esc ) );
-        out.xml += std::format( " of=\"{}\" by=\"{}\"", escapeXml( rootRelPath( ing, files[h.firstFile] ), esc ), h.byDir ? "dir" : "path" );
-        if( man.gen )
-        {
-            out.xml += " gen=\"1\"";
-        }
-        if( !h.also.empty() )
-        {
-            std::string also;
-            for( std::size_t a = 0; a < h.also.size() && a < kListedAlsoNames; ++a )
-            {
-                also += ( a ? "," : "" ) + h.also[a];
-            }
-            out.xml += std::format( " also=\"{}\"", escapeXml( also, esc ) );
-            if( h.also.size() > kListedAlsoNames )
-            {
-                out.xml += std::format( " also_total=\"{}\"", h.also.size() );
-            }
-        }
-        if( printTotal > kListedLines )
-        {
-            out.xml += std::format( " capped=\"1\" lines_total=\"{}\"", printTotal );
-        }
-        if( hi == 0 && total > kListedManifests )
-        {
-            out.xml += std::format( " manifests_capped=\"1\" manifests_total=\"{}\"", total );
-        }
-        out.xml += ">";
-        for( std::size_t pi = 0; pi < print.size() && pi < kListedLines; ++pi )
-        {
-            std::string text( h.lines[ print[pi] ].text );
-            truncateUtf8WithEllipsis( text, kListedLineBytes );
-            out.xml += std::format( "<ln l=\"{}\">{}</ln>", h.lines[ print[pi] ].line, escapeXml( text, esc ) );
-        }
-        out.xml += "</listed>";
+        const std::string cap = ( hi == 0 && hits.size() > kListedManifests )
+                                  ? std::format( " manifests_capped=\"1\" manifests_total=\"{}\"", hits.size() ) : std::string();
+        appendListed( out.xml, ing, files, manifests[ hits[hi].m ], hits[hi], cap, esc );
     }
     return out;
 }
@@ -510,12 +489,12 @@ inline ListedRender renderForListedIn( const IngestResult& ing, std::span<const 
 inline constexpr std::string_view kForListedInLegend =
     "; listed p= of= by=: a build, package or registry manifest (Makefile.am, CMakeLists.txt, meson.build, BUILD, *.bzl, package.json, "
     "jsr.json, deno.json, Cargo.toml, CODEOWNERS) at the root or above a shown file that lists of=, the first shown file it names, "
-    "on a creation task; ln l=: each line naming of= byte-exact, after the less-indented line it sits under; by=path the line names "
+    "and at least one more shown file, on a creation task; ln l=: each line naming of= byte-exact, after the less-indented line it sits under; by=path the line names "
     "the file, by=dir only its directory (2+ path segments); also=: other shown files the manifest names, also_total= all; gen=1 the "
     "manifest says it is generated; capped=1 lines_total=, manifests_capped=1 manifests_total=: cut, the total; a glob or "
     "variable listing is not matched (a floor)";
 inline constexpr std::string_view kForCompactListedInLegend =
-    "; listed p= of= by=path|dir: a manifest above a shown file listing of= (a creation task); ln l=: its lines byte-exact with the "
+    "; listed p= of= by=path|dir: a manifest above a shown file listing of= and another shown file (a creation task); ln l=: its lines byte-exact with the "
     "line they sit under; also=/also_total= other shown files it lists; gen=1 generated; capped=1 lines_total=/manifests_capped=1 if cut";
 
 }   // namespace rw
