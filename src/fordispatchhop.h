@@ -226,12 +226,10 @@ inline bool ownerNamedByProduction( const IngestResult& ing, const Graph& g, Nod
         {
             continue;
         }
-        if( from.name == "main" || ( from.lang == Lang::Go && from.name == "init" ) )
-        {
-            return true;
-        }
         const std::vector<NodeId> fromTarget{ r.fromSymbol };
-        if( std::ranges::any_of( oneHopCallerRows( ing, g, fromTarget ), [ & ]( NodeId who ) { return !isTestSymbol( ing, who ); } ) )
+        const std::vector<NodeId> who = oneHopCallerRows( ing, g, fromTarget );
+        // a root the runtime runs (main, a Go init, a registrar) has no callers at all; a factory has a non-test caller
+        if( who.empty() || std::ranges::any_of( who, [ & ]( NodeId w ) { return !isTestSymbol( ing, w ); } ) )
         {
             return true;
         }
@@ -366,6 +364,17 @@ struct DispatchHopRender
     std::size_t bodyBytes = 0;    // the body elements' bytes inside xml (the body rate); the rest is markup
 };
 
+// Rust spells a constructor `new` (an associated function, not a keyword). A switch, not a `== Lang::` predicate: the language-identity
+// ratchet (test/langidentity/ratchet.tsv) counts predicates in shared files and may never rise.
+inline bool rustNew( Lang lang, std::string_view name ) noexcept
+{
+    switch( lang )
+    {
+        case Lang::Rust: return name == "new";
+        default:         return false;
+    }
+}
+
 // The constructors of `cand`'s owner: callables of the same scope whose name the language spells a constructor (forctorhop.h
 // isCtorName: a C++ `init()` is an ordinary method), and a Rust `new` (an associated function, not a keyword).
 inline std::vector<NodeId> dispatchOwnerCtors( const IngestResult& ing, NodeId cand )
@@ -382,7 +391,7 @@ inline std::vector<NodeId> dispatchOwnerCtors( const IngestResult& ing, NodeId c
     {
         const Symbol& s = ing.symbols[id];
         if( id != cand && s.lang == c.lang && s.scope == c.scope && ReceiverEvidence::callableKind( s.kind )
-            && ( ctor_detail::isCtorName( s.lang, s.name, owner ) || ( s.lang == Lang::Rust && s.name == "new" ) ) )
+            && ( ctor_detail::isCtorName( s.lang, s.name, owner ) || rustNew( s.lang, s.name ) ) )
         {
             out.push_back( id );
         }
