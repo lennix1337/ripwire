@@ -144,6 +144,28 @@ inline bool slashBeforePathOk( std::string_view line, std::size_t slash ) noexce
     return before == '.' && ( slash == 1 || ( !isNameChar( line[slash - 2] ) && line[slash - 2] != '.' ) );   // `./`, not `../` or `a./`
 }
 
+// A Bazel label `//pkg:x.cc` (`@repo//pkg:x.cc`, `pkg:x.cc`) names a file of package `pkg`: a ':' right after a name byte, or after a
+// '/' that is not the `//` opening a root label (`//:x.cc`), is another package's label, not this manifest's own file.
+inline bool colonNamesOtherPackage( std::string_view line, std::size_t colon ) noexcept
+{
+    if( colon == 0 )
+    {
+        return false;
+    }
+    const char before = line[colon - 1];
+    if( isNameChar( before ) )
+    {
+        return true;
+    }
+    if( before != '/' )
+    {
+        return false;
+    }
+    // `//:x.cc` is the root package's own label unless the `//` follows a repository name (`@repo//:x.cc`) or a path (`a//:x`)
+    const bool rootLabel = colon >= 2 && line[colon - 2] == '/' && ( colon == 2 || ( !isNameChar( line[colon - 3] ) && line[colon - 3] != '/' ) );
+    return !rootLabel;
+}
+
 // The token at `at` sits inside a negated path: the bytes back to the start of its path word (name bytes, '/' and '.') are preceded by
 // '!' — `"!./src/x"`, `"!dist/x"` in package.json `files` EXCLUDE what they name.
 inline bool negatedPath( std::string_view line, std::size_t at ) noexcept
@@ -165,7 +187,8 @@ inline bool boundedFind( std::string_view line, std::string_view tok, std::strin
     {
         const char        prev   = at == 0 ? ' ' : line[at - 1];
         const bool        leftOk = at == 0 || ( pathToken && prev == '/' ? slashBeforePathOk( line, at - 1 )
-                                                                       : !isNameChar( prev ) && prev != '.' && prev != '!' );
+                                                : prev == ':'                ? !colonNamesOtherPackage( line, at - 1 )
+                                                                             : !isNameChar( prev ) && prev != '.' && prev != '!' );
         const std::size_t end    = at + tok.size();
         if( negatedPath( line, at ) )
         {
