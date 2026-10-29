@@ -265,7 +265,8 @@ inline DispatchCands splitDispatchCands( const IngestResult& ing, const Graph& g
 // The calls the element is about: declined gate="iface" sites with a stored list holding at least one production candidate, made
 // by a callable body candidate, whose called name the task names as a call and which is not the caller's own name. Per called
 // name: a task token that writes a receiver (`cache_->Fetch`) picks the site(s) with that receiver, and when none has it the
-// site is answered only if every same-name site carries the SAME candidate list (never another receiver's list); a token with no
+// site is answered only if every same-name site carries the SAME candidate list (never another receiver's list), and a site that
+// names a different receiver of its own is never the asked call's answer; a token with no
 // receiver keeps every same-name site, one per distinct list. At most kForDispatchSites, in the declined rows' served order.
 inline std::vector<std::uint32_t> forDispatchSites( const IngestResult& ing, const Graph& g, std::span<const NodeId> bodyCandidates, std::string_view task )
 {
@@ -317,9 +318,13 @@ inline std::vector<std::uint32_t> forDispatchSites( const IngestResult& ing, con
     {
         const Reference& r = ing.references[ g.declinedSiteRef[ site ] ];
         if( wroteRecv( r.calleeName ) && !exactRecv( site )
-            && std::ranges::any_of( eligible, [ & ]( std::uint32_t o ) { return sameName( o, site ) && ( exactRecv( o ) || !sameList( o, site ) ); } ) )
+            && ( !dispatch_detail::lastIdent( r.recvVar ).empty()
+                 || std::ranges::any_of( eligible, [ & ]( std::uint32_t o ) { return sameName( o, site ) && ( exactRecv( o ) || !sameList( o, site ) ); } ) ) )
         {
-            continue;   // the asked receiver is another site's, or this site cannot be told apart from one with another list
+            // the asked receiver is not this site's: a site that names its own (different) receiver is another call, even when no other
+            // site is left (the asked `x_->F` was bound by name, never declined); a site with no receiver recorded (TS parameter, Rust)
+            // cannot be told apart from one with another list
+            continue;
         }
         if( std::ranges::any_of( kept, [ & ]( std::uint32_t k ) { return sameName( k, site ) && sameList( k, site ); } ) )
         {

@@ -40,6 +40,8 @@
 #   S3 [P] every candidate a test double: no element and no reason=degraded clause, byte-identical to the hop-off answer (alltest)
 #   S4 [P] MCP for: est_tokens prices the element
 #
+#   D1 [P] fix round 2: a task receiver bound by name (never declined) does not answer another receiver's declined call (fixture recvbound)
+#
 # Usage:  bash test/fordispatchhopcheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/fordispatchhopcheck.sh
 # BIN is $1, else RIPWIRE_BIN, else build/ripwire; the first output line names the binary used. Exits non-zero on any failure.
 
@@ -61,7 +63,7 @@ cd "$ROOT"
 F="test/fordispatchhopfix"
 [ -f "$F/cpp/loader.cc" ] && [ -f "$F/cpp1/tests/loader_test.cc" ] && [ -f "$F/rs/src/pick.rs" ] && [ -f "$F/cppwrap/cached.cc" ] && [ -f "$F/ladder/main.py" ] \
     && [ -f "$F/factory/pg_store.cc" ] && [ -f "$F/double/loader_test.cc" ] && [ -f "$F/recv/loader.cc" ] && [ -f "$F/initm/loader.cc" ] \
-    && [ -f "$F/ts/src/loader.ts" ] && [ -f "$F/alltest/tests/fakes.cc" ] || { echo "fixture $F missing"; exit 2; }
+    && [ -f "$F/ts/src/loader.ts" ] && [ -f "$F/alltest/tests/fakes.cc" ] && [ -f "$F/recvbound/rc.cc" ] || { echo "fixture $F missing"; exit 2; }
 
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"; mkdir -p "$HOME"
@@ -229,6 +231,19 @@ if [ -s "$TMP/s3a" ] && cmp -s "$TMP/s3a" "$TMP/s3b" && ! grep -q 'reason=degrad
 else no "(S3) all-doubles answer differs from hop-off or carries reason=degraded: $( diff "$TMP/s3a" "$TMP/s3b" | head -c 300 )"; fi
 run "$F/alltest" --callees=Loader::Load --legend=full | grep -q 'gate="iface"'
 verdict $? "(S3pre) the all-doubles fixture IS iface-declined (the demotion, not a missing premise, holds it)" "(S3pre) the all-doubles fixture's call is not iface-declined"
+
+# ── D1 / D2 (fix round 2: rv-mf1nx-delta) ─────────────────────────────────────────────────────────────────────────────────────────
+run "$F/recvbound" --callees=L::Load --legend=full >"$TMP/d1p"
+if [ "$( grep -o '<dc n="F"[^>]*gate="iface"' "$TMP/d1p" | wc -l | tr -d ' ' )" = "1" ]; then ok "(D1pre) only y_->F is iface-declined; x_->F and h.get().F are bound by name"
+else no "(D1pre) the recvbound fixture's premise failed (expected exactly one iface-declined F)"; fi
+for tk in "this->x_->F" "x_->F"; do
+    run "$F/recvbound" "--for=L::Load $tk" >"$TMP/d1"
+    if [ -s "$TMP/d1" ] && [ -z "$( hop "$TMP/d1" )" ] && ! has "$( cat "$TMP/d1" )" 'k * 3' && ! grep -q '; dispatch call=' "$TMP/d1"; then ok "(D1) $tk (bound by name, never declined): another receiver's declined y_->F is not answered, no wrong body"
+    else no "(D1) $tk answered another receiver's declined call: [$( hop "$TMP/d1" )]"; fi
+done
+run "$F/recvbound" "--for=L::Load y_->F" >"$TMP/d1y"
+if has "$( hop "$TMP/d1y" )" 'call="y_-&gt;F"' && has "$( hop "$TMP/d1y" )" 'n="Lru::F"'; then ok "(D1) the declined receiver y_->F is still answered"
+else no "(D1) y_->F lost its element: [$( hop "$TMP/d1y" )]"; fi
 
 # ── S4 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 est(){ python3 -c 'import re,sys; m=re.search(r"est_tokens=\"(\d+)\"", sys.stdin.read()); print(m.group(1) if m else "")'; }
