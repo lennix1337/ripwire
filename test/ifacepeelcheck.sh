@@ -38,6 +38,7 @@
 #   S1c the disagreement refusal: two same-scope aliases of one name with different pointees (dis::QPtr) are never peeled
 #   S1d a raw-pointer typedef of the alias's name in another namespace (rp2::Ptr beside rp1::Ptr) is never peeled
 #   N1b an alias of a CONCRETE class that has a virtual method derived classes override is no typed pin: the override set stays
+#   L-1 a C member written with the name of a C++ smart alias is a C pointer: the peel is gated on the member's language (lang.c)
 #   B1e [P] class-scoped aliases of one name: each member reads its OWN class's (HoldX → iface, HoldY → the typed KyC::kick)
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
@@ -124,6 +125,9 @@ say "$( hedge "$o" )" "S1d a raw-pointer typedef of the alias's name in another 
 o="$( callees "$CPP" "scope2.h::UsesBase2::go" )"
 say "$( has "$o" 'Der1::act' )" "N1b an alias of a concrete class with overridden virtuals keeps Der1::act as a candidate (no single typed Base2::act)"
 say "$( has "$o" 'Der2::act' )" "N1b ... and Der2::act"
+# ---- fix round 1, L-1: the member reader is language-gated like the ingest ----
+o="$( callees "$CPP" "lang.c:cgo" )"
+say "$( hasnt "$o" 'gate="iface"' )" "L-1 a C struct member named like a C++ smart alias is never read as its pointee (no iface row)"
 echo "ifacepeelcheck: $npass passed, $nfail failed"
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"
