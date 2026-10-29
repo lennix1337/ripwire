@@ -298,7 +298,9 @@ inline void defAltsXml( PathAlts& acc, const IngestResult& ing, const DefLookup&
             continue;
         }
         ++total;
-        if( shown < kDefRowsCap )
+        // sel= is computed for the first kDefRowsCap + 1 sorted rows only (lookupDefs selCount): with two or more rows skipped above, the
+        // 16th alternative can sit past that window and carry no sel= at all; it pages via next= instead (nextOffset follows the printed rows)
+        if( shown < kDefRowsCap && !r.sel.empty() )
         {
             defRowXml( rows, ing, L, r, owners, /*compact=*/true );
             acc.declOnly = acc.declOnly || L.groups.bodyless[ r.group ];

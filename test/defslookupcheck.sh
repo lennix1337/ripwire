@@ -119,6 +119,18 @@ rep="$( printf '%s\n%s\n' "$shownp" "$nextp" | sort | uniq -d | grep -c . )"
 cover="$( printf '%s\n%s\n%s\n' "$shownp" "$nextp" "$boundp" | sort -u | grep -c . )"
 if [ -n "$off" ] && [ "$rep" = 0 ] && [ "$cover" = 18 ]; then ok "P3 next=: --defs=many --offset=$off adds only rows the <alts> did not show (shown 16 + bound + the offset page = 18 distinct, 0 repeats)"; else no "P3 next=: off=$off repeats=$rep distinct=$cover"; fi
 
+# CR 4408459903 (harvest 463): sel= is computed for the first 17 sorted rows only. wd/: 18 TS `wide` + a C definition + an untied header
+# prototype (row 0, skipped) + the bound w05 (skipped): the 16th alternative used to come from row 17 with sel="" sel_proven="0".
+run --path=wide,helperA >"$TMP/p3b.xml" 2>/dev/null
+altsw="$( grep -o '<alts side="from" of="wide".*</alts>' "$TMP/p3b.xml" )"
+if printf '%s' "$altsw" | grep -q 'alts_shown=' && ! printf '%s' "$altsw" | grep -q 'sel=""' && ! printf '%s' "$altsw" | grep -q 'sel_proven' && [ "$( printf '%s' "$altsw" | grep -o '<d ' | wc -l | tr -d ' ' )" -ge 14 ]; then ok "P3b: two rows skipped above the window: every printed <alts> row carries a sel= (none empty, none sel_proven=0); the rest pages via next="; else no "P3b: $( printf '%s' "$altsw" | grep -o '<alts [^>]*>\|<d [^>]*sel=\"\"[^>]*>' | head -c 400 )"; fi
+offw="$( printf '%s' "$altsw" | grep -o 'next="--defs=wide --offset=[0-9]*"' | sed 's/.*--offset=//; s/"$//' )"
+run --defs=wide --offset="${offw:-0}" >"$TMP/p3bn.xml" 2>/dev/null
+shownw="$( printf '%s' "$altsw" | grep -o 'p="[^"]*"' | sort )"
+nextw="$( body "$TMP/p3bn.xml" | grep -o '<d [^>]*' | grep -o 'p="[^"]*"' | sort )"
+repw="$( printf '%s\n%s\n' "$shownw" "$nextw" | sort | uniq -d | grep -c . )"
+if [ -n "$offw" ] && [ "$repw" = 0 ] && printf '%s' "$nextw" | grep -q 'wd/w17.ts'; then ok "P3b next=: --defs=wide --offset=$offw starts at the first unprinted row (w17), repeating none"; else no "P3b next=: off=$offw repeats=$repw"; fi
+
 echo "-- (P4) an untied C prototype is no second candidate: --path prints no <alts> (endpointDefinitionCount's rule)"
 run --path=orphan,helperA >"$TMP/p4.xml" 2>/dev/null
 if grep -q 'from_defs="2"' "$TMP/p4.xml" && ! grep -q '<alts' "$TMP/p4.xml"; then ok "P4: orphan = a definition + an untied header prototype -> from_defs=2 yet no <alts> (0 bytes)"; else no "P4: $( grep -o '<alts.*</alts>' "$TMP/p4.xml" | head -c 300 ) $( grep -o 'from_defs="[0-9]*"' "$TMP/p4.xml" )"; fi
