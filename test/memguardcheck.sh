@@ -477,6 +477,19 @@ case "$bt" in
     *'ok="0" err="symbol not found'*) case "$bt" in *"memory guard"*|*"partial"*) no "(B6j2) an uncut batch not-found mentions the guard";; *) ok "(B6j2) near miss: an uncut server's batch not-found is plain";; esac;;
     *) no "(B6j2) id=2 expected an ok=0 sub-query: $( printf '%s' "$bt" | head -c 300 )";;
 esac
+# (B6l) a grep from a cut index never says "complete":true in its payload — a hit absent from it may sit in the files that were
+#       never read (a_01: inside the kept set; b_09: outside it); the uncut twin keeps the claim
+cc="$( mcp_field "$TMP/b6.out" 2 text; mcp_field "$TMP/b6.out" 6 text )"
+case "$cc" in
+    *'"files"'*) case "$cc" in *'"complete":true'*) no "(B6l) a cut index's grep payload claims complete:true";; *) ok "(B6l) a grep payload from a cut index (a_01 inside the kept set, b_09 outside) never claims complete:true";; esac;;
+    *) no "(B6l) no grep payload read: $( printf '%s' "$cc" | head -c 200 )";;
+esac
+printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$FX\",\"pattern\":\"a_01\"}}}" \
+    | mcp_call "$TMP" >"$TMP/b6l.out"
+case "$( mcp_field "$TMP/b6l.out" 2 text )" in
+    *'"complete":true'*) ok "(B6l2) near miss: the same grep on an uncut index keeps complete:true";;
+    *) no "(B6l2) an uncut grep lost complete:true: $( mcp_field "$TMP/b6l.out" 2 text | head -c 300 )";;
+esac
 # (B6g) near miss: an uncut server's not-found is the plain one
 printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$FX\",\"pattern\":\"a_01\"}}}" \
     "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"$FX\",\"symbol\":\"zzz_nope\"}}}" \
@@ -496,6 +509,13 @@ for sym in d_17 zzz_nope; do
         no "(B6h) $sym rc=$rc stdout=$( head -c 120 "$TMP/b6h.out" ) stderr: $( head -c 200 "$TMP/b6h.err" )"
     fi
 done
+# (B6h2) the CLI twin of the grep completeness claim: --grep on a cut index refuses too, so no complete="1" is ever printed from one
+run_trip crawl:30 "$FX" --grep=a_01 --max-memory=64M --no-cache >"$TMP/b6h2.out" 2>"$TMP/b6h2.err"; rc=$?
+if [ "$rc" = 5 ] && [ ! -s "$TMP/b6h2.out" ] && ! grep -q 'complete=' "$TMP/b6h2.out"; then
+    ok "(B6h2) CLI --grep=a_01 on a cut index refuses (exit 5, empty stdout): no complete=\"1\" claim"
+else
+    no "(B6h2) rc=$rc stdout=$( head -c 160 "$TMP/b6h2.out" ) stderr: $( head -c 160 "$TMP/b6h2.err" )"
+fi
 printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$FX\",\"pattern\":\"a_01\"}}}" \
     | mcp_call "$TMP" >"$TMP/b6c.out"
 if grep -q '_memory_stop' "$TMP/b6c.out"; then
