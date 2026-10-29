@@ -380,11 +380,13 @@ inline std::vector<Token> tokensFor( std::string_view fileRel, std::string_view 
     if( !below.empty() )
     {
         t.push_back( { std::string( below ), false } );
+        if( !mdir.empty() )
+        {
+            t.push_back( { std::string( fileRel ), false } );   // a root-relative spelling of a file INSIDE the manifest's directory
+        }
     }
-    if( !mdir.empty() )
-    {
-        t.push_back( { std::string( fileRel ), false } );
-    }
+    // A file OUTSIDE the manifest's directory gets no token: a bare `x.c` in sub/Makefile.am is sub/x.c, never the root x.c or another
+    // same-named file (the full path would match the root file's spelling as if it were relative to the manifest).
     const std::size_t slash = fileRel.rfind( '/' );
     // A manifest in the file's own directory names it by its file name only: a directory tail there is the package's own label
     // (a Bazel BUILD's `//pkg:dep` deps), not a listing of the file.
