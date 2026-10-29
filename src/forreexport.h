@@ -382,11 +382,6 @@ struct RustTarget
     std::vector<std::string>   segs;
 };
 
-inline bool isPrefixOf( const std::vector<std::string>& pre, const std::vector<std::string>& whole )
-{
-    return pre.size() <= whole.size() && std::equal( pre.begin(), pre.end(), whole.begin() );
-}
-
 inline RustTarget resolveRustPath( const RustCrates& rc, std::uint32_t f, std::uint32_t byte, std::string_view path, bool boundHere = false, int depth = 0 )
 {
     RustTarget                     t;
@@ -412,7 +407,8 @@ inline RustTarget resolveRustPath( const RustCrates& rc, std::uint32_t f, std::u
             std::size_t    visible = 0;
             for( const Binding* b : hit->second )   // the imports in scope at `byte`: file level, or inside an enclosing inline mod
             {
-                if( isPrefixOf( rc.modsAt( f, b->startByte ), base ) && splitColons( b->importedName ).front() != segs.front() )
+                const std::vector<std::string> at = rc.modsAt( f, b->startByte );
+                if( std::ranges::mismatch( at, base ).in1 == at.end() && splitColons( b->importedName ).front() != segs.front() )   // `at` is a prefix of `base`
                 {
                     ++visible;
                     only = b;
@@ -703,7 +699,8 @@ inline std::vector<std::string_view> reexportTaskTokens( std::string_view task )
 // A token spelled as a module (`hono/jwt`, `@angular/core`, `./x`), not a word or a qualified symbol (`Editor::backspace`).
 inline bool reexportModuleLike( std::string_view m )
 {
-    return m.find( '/' ) != std::string_view::npos || m.starts_with( '@' ) || m.starts_with( '.' );
+    const char first = m.empty() ? '\0' : m.front();
+    return first == '@' || first == '.' || m.contains( '/' );
 }
 
 // `NAME from M` with M spelled as a module: the import spelling, not `path from A to B`.
