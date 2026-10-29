@@ -11,7 +11,6 @@ BIN = "./build/ripwire"
 ABIN = os.path.join(REPO, "build", "ripwire")
 DIRTY = os.path.join(SCRATCH, "dirty")          # throwaway --local clone with ONE deliberate regression
 AUX = os.path.join(SCRATCH, "aux")
-os.makedirs(AUX, exist_ok=True)
 
 # The capture is a SHIPPED document, so it goes through the SAME public-export scrub docs/COMMANDS.md
 # is built with — imported, not re-spelled, so the two can never drift apart and a new leak shape has
@@ -23,6 +22,10 @@ try:
 except ImportError as exc:
     sys.exit(f"showcase_capture: cannot import the export scrub from docs/docs_commands_build.py ({exc}) — "
              f"refusing to write an unscrubbed capture")
+if not exportscrub.scratch_outside_repo( REPO, SCRATCH ):
+    sys.exit(f"showcase_capture: the scratch dir is inside the repo ({SCRATCH}) — it would publish as ./… paths, "
+             f"not <scratch>; point RIPWIRE_SHOWCASE_SCRATCH outside the checkout")
+os.makedirs(AUX, exist_ok=True)
 
 # --- formatting (defined HERE, above the command table, because the --in=DIR case DERIVES its own
 # --since window from what the PUBLISHED block shows — see chooseInWindow below — and cannot do that
@@ -387,6 +390,7 @@ add(S2, f"""{BIN} . --graph-query='and(callers(name("rankGraphTeleport"),2),kind
 add(S2, f"{BIN} . --external-surface", "Names referenced but never defined in-corpus (stdlib/third-party surface). The root carries names/shown/capped; the default is a 100-row window now, so total= and a pasteable next= join them when it bites (the explicit --limit form carries the same quintet). The sh BUILTINS (cd/echo/set…) are dropped and COUNTED as builtins_excluded= — grep/sed/git stay, they ARE the surface.")
 add(S2, f"{BIN} . --external-surface --include-builtins", "The restoring knob: --include-builtins keeps the shell builtins in the same 100-row window (they now compete for rows, so the window's tail differs).")
 add(S2, f"{BIN} . --path=main,rankGraphTeleport", "Shortest directed call-path SRC -> DST. CHANGED: now reports from_p/to_p/from_defs and resolves the right `main` (was reachable=\"0\").")
+add(S2, f"{BIN} . --defs=main,rankGraphTeleport", "Which definitions each name binds, one row per definition group with sel= (the spelling that picks it alone in any verb), class=source|test and in= callers; source first.")
 add(S2, f"{BIN} . --connect=rankGraphTeleport,runEval,getIndex", "Minimal connecting subgraph over 3 symbols (finds shared-caller joins).")
 add(S2, f"{BIN} . --impact=rankGraphTeleport", "Transitive blast radius — everything that reaches SYM. NOW carries shown/capped.")
 add(S2, f"{BIN} . --mentions=rankGraphTeleport", "Markdown docs that name SYM in a backtick (doc<->code edges).")
@@ -593,7 +597,11 @@ def inCaseUnshown( n ):
         gone.append( "the <symbols stubbed=> stub (past the display cut)" )
     return gone
 
-def chooseInWindow( lo=2, hi=14 ):
+# lo=1 (N from 2) since 2026-10-25 (train 35): main's first-parent history is one merge commit per train, so every
+# HEAD~N with N >= 3 spans a whole earlier train (train 34: 37+ indexed files) and its global <recent> block pushes the
+# scoped page past the display cut; HEAD~2 (margin HEAD~1) spans only this train's own merges. Every promise is still
+# measured as before; only the smallest N tried moved.
+def chooseInWindow( lo=1, hi=14 ):
     tried = []
     for n in range( lo + 1, hi + 1 ):
         gone, goneMargin = inCaseUnshown( n ), inCaseUnshown( n - 1 )
@@ -1010,10 +1018,12 @@ os.makedirs(os.path.dirname(outpath), exist_ok=True)
 # Root-neutralise the published text: the checkout's absolute path is machine detail, not a claim
 # (same rationale as the --pack-signatures methodology), and the public scrub gate bans home paths.
 # Disclosed here rather than silent, in the order applied:
-#   1. every occurrence of the repo root becomes "."
-#   2. every occurrence of this run's per-run temp dir becomes "<scratch>" — same mechanism, same
+#   1. every occurrence of this run's per-run temp dir becomes "<scratch>" (first: it is the longer,
+#      more specific path) — same mechanism as 2, same
 #      reason: `/var/folders/…/ripwire_showcase_o6h2ey7l/aux/batch2.txt` is one mktemp draw on one
 #      machine, so publishing it dates the document to a directory nobody can reproduce
+#   2. every occurrence of the repo root becomes "." — both via exportscrub.scrub_root, which replaces only
+#      a WHOLE path (a checkout at /w once turned src/wrap into src.rap; showcasecapturecheck arm (S))
 #   3. the shared public-export scrub (exportscrub.scrub): home paths, other temp paths, internal
 #      branch/document names, OWNERSHIP-row identity attributes and git author addresses. The last two
 #      matter most here — --owners and --pr-context read real git history, so a capture of a real run
@@ -1021,7 +1031,7 @@ os.makedirs(os.path.dirname(outpath), exist_ok=True)
 #      docs/docs_commands_build.py): `top=` on --hotspots is a SYMBOL NAME and survives untouched, as
 #      do ripwire's own `symbol@file.ext` community labels, which have the address shape but are not
 #      addresses. One implementation, shared with docs/COMMANDS.md, so a widened scrub reaches both.
-published = "\n".join(doc).replace(REPO, ".").replace(SCRATCH, "<scratch>")
+published = exportscrub.scrub_root(exportscrub.scrub_root("\n".join(doc), SCRATCH, "<scratch>"), REPO, ".")
 published = exportscrub.scrub(published, "ripwire")
 
 # Refuse rather than write what test/docscommandscheck.sh arm (E) would reject. Note which class is

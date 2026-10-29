@@ -826,6 +826,16 @@ inline std::string countAttrXmlOrEmpty( std::string_view name, std::size_t count
 {
     return countFieldOrEmpty( name, count, /*json=*/false );
 }
+// The same absent-when-empty shape for a TEXT value the caller already escaped for its dialect: ` name="v"` or `,"name":"v"`
+// (grep's pattern_meta= and its MCP twin spell through it).
+inline std::string textFieldOrEmpty( std::string_view name, std::string_view escaped, bool json )
+{
+    if( escaped.empty() )
+    {
+        return {};
+    }
+    return json ? ",\"" + std::string( name ) + "\":\"" + std::string( escaped ) + "\"" : " " + std::string( name ) + "=\"" + std::string( escaped ) + "\"";
+}
 
 // The attribute and the key, one spelling each, absent at zero like bodyless_defs= and graph_unindexed=.
 inline std::string declinedCallsAttrXml( std::size_t declinedCalls )
@@ -1151,6 +1161,11 @@ inline constexpr const char* kMemberOwnerLegend =
     "(Owner::name C/C++/Rust, Owner#name Ruby, a singleton too; a C++ namespace sharing a name with a class prints alike); "
     "bare: a free function, a type, a closure, or no such owner. ";
 inline const char* memberOwnerLegend( bool on ) noexcept { return on ? kMemberOwnerLegend : ""; }
+// lane js-def-naming: TS/JS store no scope, so a member row's owner there is read by containment (memberowner.h). Present-only: rides
+// beside the clause above exactly when a shown row's owner came that way, so every other answer is unchanged. No double hyphen.
+inline constexpr const char* kMemberOwnerContainedLegend =
+    "On a TS/JS row Owner is the class whose body holds it (no stored scope); an object-literal or nested member stays bare. ";
+inline const char* memberOwnerContainedLegend( bool on ) noexcept { return on ? kMemberOwnerContainedLegend : ""; }
 
 // ── issue #60: the module-scope owner's clause, emitted exactly when a t="modscope" ROW is in the answer ──
 // A file-scope call (a top-level statement, or a call inside an anonymous callback body) used to have no
@@ -1372,7 +1387,7 @@ inline constexpr const char* kUnprovenDefsVerifyLegend =
 inline constexpr const char* kUnprovenDefsAffectedLegend =
     "unproven_defs=K (absent when 0) counts same-named DEFINITIONS a file:name item found and could not tie to the file it named, summed item by item (a path item adds 0): they are NOT in seeds=, the caller walk never started from them, and so a test that reaches only them is in neither tests=, reached= nor the rows. A bare NAME item that also matches an indexed path is read as that path. ";
 // AND ON edit-check, lego, connect, around AND slice (decltodefcheck arms E2n..E2t). --lego, --connect and --around resolve
-// through resolveFocus, the lowest-id projection of the same resolver, so a drop left the DECLARATION as their focus;
+// through resolveFocus, the tower-front projection of the same resolver, so a drop left the DECLARATION as their focus;
 // --edit-check and --slice read the whole match set, and a set holding that one declaration is answered about it. On the
 // same repro each read a zero with nothing beside it: edit-check callers="0" incompatible="0" — a false "no broken caller"
 // when the dropped definition is the one whose caller stopped binding — lego implementors="0", connect edges="0" groups="0",

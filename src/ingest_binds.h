@@ -3279,6 +3279,144 @@ inline bool pythonNameIsGlobalOrNonlocalHere( TSNode n, std::string_view name, s
     return false;
 }
 
+// A Python match-statement pattern or a PEP 695 `type` statement binds at most ONE name at the node itself. Grammar shapes (read off the
+// tree): a capture pattern is a `case_pattern` holding a dotted_name of ONE identifier (`case Base:`), a keyword pattern's value is the same
+// dotted_name (`Cls(x=Base)`), `*Base` and `**Base` are a splat_pattern, and the `as` target of `case P as Base` is the identifier that
+// follows the case_pattern inside the `as_pattern` (no `alias` field there, unlike `with ... as`). A dotted_name of two or more
+// identifiers (`case Color.RED`) is a value pattern and binds nothing. `type Base = ...` / `type Base[T] = ...` binds the left side's
+// first identifier.
+inline TSNode pythonIdentifierChild( TSNode n, std::uint32_t i )   // the named child at i when it is an identifier, else null
+{
+    const bool ok = !ts_node_is_null( n ) && i < ts_node_named_child_count( n ) && kindIs( ts_node_type( ts_node_named_child( n, i ) ), "identifier" );
+    return ok ? ts_node_named_child( n, i ) : TSNode{};
+}
+
+inline TSNode pythonSoleName( TSNode dotted )   // a dotted_name of exactly one identifier, else null
+{
+    const bool one = !ts_node_is_null( dotted ) && kindIs( ts_node_type( dotted ), "dotted_name" ) && ts_node_named_child_count( dotted ) == 1;
+    return one ? pythonIdentifierChild( dotted, 0 ) : TSNode{};
+}
+
+inline TSNode pythonTypeAliasName( TSNode n )   // `type Base = ...` / `type Base[T] = ...`: type > identifier | generic_type > identifier
+{
+    const TSNode left = fieldChild( n, NodeField::Left );
+    const TSNode head = !ts_node_is_null( left ) && ts_node_named_child_count( left ) > 0 ? ts_node_named_child( left, 0 ) : TSNode{};
+    return !ts_node_is_null( head ) && kindIs( ts_node_type( head ), "generic_type" ) ? pythonIdentifierChild( head, 0 ) : pythonIdentifierChild( left, 0 );
+}
+
+inline TSNode pythonPatternTarget( TSNode n, const char* t )
+{
+    const std::uint32_t cc = ts_node_named_child_count( n );
+    if( kindIs( t, "case_pattern" ) )
+    {
+        return cc == 1 ? pythonSoleName( ts_node_named_child( n, 0 ) ) : TSNode{};
+    }
+    if( kindIs( t, "keyword_pattern" ) )
+    {
+        return cc == 2 ? pythonSoleName( ts_node_named_child( n, 1 ) ) : TSNode{};
+    }
+    if( kindIs( t, "splat_pattern" ) )
+    {
+        return cc == 1 ? pythonIdentifierChild( n, 0 ) : TSNode{};
+    }
+    if( kindIs( t, "as_pattern" ) && ts_node_is_null( fieldChild( n, NodeField::Alias ) ) )   // the with/except form has an alias field
+    {
+        return cc > 0 ? pythonIdentifierChild( n, cc - 1 ) : TSNode{};
+    }
+    return kindIs( t, "type_alias_statement" ) ? pythonTypeAliasName( n ) : TSNode{};
+}
+
+// a Python name node as a VarDecl at byte `at` (veto evidence: the match/`type`/type-parameter records below); a null node records nothing
+inline void pushPythonNodeDecl( TSNode id, std::uint32_t at, std::uint32_t fileId, std::string_view src, std::vector<RawBind>& binds )
+{
+    if( !ts_node_is_null( id ) )
+    {
+        pushRawBind( fileId, Lang::Python, nodeTextOf( id, src ), std::string{}, BindSite{ at, 0u, 0u }, LocalBindKind::VarDecl, binds );
+    }
+}
+
+// the name a match pattern or `type` statement binds, as a VarDecl at the statement (veto evidence like capturePythonRebindShadowDecls'),
+// or at byte 0 when the enclosing function declares it global/nonlocal
+inline void capturePythonPatternDecls( TSNode n, std::uint32_t fileId, std::string_view src, std::vector<RawBind>& binds )
+{
+    const TSNode id = pythonPatternTarget( n, ts_node_type( n ) );
+    if( ts_node_is_null( id ) )
+    {
+        return;
+    }
+    const std::uint32_t at = pythonNameIsGlobalOrNonlocalHere( n, nodeTextOf( id, src ), src ) ? 0u : ts_node_start_byte( n );
+    pushPythonNodeDecl( id, at, fileId, src, binds );
+}
+
+// PEP 695 `class C[Base](Base)` / `def f[Base]()`: each type parameter is a name the base clause can resolve to (a TypeVar, so CPython
+// raises TypeError and no derivation exists). One `type` per name; a bound `Base: int` wraps its name in a constrained_type, `*Ts` / `**P`
+// in a splat_type. A def's parameters are visible inside it (a VarDecl at the list); a class's are visible to its own base clause, which
+// the scope chain reads from OUTSIDE the class, so it is filed one byte before the class like the class's own name.
+inline TSNode pythonTypeParamName( TSNode param )   // `type` > identifier | constrained_type > type > identifier | splat_type > identifier
+{
+    TSNode c = param;
+    for( int depth = 0; depth < 4 && !ts_node_is_null( c ) && !kindIs( ts_node_type( c ), "identifier" ); ++depth )
+    {
+        c = ts_node_named_child_count( c ) > 0 ? ts_node_named_child( c, 0 ) : TSNode{};
+    }
+    return !ts_node_is_null( c ) && kindIs( ts_node_type( c ), "identifier" ) ? c : TSNode{};
+}
+
+inline void capturePythonTypeParamDecls( TSNode n, std::uint32_t fileId, std::string_view src, std::vector<RawBind>& binds )
+{
+    const bool isClass = kindIs( ts_node_type( n ), "class_definition" );
+    const TSNode list = isClass || kindIs( ts_node_type( n ), "function_definition" ) ? fieldChild( n, NodeField::TypeParameters ) : TSNode{};
+    if( ts_node_is_null( list ) )
+    {
+        return;
+    }
+    const std::uint32_t own = ts_node_start_byte( n );
+    const std::uint32_t at  = isClass ? ( own > 0 ? own - 1 : 0 ) : ts_node_start_byte( list );
+    for( std::uint32_t i = 0, k = ts_node_named_child_count( list ); i < k; ++i )
+    {
+        pushPythonNodeDecl( pythonTypeParamName( ts_node_named_child( list, i ) ), at, fileId, src, binds );
+    }
+}
+
+// is the def/class statement `n` at MODULE scope but inside a compound statement (`if`/`try`/`with`/`for`/`while`/`match`, any
+// clause), so it may not run? False for a statement directly in the module (a decorator wrapping it changes nothing) and for one
+// inside a def or class (not module scope). Read by the kPythonCondDefPrefix record below.
+inline bool pythonDefIsConditionalAtModule( TSNode n )
+{
+    TSNode p = ts_node_parent( n );
+    if( !ts_node_is_null( p ) && kindIs( ts_node_type( p ), "decorated_definition" ) )
+    {
+        p = ts_node_parent( p );
+    }
+    if( ts_node_is_null( p ) || kindIs( ts_node_type( p ), "module" ) )
+    {
+        return false;
+    }
+    for( ; !ts_node_is_null( p ); p = ts_node_parent( p ) )
+    {
+        const char* pt = ts_node_type( p );
+        if( kindIs( pt, "function_definition" ) || kindIs( pt, "class_definition" ) || kindIs( pt, "lambda" ) )
+        {
+            return false;
+        }
+        if( kindIs( pt, "module" ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// the kPythonCondDefPrefix record (`?name`) of a def/class statement `n` that may not run (pythonDefIsConditionalAtModule), at the
+// def's own VarDecl site; nothing for any other statement
+inline void pushPythonCondDefMark( TSNode n, std::string_view name, std::uint32_t fileId, Lang lang, BindSite at, std::vector<RawBind>& binds )
+{
+    if( pythonDefIsConditionalAtModule( n ) )
+    {
+        pushRawBind( fileId, lang, std::string{ kPythonCondDefPrefix }.append( name ), std::string{}, at, LocalBindKind::VarDecl, binds );
+    }
+}
+
 inline void capturePythonRebindShadowDecls( TSNode n, const char* t, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawBind>& binds )
 {
     std::vector<TSNode> targets;   // reused scratch, cleared before each shape below
@@ -3365,6 +3503,7 @@ inline void capturePythonRebindShadowDecls( TSNode n, const char* t, std::uint32
         {
             const std::uint32_t at = ts_node_start_byte( n );   // the def/class node's OWN start — see the doc above
             pushRawBind( fileId, lang, nodeTextOf( nm, src ), std::string{}, BindSite{ at > 0 ? at - 1 : 0, 0u, 0u }, LocalBindKind::VarDecl, binds );
+            pushPythonCondDefMark( n, nodeTextOf( nm, src ), fileId, lang, BindSite{ at > 0 ? at - 1 : 0, 0u, 0u }, binds );
         }
         return;
     }
@@ -3412,6 +3551,8 @@ inline void captureShadowScopeDecls( TSNode n, const char* t, std::uint32_t file
             capturePythonParamShadowDecls( n, fileId, lang, src, binds );   // Phase 4b: veto evidence only (empty span)
         }
         capturePythonRebindShadowDecls( n, t, fileId, lang, src, binds );   // issue #287 round 2: rebind veto evidence
+        capturePythonPatternDecls( n, fileId, src, binds );        // ind4b fix 4: match captures and `type` statements
+        capturePythonTypeParamDecls( n, fileId, src, binds );   // ind4b fix 5: PEP 695 type parameters
         return;
     }
     if( lang != Lang::Cpp && lang != Lang::ObjC )
@@ -3822,6 +3963,102 @@ inline std::string_view constructedBy( TSNode value, Lang lang, std::string_view
         return ( !name.empty() && name.front() >= 'A' && name.front() <= 'Z' ) ? name : std::string_view{};
     }
     return constructedClass( value, lang, src );
+}
+
+// lane receiver-fixes (PY-CTOR-ANNOT): a Python constructor-shaped call through a module, `mod.X( … )` / `a.b.X( … )` — the final
+// name, with the callee's whole spelling in `whole` (the written-qualifier check ReceiverEvidence::build applies to `x: mod.T`
+// decides it: an in-tree module passes, `requests.Session()` does not). "" for every other value, a bare `X( … )` included
+// (constructedBy reads that one).
+inline std::string_view pyQualifiedConstructed( TSNode value, std::string_view src, std::string_view& whole )
+{
+    if( ts_node_is_null( value ) || !kindIs( ts_node_type( value ), "call" ) )
+    {
+        return {};
+    }
+    const TSNode fn = fieldChild( value, NodeField::Function );
+    if( ts_node_is_null( fn ) || !kindIs( ts_node_type( fn ), "attribute" ) )
+    {
+        return {};
+    }
+    for( TSNode obj = fieldChild( fn, NodeField::Object ); ; obj = fieldChild( obj, NodeField::Object ) )   // a dotted NAME only
+    {
+        if( ts_node_is_null( obj ) )
+        {
+            return {};
+        }
+        if( kindIs( ts_node_type( obj ), "identifier" ) )
+        {
+            break;
+        }
+        if( !kindIs( ts_node_type( obj ), "attribute" ) )
+        {
+            return {};   // `f().X()`, `x[0].X()`: no module spelling
+        }
+    }
+    const TSNode attr = fieldChild( fn, NodeField::Attribute );
+    if( ts_node_is_null( attr ) || !kindIs( ts_node_type( attr ), "identifier" ) )
+    {
+        return {};
+    }
+    whole = nodeTextOf( fn, src );
+    return nodeTextOf( attr, src );
+}
+
+// lane receiver-fixes (PY-CTOR-ANNOT): the one type an OPTIONAL Python annotation names — `T | None`, `None | T` (a union_type
+// or, as the grammar may read it, a binary `|`), `Optional[ T ]` / `typing.Optional[ T ]` — else the annotation as written. A
+// union of two non-None types names no single class (annotatedClass reads such a node as "").
+inline TSNode pyOptionalInner( TSNode type, std::string_view src )
+{
+    TSNode n = type;
+    if( !ts_node_is_null( n ) && kindIs( ts_node_type( n ), "type" ) && ts_node_named_child_count( n ) == 1 )
+    {
+        n = ts_node_named_child( n, 0 );
+    }
+    if( ts_node_is_null( n ) )
+    {
+        return type;
+    }
+    const auto isNone = []( TSNode x ) noexcept
+    {
+        if( !ts_node_is_null( x ) && kindIs( ts_node_type( x ), "type" ) && ts_node_named_child_count( x ) == 1 )
+        {
+            x = ts_node_named_child( x, 0 );
+        }
+        return !ts_node_is_null( x ) && kindIs( ts_node_type( x ), "none" );
+    };
+    const char* t     = ts_node_type( n );
+    bool        union_ = kindIs( t, "union_type" );
+    if( kindIs( t, "binary_operator" ) )
+    {
+        for( std::uint32_t i = 0, k = ts_node_child_count( n ); i < k && !union_; ++i )
+        {
+            union_ = kindIs( ts_node_type( ts_node_child( n, i ) ), "|" );
+        }
+    }
+    if( union_ && ts_node_named_child_count( n ) == 2 )
+    {
+        const TSNode a = ts_node_named_child( n, 0 );
+        const TSNode b = ts_node_named_child( n, 1 );
+        return isNone( b ) && !isNone( a ) ? a : isNone( a ) && !isNone( b ) ? b : TSNode{};
+    }
+    if( union_ )
+    {
+        return TSNode{};
+    }
+    if( ( kindIs( t, "generic_type" ) || kindIs( t, "subscript" ) ) && ts_node_named_child_count( n ) == 2 )
+    {
+        const std::string_view head = nodeTextOf( ts_node_named_child( n, 0 ), src );
+        TSNode                 arg  = ts_node_named_child( n, 1 );
+        if( !ts_node_is_null( arg ) && kindIs( ts_node_type( arg ), "type_parameter" ) )
+        {
+            arg = ts_node_named_child_count( arg ) == 1 ? ts_node_named_child( arg, 0 ) : TSNode{};
+        }
+        if( head == "Optional" || head == "typing.Optional" )
+        {
+            return arg;
+        }
+    }
+    return type;
 }
 
 
@@ -5829,7 +6066,9 @@ inline void capturePythonBindingTombstones( BindCtx& cx, TSNode n, const char* t
         const bool   typedByBase = !ts_node_is_null( lhs ) && kindIs( ts_node_type( lhs ), "identifier" ) && !ts_node_is_null( rhs )
                                 && kindIs( ts_node_type( rhs ), "call" ) && !ts_node_is_null( fieldChild( rhs, NodeField::Function ) )
                                 && kindIs( ts_node_type( fieldChild( rhs, NodeField::Function ) ), "identifier" );
-        if( !typedByBase )
+        std::string_view whole;   // PY-CTOR-ANNOT: `x = mod.X( … )` is recorded by captureReceiverEvidence (typed, or its own tombstone)
+        const bool qualifiedCtor = !ts_node_is_null( lhs ) && kindIs( ts_node_type( lhs ), "identifier" ) && !pyQualifiedConstructed( rhs, cx.src, whole ).empty();
+        if( !typedByBase && !qualifiedCtor )
         {
             tombstones( lhs, BindSite{ at, 0u, 0u } );
         }
@@ -6727,8 +6966,9 @@ inline void captureJsEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32
     }
     else if( lang == Lang::TypeScript && kindIs( t, "public_field_definition" ) )
     {
+        // TS-FIELD-SELF: a `#private` field declares its type as a public one does (its name, `#f`, is how `this.#f` spells the path)
         const TSNode name = fieldChild( n, NodeField::Name );
-        if( !ts_node_is_null( name ) && kindIs( ts_node_type( name ), "property_identifier" ) )
+        if( !ts_node_is_null( name ) && ( kindIs( ts_node_type( name ), "property_identifier" ) || kindIs( ts_node_type( name ), "private_property_identifier" ) ) )
         {
             std::string_view       whole;   // `s: ns.T`: the qualifier ReceiverEvidence::build checks (h1-annot)
             const std::string_view written = annotatedClass( fieldChild( n, NodeField::Type ), src, &whole );
@@ -6764,7 +7004,8 @@ inline void captureJsEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32
         }
         const TSNode obj  = fieldChild( lhs, NodeField::Object );
         const TSNode prop = fieldChild( lhs, NodeField::Property );
-        if( !ts_node_is_null( obj ) && !ts_node_is_null( prop ) && kindIs( ts_node_type( obj ), "this" ) && kindIs( ts_node_type( prop ), "property_identifier" ) )
+        if( !ts_node_is_null( obj ) && !ts_node_is_null( prop ) && kindIs( ts_node_type( obj ), "this" )
+            && ( kindIs( ts_node_type( prop ), "property_identifier" ) || kindIs( ts_node_type( prop ), "private_property_identifier" ) ) )
         {
             pushEvidenceBind( cx, LocalBindKind::MemberType, nodeTextOf( prop, src ), constructedBy( fieldChild( n, NodeField::Right ), lang, src ), {}, at, false );
         }
@@ -6801,6 +7042,35 @@ inline ReceiverEvidenceHook receiverEvidenceHookOf( Lang l ) noexcept
     }
 }
 
+// PY-CTOR-ANNOT: the class a `self.f = v` / `self.f: A = v` field holds. A CONSTRUCTOR value (`X( … )`, `mod.X( … )`, X capitalized
+// as Python classes are: `make()` / `helpers.build()` name no class) beats the annotation, as it does for a local — `self.s: Strategy
+// = FastStrategy()` holds a FastStrategy, whatever the stub above it says; ReceiverEvidence::build then types the field only when
+// that name is an in-tree class (an outside or unresolved one leaves it untyped: a hedge, never the annotation). Otherwise the
+// annotation (`T`, `T | None`, `Optional[ T ]`; `= None` leaves it typed), else the value as read. `whole`: a qualified spelling's
+// whole text, for build()'s written-qualifier check.
+inline std::string_view pySelfFieldType( const BindCtx& cx, TSNode ann, TSNode rhs, std::uint32_t at, std::string_view& whole )
+{
+    whole = {};
+    std::string_view value = constructedBy( rhs, cx.lang, cx.src );
+    if( value.empty() )
+    {
+        value = pyQualifiedConstructed( rhs, cx.src, whole );
+    }
+    const std::string_view valueWhole = whole;
+    if( ts_node_is_null( ann ) || ( !value.empty() && value.front() >= 'A' && value.front() <= 'Z' ) )
+    {
+        return value;
+    }
+    whole = {};
+    const std::string_view written = writtenClass( cx, pyOptionalInner( ann, cx.src ), at, &whole );
+    if( !written.empty() )
+    {
+        return written;
+    }
+    whole = valueWhole;
+    return value;
+}
+
 inline void captureReceiverEvidence( BindCtx& cx, TSNode n, const char* t )
 {
     const Lang             lang = cx.lang;
@@ -6818,7 +7088,7 @@ inline void captureReceiverEvidence( BindCtx& cx, TSNode n, const char* t )
             if( !ts_node_is_null( name ) && kindIs( ts_node_type( name ), "identifier" ) )
             {
                 std::string_view       whole;   // `s: mod.T`: the qualifier ReceiverEvidence::build checks (h1-annot)
-                const std::string_view cls = writtenClass( cx, fieldChild( n, NodeField::Type ), at, &whole );
+                const std::string_view cls = writtenClass( cx, pyOptionalInner( fieldChild( n, NodeField::Type ), src ), at, &whole );   // `s: T | None`
                 pushLocalEvidence( cx, nodeTextOf( name, src ), cls, BindSite{ at, 0u, 0u }, false, whole );
             }
         }
@@ -6855,8 +7125,14 @@ inline void captureReceiverEvidence( BindCtx& cx, TSNode n, const char* t )
             if( kindIs( lt, "identifier" ) && !ts_node_is_null( fieldChild( n, NodeField::Type ) ) )
             {
                 std::string_view       whole;   // `x: mod.T = …`: as a typed parameter's
-                const std::string_view cls = writtenClass( cx, fieldChild( n, NodeField::Type ), at, &whole );
+                const std::string_view cls = writtenClass( cx, pyOptionalInner( fieldChild( n, NodeField::Type ), src ), at, &whole );
                 pushLocalEvidence( cx, nodeTextOf( lhs, src ), cls, BindSite{ at, 0u, 0u }, false, whole );
+            }
+            else if( std::string_view whole; kindIs( lt, "identifier" ) && !pyQualifiedConstructed( rhs, src, whole ).empty() )
+            {
+                // PY-CTOR-ANNOT: `x = mod.X( … )` — X when the qualifier is an in-tree module (build()'s written-qualifier check),
+                // else the tombstone it replaces (bindCapture's `x = f()` record steps aside for this shape: pyAssignedType)
+                pushLocalEvidence( cx, nodeTextOf( lhs, src ), pyQualifiedConstructed( rhs, src, whole ), BindSite{ at, 0u, 0u }, false, whole );
             }
             else if( kindIs( lt, "identifier" ) && !ts_node_is_null( rhs ) && kindIs( ts_node_type( rhs ), "attribute" ) )
             {
@@ -6873,7 +7149,9 @@ inline void captureReceiverEvidence( BindCtx& cx, TSNode n, const char* t )
                 const TSNode attr = fieldChild( lhs, NodeField::Attribute );
                 if( !ts_node_is_null( obj ) && !ts_node_is_null( attr ) && kindIs( ts_node_type( obj ), "identifier" ) && nodeTextOf( obj, src ) == "self" )
                 {
-                    pushEvidenceBind( cx, LocalBindKind::MemberType, nodeTextOf( attr, src ), constructedBy( rhs, lang, src ), {}, at, false );
+                    std::string_view       whole;
+                    const std::string_view type = pySelfFieldType( cx, fieldChild( n, NodeField::Type ), rhs, at, whole );
+                    pushEvidenceBind( cx, LocalBindKind::MemberType, nodeTextOf( attr, src ), type, type.empty() ? std::string_view{} : whole, at, false );
                 }
             }
         }
@@ -6890,17 +7168,20 @@ inline void captureReceiverEvidence( BindCtx& cx, TSNode n, const char* t )
 // lane L6 fix round 1 (reports/dispatch-classes.md §(a) 4 and 5): the blocks that implement a type, as ImplBlock records over the
 // node (model.h LocalBindKind::ImplBlock). The implemented name is the written type's final segment, generic arguments dropped.
 // An implementor the index keeps no class for records no implementor name; graph.h then opens the type's implementors list.
+// A trait written through a path (`impl other_crate::Renderer for X`) keeps the whole path, generics dropped, in importedName: the
+// reader asks whether that path leaves the tree (ifacedispatch.h openTraitAnswer).
 inline void pushImplBlock( BindCtx& cx, TSNode n, std::string_view written, std::string_view implementor )
 {
     std::string_view name = written.substr( 0, std::min( written.find( '<' ), written.size() ) );
-    const std::size_t cut = name.find_last_of( ".:" );
-    name = name.substr( cut == std::string_view::npos ? 0 : cut + 1 );
     while( !name.empty() && ( name.back() == ' ' || name.back() == '\n' || name.back() == '\t' || name.back() == '\r' || name.back() == '?' ) )
     {
         name.remove_suffix( 1 );
     }
-    pushRawBind( cx.fileId, cx.lang, name, std::string( implementor ), BindSite{ ts_node_start_byte( n ), ts_node_start_byte( n ), ts_node_end_byte( n ) },
-                 LocalBindKind::ImplBlock, *cx.binds );
+    const std::string_view path = name;
+    const std::size_t      cut  = name.find_last_of( ".:" );
+    name = name.substr( cut == std::string_view::npos ? 0 : cut + 1 );
+    pushTypedBind( cx.fileId, cx.lang, name, DeclType{ std::string( implementor ), name.size() < path.size() ? std::string( path ) : std::string{} },
+                   BindSite{ ts_node_start_byte( n ), ts_node_start_byte( n ), ts_node_end_byte( n ) }, LocalBindKind::ImplBlock, *cx.binds );
 }
 
 // Rust (langfacts.h traitImplBlocks): `impl T for X { … }` — its methods are X's methods for T, never inherent ones; the names are
@@ -6920,7 +7201,7 @@ inline void rustImplBlockOf( BindCtx& cx, TSNode n, const char* t )
     const TSNode type  = ts_node_is_null( trait ) ? TSNode{} : fieldChild( n, NodeField::Type );
     if( !ts_node_is_null( type ) )
     {
-        pushImplBlock( cx, n, finalSegment( nodeTextOf( trait, cx.src ) ), finalSegment( nodeTextOf( type, cx.src ) ) );
+        pushImplBlock( cx, n, nodeTextOf( trait, cx.src ), finalSegment( nodeTextOf( type, cx.src ) ) );
     }
 }
 
@@ -7079,6 +7360,9 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
             if( a <= b && b <= src.size() )
             {
                 // Python RHS constructor is a `call` node (not `call_expression`); reuse finalSegment on its callee.
+                // PY-CTOR-ANNOT: `x = mod.X( … )` records no Type here — captureReceiverEvidence records it with its qualifier
+                std::string_view whole;
+                const bool       qualifiedCtor = !pyQualifiedConstructed( rhs, src, whole ).empty();
                 std::string type;
                 if( !ts_node_is_null( rhs ) && kindIs( ts_node_type( rhs ), "call" ) )
                 {
@@ -7092,7 +7376,10 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
                         }
                     }
                 }
-                emitBind( fileId, lang, src.substr( a, b - a ), std::move( type ), ts_node_start_byte( n ), binds );
+                if( !qualifiedCtor )
+                {
+                    emitBind( fileId, lang, src.substr( a, b - a ), std::move( type ), ts_node_start_byte( n ), binds );
+                }
             }
         }
     }

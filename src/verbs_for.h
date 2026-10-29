@@ -8,9 +8,17 @@
 #include "forowner.h"   // the question's owner (owner-hop's found set) and the one owner body of an explanatory question
 #include "forfold.h"    // body-fold: the whole bodies of the top ranked rows, appended to a compact-route answer
 #include "formembers.h" // member-names: mem= on the shown owner rows of a compact-route answer
+#include "forslots.h"   // FOR-SLOTS: slots= on the shown initializer rows of a compact-route answer
+#include "forgraphverb.h" // FOR-ROUTE-DECLINED: the graph verb a `path from A to B` / `callers of X` task names, appended
+#include "forctorhop.h" // OWNER-CTOR-HOP: ctor_l=/ctor_calls= on the r=1 method row of a compact-route answer
 #include "forcallerhop.h"   // mf1-nx: a name-exact answer about ONE function carries that function's callers
+#include "epmanifest.h"     // ep-manifest: the manifest entry-point groups that register a shown row
+#include <algorithm>         // std::ranges::find: the ep manifest re-picked from the rows <sigs> emits
 #include <optional>          // the redaction-tally snapshots a degraded pre-render restores
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
+
+// FOR-ROUTE-DECLINED: the compact-legend layer's key for a captured verb answer (main.cpp, defined with that layer)
+static std::string_view compactLegendHint( const rw::Config& c, std::string_view doc );
 
 // verbs_for.h — the QUERY family (§A2's contiguous dispatch block), moved VERBATIM from main.cpp in
 // the 2026-08-29 split: computeLensRanking (THE shared lens ranking — the change family's
@@ -570,11 +578,21 @@ struct ForLensHeaderParts
     bool             bodyFoldPresent = false; // body-fold: a compact-route answer in the default regime has fold candidates
                                             // (forfold.h forBodyFoldCandidates), so a <fold> rides and its clause defines it;
                                             // set after construction, cleared with the section
+    bool             foldFollowPresent = false; // WRAPPER-FOLLOW (forfold.h renderFollows): the fold carries a <b follow_of=> (set after
+                                            // the fold renders), so its clause defines it
     bool             memberNamesPresent = false; // member-names (formembers.h): a shown owner row carries mem= (set after the
                                             // <sigs> splice), so its clause defines it
+    bool             initSlotsPresent = false;   // FOR-SLOTS (forslots.h): a shown initializer row carries slots= (set after the
+                                            // <sigs> splice), so its clause defines it
+    bool             slotJoinPresent = false;    // IX1-V2 (forslots.h spliceSlotJoinRows): a shown row carries slot_by= / slot_fields=
+    bool             slotNamePresent = false;    // fix1 F-4: a printed slot caller carries the field-name-only mark (`~`)
+    bool             ctorHopPresent = false;     // OWNER-CTOR-HOP (forctorhop.h): the r=1 row carries ctor_l= (set after the splice)
     bool             callerHopPresent = false; // mf1-nx: a name-exact answer whose body candidates are ONE function in the default
                                             // regime (forcallerhop.h forCallerHopTargets), so a <callers> rides and its clause
                                             // defines it; set after construction, cleared with the section
+    bool             callerHopRanked = false;  // UPWARD-2HOP: that <callers> is the ranked seed's (by="rank"), so ITS clause rides instead
+    bool             epPresent = false;        // ep-manifest (epmanifest.h): a manifest entry-point group registers a shown row in
+                                            // the default regime, so an <ep> rides and its clause defines it; cleared with it
 };
 
 // Splice a pre-formatted fragment in front of a structural boundary, or leave the document exactly as it
@@ -775,14 +793,33 @@ inline constexpr std::string_view presentOnlyClause( bool present, bool compact,
 {
     return !present ? std::string_view() : ( compact ? compactClause : fullClause );
 }
+
+// mf1-nx / UPWARD-2HOP: the caller hop's present-only clause — the named-route one, or the ranked seed's (by="rank")
+inline constexpr std::string_view callerHopClause( const ForLensHeaderParts& p, bool compact ) noexcept
+{
+    return p.callerHopRanked ? presentOnlyClause( p.callerHopPresent, compact, rw::kForCompactRankedCallerHopLegend, rw::kForRankedCallerHopLegend )
+                             : presentOnlyClause( p.callerHopPresent, compact, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend );
+}
+// FOR-SLOTS (slots=) and OWNER-CTOR-HOP (ctor_l=/ctor_calls=): the two <sigs>-row splices' clauses, then ep-manifest's <ep> clause (epmanifest.h), each present-only, in that order
+inline std::string peerRowClauses( const ForLensHeaderParts& p, bool compact )
+{
+    std::string out( presentOnlyClause( p.initSlotsPresent, compact, rw::kForCompactInitSlotsLegend, rw::kForInitSlotsLegend ) );
+    out += presentOnlyClause( p.slotJoinPresent, compact, rw::kForCompactSlotJoinLegend, rw::kForSlotJoinLegend );   // IX1-V2
+    out += presentOnlyClause( p.slotNamePresent, compact, rw::kForCompactSlotNameLegend, rw::kForSlotNameLegend );   // fix1 F-4
+    out += presentOnlyClause( p.ctorHopPresent, compact, rw::kForCompactCtorHopLegend, rw::kForCtorHopLegend );
+    out += presentOnlyClause( p.epPresent, compact, rw::kForCompactEpManifestLegend, rw::kForEpManifestLegend );   // ep-manifest
+    return out;
+}
 inline std::string_view hopsCallsNextLegend( const ForLensHeaderParts& p, bool compact ) noexcept
 {
     return presentOnlyClause( p.hopsCallsNextPresent, compact, kForCompactHopsCallsNextClause, kForHopsCallsNextClause );
 }
 // body-fold: the fold's clause in this dialect, present-only (bodyFoldPresent), right after the slot clause
-inline std::string_view bodyFoldLegend( const ForLensHeaderParts& p, bool compact ) noexcept
+// WRAPPER-FOLLOW: the follow_of= clause rides right after it, present-only (foldFollowPresent)
+inline std::string bodyFoldLegend( const ForLensHeaderParts& p, bool compact )
 {
-    return presentOnlyClause( p.bodyFoldPresent, compact, rw::kForCompactBodyFoldLegend, rw::kForBodyFoldLegend );
+    return std::string( presentOnlyClause( p.bodyFoldPresent, compact, rw::kForCompactBodyFoldLegend, rw::kForBodyFoldLegend ) )
+         + std::string( presentOnlyClause( p.foldFollowPresent, compact, rw::kForCompactFoldFollowLegend, rw::kForFoldFollowLegend ) );
 }
 inline constexpr std::string_view kForCompactLegendTail =
     "; t p= file outside sigs (weaker), t sym= its top symbols (a pointer, not the answer), r= rank (gap = trimmed)";
@@ -896,7 +933,8 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
     h += bodySlotLegend( p, /*compact=*/true );   // for-body-slot: present-only, after the owner clause
     h += bodyFoldLegend( p, /*compact=*/true );   // body-fold: present-only, after the slot clause
     h += presentOnlyClause( p.memberNamesPresent, /*compact=*/true, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend );   // member-names: after the fold clause
-    h += presentOnlyClause( p.callerHopPresent, /*compact=*/true, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend );  // mf1-nx: present-only, after the fold clause
+    h += peerRowClauses( p, /*compact=*/true );   // FOR-SLOTS + OWNER-CTOR-HOP: present-only, after mem=
+    h += callerHopClause( p, /*compact=*/true );  // mf1-nx: present-only, after the fold clause
     // The unconditionally-droppable-free tail of this dialect: five clauses that ride exactly when the bit beside
     // them is set, in THIS order, which is the contract a reader and every byte pin depend on. A table rather than
     // five identical ifs — the list has grown once per lane (hdr, compose, then train 9's lego and layer) and the
@@ -1043,7 +1081,8 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     h.append( bodySlotLegend( p, /*compact=*/false ) );   // for-body-slot: present-only, after the owner clause
     h.append( bodyFoldLegend( p, /*compact=*/false ) );   // body-fold: present-only, after the slot clause
     h.append( presentOnlyClause( p.memberNamesPresent, /*compact=*/false, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend ) );   // member-names
-    h.append( presentOnlyClause( p.callerHopPresent, /*compact=*/false, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend ) );  // mf1-nx: present-only, after the fold clause
+    h.append( peerRowClauses( p, /*compact=*/false ) );   // FOR-SLOTS + OWNER-CTOR-HOP
+    h.append( callerHopClause( p, /*compact=*/false ) );  // mf1-nx: present-only, after the fold clause
     if( p.tailLegend )
     {
         h.append( rw::kForFileTailLegend );   // deep-tail: defines r= and the <tail> element (sigs-charge-exempt, serialize.h)
@@ -2531,6 +2570,31 @@ ForAutoBodiesResult buildForEnrichment( const rw::Config& cfg, const rw::IngestR
     return out;
 }
 
+// UPWARD-2HOP (forcallerhop.h forRankedCallerHopTargets): the ranked caller hop is a LATE splice, on the late splices' posture (the
+// compact auto bundle, XML, the default regime, the whole answer measured, no hops cut marker), never beside the name-exact hop,
+// only on an error-shaped task; it reads the rows <sigs> EMITTED (r= order), so its clause's "r=1..3" holds. `held` is the
+// named hop's render, returned unchanged when that hop rode.
+struct RankedHopPosture
+{
+    bool        bundleCompact = false;   // the auto bundle on the compact route
+    bool        sigsRendered  = false;
+    bool        surfaceOff    = false;
+    bool        hopsCutMarker = false;
+    bool        namedHop      = false;   // the name-exact hop already rode
+    const char* routeTag      = "";
+};
+inline rw::CallerHopRender rankedCallerHop( const RankedHopPosture& p, const rw::Config& cfg, const rw::IngestResult& ing, const rw::Graph& g,
+                                            const std::vector<rw::NodeId>& shownSigIds, std::string_view rootArg, rw::CallerHopRender held )
+{
+    if( p.namedHop || !p.bundleCompact || !p.sigsRendered || p.surfaceOff || p.hopsCutMarker || rw::isNameExactRouteTag( p.routeTag ) || cfg.json
+        || cfg.tokenBudget > 0 || !rw::forCallerHopOn() || !rw::forRankedCallerHopTask( cfg.forTask ) )
+    {
+        return held;
+    }
+    const std::vector<rw::NodeId> ids = rw::forRankedCallerHopTargets( ing, g, shownSigIds, cfg.forTask );
+    return ids.empty() ? held : rw::renderForCallerHop( ing, g, ids, rootArg, /*ranked=*/true );
+}
+
 // mf1-nx (forcallerhop.h): the ONE function whose callers ride — `nameExactBodies` is the posture runForLensPass knows (the auto
 // <bodies> bundle on the name-exact route); this adds the regime (XML, no explicit --token-budget, the A/B switch) and the target rule.
 inline std::vector<rw::NodeId> forCallerHopIds( const rw::Config& cfg, const rw::IngestResult& ing, const rw::Graph& g, const std::vector<rw::NodeId>& lensSurfaceIds,
@@ -2623,6 +2687,106 @@ struct ForLensPassMode
 {
     std::string_view forAtStamp;
 };
+// the verb sections (verbs_navigate.h) come later in this translation unit; the --for block calls their CLI entry points
+std::optional<int> runPath( const MainDispatch& d );
+std::optional<int> runPathServed( const MainDispatch& d, std::span<const rw::NodeId> served, bool inForBlock );
+std::optional<int> runCallHierarchy( const MainDispatch& d );
+std::optional<int> runConnect( const MainDispatch& d );
+
+// FOR-ROUTE-DECLINED (src/forgraphverb.h): a task spelled `path from A to B` / `callers of X` / `common callers of A and B`
+// gets that verb's DEFAULT answer inside <graph_verb endpoints="subject">, just before </ctx>, on the graph this run built
+// (no re-index). Every byte before it is the ordinary answer; nothing resolves → nothing is printed. XML only (the
+// --json / columnar dialects keep their single document; the verb is one call away there).
+inline void appendSubjectGraphVerbBlock( const MainDispatch& d, std::span<const rw::NodeId> served )
+{
+    const rw::Config& cfg = d.cfg;
+    if( cfg.json || cfg.columnar || cfg.candidates || d.multiRoot )
+    {
+        return;
+    }
+    const std::optional<rw::GraphSubjectArgs> args = rw::chooseGraphSubjectArgs( d.ing, cfg.forTask );
+    if( !args )
+    {
+        return;
+    }
+    if( cfg.tokenBudget > 0 )   // --token-budget (the budget --for honours; shapingflagcheck (A) pins the --max-tokens read sites, so this reads only the one)
+    {
+        // a token budget is a request the block must obey (S2): the verb does not run, the tag names it (held="budget", verb= is the call)
+        rw::emitRaw( stdout, rw::graphSubjectOpenXml( *args, rw::GraphSubjectOpen{ .held = true } ).c_str() );
+        return;
+    }
+    rw::Config sub = cfg;   // the verb runs as its own bare call: its default caps, no page window, no --for shaping
+    sub.forTask    = {};
+    sub.pageLimit  = 0;   // defensive, like the json guard above: a paged --for (--limit/--offset) never reaches this site
+    sub.pageOffset = 0;
+    const auto [ flag, value ] = rw::graphSubjectVerbFlag( *args );
+    switch( args->form )
+    {
+        case rw::GraphSubjectForm::Path: sub.pathSpec = value; break;
+        case rw::GraphSubjectForm::Callers: sub.callers = value; break;
+        case rw::GraphSubjectForm::Common: sub.connectSpec = value; break;
+    }
+    const MainDispatch sd{ sub, d.ing, d.g, d.root, d.multiRoot, d.ws, d.fanIn, d.fanInPtr, d.qmetrics, d.ampPtr, d.cboPtr, d.testedPtr,
+                           d.lcom4Ptr, d.impurePtr, d.forChurn, d.redactCounts, d.redactPtr, d.notesPtr, d.notesDegraded, d.grepPhases, d.valueUses };
+    const auto runVerb = [ & ]
+    {
+        switch( args->form )
+        {
+            case rw::GraphSubjectForm::Path: (void)runPathServed( sd, served, /*inForBlock=*/true ); break;
+            case rw::GraphSubjectForm::Callers: (void)runCallHierarchy( sd ); break;
+            case rw::GraphSubjectForm::Common: (void)runConnect( sd ); break;
+        }
+    };
+    // The bare verb's answer is shaped by main.cpp's whole-stdout compact layer (runWithCompactLegend), which skips --for; so
+    // the verb is captured here and compacted by the same applyCompactDialect + compactLegendHint, and the block carries the
+    // bytes the bare call prints. CR 4396503866: the verb is captured under EVERY legend, because the open tag's name_test_hops= is
+    // read off the rows it printed. A capture that cannot be set up emits the verb's FULL legend and an open tag without it.
+    std::fflush( stdout );   // everything before the block is out before stdout is pointed at the capture
+    std::FILE* const capture = std::tmpfile();
+    const int        saved   = capture != nullptr ? rw::os::dup( STDOUT_FILENO ) : -1;
+    if( capture == nullptr || saved < 0 || rw::os::dup2( rw::os::fileno( capture ), STDOUT_FILENO ) < 0 )
+    {
+        if( sub.legend == "compact" )
+        {
+            DISCLOSE( Diagnostics::answerUnchanged, "the full legend is a correct superset of the compact one: only the cost grows",
+                      "appendSubjectGraphVerbBlock: no capture buffer — the graph verb's FULL legend is emitted" );
+        }
+        if( args->form == rw::GraphSubjectForm::Path )   // CR 4396503866: the open tag cannot read the rows, so a by-name hop into a test file goes unmarked
+        {
+            rw::emitTo( stderr, "ripwire: --for: no capture buffer for the graph verb — the graph_verb block omits name_test_hops= (a path hop matched by name into a test file is not marked)\n" );
+        }
+        if( saved >= 0 ) { rw::os::close( saved ); }
+        if( capture != nullptr ) { std::fclose( capture ); }
+        rw::emitRaw( stdout, rw::graphSubjectOpenXml( *args ).c_str() );
+        std::fflush( stdout );
+        runVerb();
+    }
+    else
+    {
+        runVerb();
+        std::fflush( stdout );
+        rw::os::dup2( saved, STDOUT_FILENO );
+        rw::os::close( saved );
+        std::string doc;
+        std::rewind( capture );
+        char buf[ 65536 ];
+        for( std::size_t got; ( got = std::fread( buf, 1, sizeof( buf ), capture ) ) > 0; )
+        {
+            doc.append( buf, got );
+        }
+        std::fclose( capture );
+        if( sub.legend == "compact" )
+        {
+            (void)rw::applyCompactDialect( doc, ::compactLegendHint( sub, doc ) );   // not shaped → the bytes as emitted (the DEFAULT posture's rule)
+        }
+        // the open tag goes out after the verb ran: name_test_hops= (S5) is read off the rows it printed
+        const std::size_t nameTest = args->form == rw::GraphSubjectForm::Path ? rw::graphSubjectNameTestHops( doc ) : 0;
+        rw::emitRaw( stdout, rw::graphSubjectOpenXml( *args, rw::GraphSubjectOpen{ .nameTestHops = nameTest } ).c_str() );
+        std::fwrite( doc.data(), 1, doc.size(), stdout );
+    }
+    rw::emitRaw( stdout, std::string( rw::kGraphSubjectCloseXml ).c_str() );
+}
+
 std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, const ForLensPassMode& mode )
 {
     using namespace rw;
@@ -3148,6 +3312,22 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         const std::vector<rw::NodeId> callerHopIds = forCallerHopIds( cfg, ing, g, lensSurfaceIds, lensRank, routeAnchorDefs,
                                                                       autoBundleMode && plan.autoBodies && isNameExactRouteTag( lr.routeTag ) );
         headerParts.callerHopPresent = !callerHopIds.empty();
+        // ep-manifest (epmanifest.h): the manifest entry-point groups that register a row of the ranked head — rendered here
+        // because the header's clause reads it. The default regime and XML only, as the fold and the caller hop.
+        rw::EpRender            epManifest;
+        std::vector<rw::NodeId> epHead;   // the ranked head the clause was priced for; narrowed to the rows <sigs> emits once it renders
+        if( autoBundleMode && !cfg.json && cfg.tokenBudget <= 0 && rw::forEpManifestOn() )
+        {
+            for( std::size_t i = 0; i < lensSurfaceIds.size() && i < std::size_t( std::max( forTopN, 0 ) ); ++i )
+            {
+                if( lensSurfaceIds[i] < lensRank.size() && lensRank[ lensSurfaceIds[i] ] > 0.0f )
+                {
+                    epHead.push_back( lensSurfaceIds[i] );
+                }
+            }
+            epManifest = rw::renderForEpManifest( ing, epHead );
+        }
+        headerParts.epPresent = !epManifest.xml.empty();
         const auto buildForHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
         { return forLensHeaderText( headerParts, withRouteAttr, withTaskEcho, extraNotes ); };
         std::string headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
@@ -3314,7 +3494,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // tally). Overwritten below if the §P3×§P4 narrow-and-re-render fires, so it always reflects the set
         // that would actually be restored.
         std::size_t legoPreCapCount = 0, composePreCapCount = 0;
-        legoPreRendered = preRender( [ & ]( std::FILE* lm ) { packLego( lm, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount, &g.implementors ); },
+        legoPreRendered = preRender( [ & ]( std::FILE* lm ) { packLego( lm, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg, rw::LegoTargetedArgs().withDecidedOutside( g.baseOutsideClauses ), &legoPreCapCount, &g.implementors ); },
                                      legoStr );
         if( !legoPreRendered )
         {
@@ -3430,7 +3610,8 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         const std::size_t bodyFoldLegendEmitted = bodyFoldLegend( headerParts, compactLegendOn ).size();
         // mf1-nx: the caller hop's clause on the same contract — the hop rides on top of the complete answer (<sigs>, the tail and
         // the bodies byte-identical with RIPWIRE_NO_CALLER_HOP=1), so its reading never costs a signature row
-        const std::size_t callerHopLegendEmitted = presentOnlyClause( headerParts.callerHopPresent, compactLegendOn, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend ).size();
+        const std::size_t callerHopLegendEmitted = callerHopClause( headerParts, compactLegendOn ).size()
+                                                 + presentOnlyClause( headerParts.epPresent, compactLegendOn, rw::kForCompactEpManifestLegend, rw::kForEpManifestLegend ).size();   // ep-manifest: same contract
         // attrib-multidef Q1: the prov="split" clause is a disclosure on the same contract — exempt, as e= is, so <sigs> (rows and
         // its continuation's budget) is byte-identical with and without it (fordisclosurecheck #2: auto vs --signatures-only)
         const std::size_t splitLegendEmitted = !headerParts.splitPresent ? 0u
@@ -3467,7 +3648,8 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                               + ownerLegendExemptBytes( headerParts, /*compact=*/false )
                                               + bodySlotLegend( headerParts, /*compact=*/false ).size()
                                               + bodyFoldLegend( headerParts, /*compact=*/false ).size()   // body-fold
-                                              + presentOnlyClause( headerParts.callerHopPresent, /*compact=*/false, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend ).size()  // mf1-nx
+                                              + callerHopClause( headerParts, /*compact=*/false ).size()  // mf1-nx
+                                              + presentOnlyClause( headerParts.epPresent, /*compact=*/false, rw::kForCompactEpManifestLegend, rw::kForEpManifestLegend ).size()  // ep-manifest
                                               + ( headerParts.splitPresent ? rw::kForSplitClause.size() : 0u );   // attrib-multidef Q1
             std::size_t       fullCharged     = fullExempt > fullHeaderBytes ? fullHeaderBytes : fullHeaderBytes - fullExempt;
             fullCharged -= std::min( fullCharged, rw::forZeroNoteBytes( fullHeader ) );   // lean-answers: exempt, as above
@@ -3706,7 +3888,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             && narrowLegoToRenderedSigs( ing, legoScoped, rw::sigsRowsAtTarget( sigsStr, forSigsCut ),   // forbudget-soft: scoped at the target
                                          flRootArg.empty() ? std::string_view() : rw::sarif::rootPrefixOf( flRootArg ) ) )
         {
-            legoStr = captureXml( [ & ]( std::FILE* f ) { packLego( f, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount, &g.implementors ); } );
+            legoStr = captureXml( [ & ]( std::FILE* f ) { packLego( f, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg, rw::LegoTargetedArgs().withDecidedOutside( g.baseOutsideClauses ), &legoPreCapCount, &g.implementors ); } );
         }
 
         // L2 (round-1 lever B1, §9.3 disclosed cut): collapse <lego>/<compose> to a counted stub BY DEFAULT —
@@ -3927,7 +4109,12 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             if( sigsPreRendered && !enrich.surfaceOff && !enrich.hopsCutMarker )
             {
-                fold = rw::renderForBodyFold( rw::BodyFoldInputs{ ing, cfg.forTask, slot.served ? slotOwner.id : rw::kNoNode, lensRank, flRootArg, redactPtr, cfg.compress }, foldIds );
+                fold = rw::renderForBodyFold( rw::BodyFoldInputs{ ing, cfg.forTask, slot.served ? slotOwner.id : rw::kNoNode, lensRank, flRootArg, redactPtr, cfg.compress, &g }, foldIds );
+                if( fold.follows > 0 && !fold.xml.empty() )
+                {
+                    headerParts.foldFollowPresent = true;   // WRAPPER-FOLLOW: the clause rides beside the attribute it defines
+                    headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+                }
             }
             if( fold.xml.empty() )
             {
@@ -3951,6 +4138,13 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                 headerParts.callerHopPresent = false;   // its clause goes with it
                 headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, enrich.surfaceOff ? std::string_view() : kForDegradedBundleNote );
             }
+        }
+        // ep-manifest: rides on top of the complete answer like the caller hop; none when the bodies section degraded
+        if( headerParts.epPresent && ( !sigsPreRendered || enrich.surfaceOff ) )
+        {
+            epManifest.xml.clear();
+            headerParts.epPresent = false;   // its clause goes with it
+            headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, enrich.surfaceOff ? std::string_view() : kForDegradedBundleNote );
         }
         const rw::ChargedSection& autoSection = enrich.section;
         const std::string&        autoAttr    = enrich.attr;
@@ -4049,27 +4243,103 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             }
         }
 
+        // ep-manifest (CodeRabbit 4381174525): the groups were picked from the ranked head BEFORE <sigs> rendered, and the
+        // renderer may drop a head row (the budget gate, the trim ladder, a soft target's refill). The manifest is re-picked from
+        // the head rows <sigs> finally emits, so its legend's "registers a shown row" holds; nothing dropped = no change, and a
+        // manifest left with no group goes with its clause (as the degraded branch above).
+        if( headerParts.epPresent && sigsPreRendered )
+        {
+            std::vector<rw::NodeId> epEmitted;
+            for( const rw::NodeId id : epHead )
+            {
+                if( std::ranges::find( shownSigIds, id ) != shownSigIds.end() )
+                {
+                    epEmitted.push_back( id );
+                }
+            }
+            if( epEmitted.size() != epHead.size() )
+            {
+                epManifest = rw::renderForEpManifest( ing, epEmitted );
+                if( epManifest.xml.empty() )
+                {
+                    headerParts.epPresent = false;   // its clause goes with it
+                    headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+                }
+            }
+        }
         // body-fold C3: the <sigs> continuation pair, once the fold rode (forfold.h spliceFoldSigsNext; before the root is priced)
         if( !fold.xml.empty() )
         {
             rw::spliceFoldSigsNext( sigsStr, sigsCeilingNote, fold.firstSkipNext );
         }
+        // The text the answer already serves whole, ONE reading for the three late splices below (member-names, FOR-SLOTS, OWNER-CTOR-HOP):
+        // the fold's bodies and member slices, plus the body slot's owner (the fold lists it too when the fold rode). A body section added
+        // here reaches every splice at once; each splice takes the set by const reference and never writes it.
+        const auto servedAnswerBodies = [ & ]()
+        {
+            rw::MemberNamesServed served{ fold.bodies, fold.sliced };
+            if( slot.served )
+            {
+                served.bodies.push_back( slotOwner.id );
+            }
+            return served;
+        };
         // ── member-names (formembers.h): mem= on the shown owner rows, spliced into the rendered rows AFTER they were chosen (a name
         // never costs a row) and before the root is priced (est_tokens prices the names with <sigs>). The fold's posture — the compact
         // route, XML, the default regime — and the whole answer measured (the splice reads the shown ids against the rendered rows).
         if( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forMemberNamesOn() && sigsPreRendered
             && !enrich.surfaceOff && !enrich.hopsCutMarker )
         {
-            rw::MemberNamesServed answerBodies{ fold.bodies, fold.sliced };
-            if( slot.served )
-            {
-                answerBodies.bodies.push_back( slotOwner.id );   // the body slot's owner (the fold lists it too when the fold rode)
-            }
+            const rw::MemberNamesServed answerBodies = servedAnswerBodies();
             if( rw::spliceMemberNames( sigsStr, ing, shownSigIds, cfg.forTask, answerBodies ) > 0 )
             {
                 headerParts.memberNamesPresent = true;   // the clause rides beside the attribute it defines
                 headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
             }
+        }
+        // ── FOR-SLOTS (forslots.h): slots= on the shown initializer rows, the same posture and the same "text already served" rule
+        if( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forInitSlotsOn() && sigsPreRendered
+            && !enrich.surfaceOff && !enrich.hopsCutMarker )
+        {
+            const rw::MemberNamesServed answerBodies = servedAnswerBodies();
+            if( rw::spliceInitSlots( sigsStr, ing, shownSigIds, answerBodies ) > 0 )
+            {
+                headerParts.initSlotsPresent = true;   // the clause rides beside the attribute it defines
+                headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+            }
+        }
+        // ── SLOT JOIN ROWS (forslots.h, IX1-V2): slot_by= / slot_fields= on the shown function and struct rows, the same posture
+        if( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forSlotJoinRowsOn() && sigsPreRendered
+            && !enrich.surfaceOff && !enrich.hopsCutMarker )
+        {
+            if( rw::spliceSlotJoinRows( sigsStr, ing, shownSigIds, &headerParts.slotNamePresent ) > 0 )
+            {
+                headerParts.slotJoinPresent = true;   // the clause rides beside the attributes it defines
+                headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+            }
+        }
+        // ── OWNER-CTOR-HOP (forctorhop.h): the r=1 method's owner constructor on its row, the same posture and served-text rule
+        if( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forCtorHopOn() && sigsPreRendered
+            && !enrich.surfaceOff && !enrich.hopsCutMarker )
+        {
+            const rw::MemberNamesServed answerBodies = servedAnswerBodies();
+            if( rw::spliceCtorHop( sigsStr, ing, g, shownSigIds, answerBodies ) > 0 )
+            {
+                headerParts.ctorHopPresent = true;   // the clause rides beside the attributes it defines
+                headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+            }
+        }
+        // ── UPWARD-2HOP (forcallerhop.h forRankedCallerHopTargets): an error-shaped task's ranked caller hop, a late splice on the
+        // rows <sigs> EMITTED (rankedCallerHop states the posture); its clause rides beside it
+        callerHop = rankedCallerHop( RankedHopPosture{ .bundleCompact = autoBundleMode && plan.compact, .sigsRendered = sigsPreRendered,
+                                                       .surfaceOff = enrich.surfaceOff, .hopsCutMarker = enrich.hopsCutMarker,
+                                                       .namedHop = headerParts.callerHopPresent, .routeTag = lr.routeTag },
+                                     cfg, ing, g, shownSigIds, flRootArg, std::move( callerHop ) );
+        if( !callerHop.xml.empty() && !headerParts.callerHopPresent )
+        {
+            headerParts.callerHopPresent = true;   // the ranked clause rides beside the element it defines
+            headerParts.callerHopRanked  = true;
+            headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
         }
         // PR #135: the priced root this header will carry — every late splice and the est_tokens fixpoint, in
         // finishForLensHeader (above runForLens, with each splice's rationale).
@@ -4090,7 +4360,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             // F2: everything OUTSIDE the header at the markup rate. enrich.markupBytes is the compact <hops> section,
             // folded in here rather than charged separately — one rate, one rounding (ForEnrichmentPlan).
             .nonHeaderMarkupBytes = forHdrXml.size() + sigsStr.size() + legoStr.size() + composeStr.size() + routeStr.size() + graphSection.xml.size()
-                                  + enrich.markupBytes + tailStr.size() + slot.markupBytes + fold.markupBytes + callerHop.xml.size() + 6,   // + "</ctx>" (deep-tail: the tail at the markup rate)
+                                  + enrich.markupBytes + tailStr.size() + slot.markupBytes + fold.markupBytes + callerHop.xml.size() + epManifest.xml.size() + 6,   // + "</ctx>" (deep-tail: the tail at the markup rate)
             // T3: the body-rate sections; enrich.bodyTokens is zero on the compact route (markup, above); for-body-slot: the
             // owner body at the body rate (a skipped slot's element is markup, above)
             .bodyTokens           = detailSection.tokens + enrich.bodyTokens + slot.bodyTokens + fold.bodyTokens,   // body-fold: its bodies
@@ -4138,7 +4408,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             // the same bytes --sections=lego would restore. Same scope+identity (§P3; un-narrowed — the sigs
             // bytes are unknown here). legoStubTotal == 0 emits nothing, packLego's own no-op.
             ASSUME( !legoWillStub, "runForLens: an unmeasured lego section was marked for collapse" );
-            packLego( stdout, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg, {}, nullptr, &g.implementors );
+            packLego( stdout, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg, rw::LegoTargetedArgs().withDecidedOutside( g.baseOutsideClauses ), nullptr, &g.implementors );
         }
         if( composePreRendered )
         {
@@ -4162,6 +4432,8 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // DEEP-TAIL d2: the file-grain tail, BEFORE the body sections — a prefix-budgeted consumer meets
         // the file-grain recall before the big CDATA. Bytes already charged (ladder + est_tokens above).
         std::fwrite( tailStr.data(), 1, tailStr.size(), stdout );
+        // ep-manifest: the entry-point groups after the tail, before the caller hop ("" when none)
+        std::fwrite( epManifest.xml.data(), 1, epManifest.xml.size(), stdout );
         // mf1-nx: the caller hop after the tail and before the body CDATA, from the bytes est_tokens priced ("" when none)
         std::fwrite( callerHop.xml.data(), 1, callerHop.xml.size(), stdout );
 
@@ -4196,6 +4468,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             rw::emitChargedSection( stdout, graphSection, [ & ]{ packGraphBlock( stdout, ing, lensRank, g.outOff, g.outTargets ); } );
         }
+        appendSubjectGraphVerbBlock( d, servedAnswerBodies().bodies );   // FOR-ROUTE-DECLINED: "" unless the task is spelled as a graph question that resolves; the bodies this answer carries print no second copy in its path hop bodies
 
         rw::emitRaw( stdout, "</ctx>" );
         reportRedactions( stderr, redactCounts );
@@ -4247,7 +4520,7 @@ std::optional<int> runTargetedViews( const MainDispatch& d )
         // not tie to the file it named. implementors= is read off the one node picked here, so unreported, a drop reached
         // the reader as implementors="0" about a forward declaration.
         std::size_t  legoUnprovenDefs = 0;
-        const NodeId focus            = resolveFocus( ing, cfg.legoType, &legoUnprovenDefs );
+        const NodeId focus            = resolveLegoFocus( ing, g.implementors, cfg.legoType, &legoUnprovenDefs );
         if( focus == kNoNode )
         {
             // §B4.2: one shared refusal — a non-defining `file:name` says WHICH files define the type and
@@ -4268,11 +4541,11 @@ std::optional<int> runTargetedViews( const MainDispatch& d )
         rw::emitTo( stdout, "{}{}{}{}{}{}", rw::ctxRootOpen( {}, {}, tvRootArg ).c_str(), rw::kLegoLegend,
                      rw::graphUnindexedLegendComment( rw::graphGaugeClauses( g ) ).c_str(),
                      rw::unprovenDefsVerbComment( rw::UnprovenDefsVerb::Lego, legoUnprovenDefs > 0, "<!-- ripwire lego: " ).c_str(),
-                     rw::implementorsFloorLegendComment( ing, g.implementors, focus ),   // count-floor: present-only, as the two above
+                     rw::implementorsFloorLegendComment( ing, g.implementors, focus, g.baseOutsideClauses ),   // count-floor: present-only, as the two above
                      rw::legoClosureLegendComment( g.implementors, g.implementorBound, focus ).c_str() );   // lane lego-transitive: present-only, the deeper rows
         const std::string legoTargetedAttr = rw::unprovenDefsAttrXml( legoUnprovenDefs ) + rw::graphCountFloorAttrXml( g );   // outlives the call
         packLego( stdout, ing, g.implementors, flat, 1, d.redactPtr, &legoImpure, focus, /*withPaths=*/true, tvRootArg,
-                  rw::LegoTargetedArgs( legoTargetedAttr, cfg.pageLimit, cfg.pageOffset, &g.implementorBound ).withMainRows( g.rubyMainMixins ) );   // H1 + M15: residue, gauge, marker; the deeper-row page
+                  rw::LegoTargetedArgs( legoTargetedAttr, cfg.pageLimit, cfg.pageOffset, &g.implementorBound ).withMainRows( g.rubyMainMixins ).withDecidedOutside( g.baseOutsideClauses ) );   // H1 + M15: residue, gauge, marker; the deeper-row page
         rw::emitRaw( stdout, "</ctx>" );
         reportRedactions( stderr, d.redactCounts );      // W3-N1: a contract <m> sig is a redacting seam — disclose the tally
         return 0;

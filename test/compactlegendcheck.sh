@@ -367,6 +367,11 @@ echo "=== (A-PIN) --legend=full is BYTE-IDENTICAL to the pre-L1 default (pinned 
 # at= and est_tokens= masked) equals it exactly. 5527 -> 5688 B. The six other pins are unchanged.
 # RE-ANCHORED BY HAND 2026-10-19 (markdown section links), map.xml only: the two fixture callees gain via="link",
 # the full legend gains the via="link" comment, and est_tokens= prices them, 901 -> 929.
+# RE-ANCHORED BY HAND 2026-10-23 (lane honest-lex, CI fix round 1), grep.xml only: the lane's intended output change, nothing
+# else. Checked: the pin equals the previous head's --legend=full output with exactly four edits -- the full legend gains the
+# sentence "A hit is one LINE: occ= on a row (present only above one) counts the pattern's occurrences on that line, and
+# hits=, shown= and the window count lines, not occurrences."; the root's hits=/shown= read 7 (was 8: the two occurrences on
+# geometry.cpp:16 are one line now); that row's n="2" + its at-tagged sibling become occ="2" (one hit per line).
 PIN_DIR="$ROOT/test/compactlegendfix/pre_l1_full"
 # the one normalisation, in python on BOTH sides so no sed dialect decides it (BSD sed appends a final newline, GNU
 # sed does not): at="…" masked, trailing newlines dropped.
@@ -637,6 +642,23 @@ probeFor()
 # A name with several definitions now serves lean (no ride-along map), so the whole-file answer this probe reaches carries
 # topk_default="0" (+112 B reading) and map_next= (+56 B reading) on its root, both present-only (compactlegend.h). The
 # (U-twin-expand) arm below keeps the OLD 360 B pin for everything else in that legend.
+# RE-PINNED 2026-10-21 (this review-fix round, but the BYTES are the reviewed commit's): ripwire.around/v1 770 -> 830
+# (measured 812, the --around=distance probe; the table held 760). e5d39f70 "say tower front where the code now means it"
+# rewrote the compact defs= READING from "lowest-id walked, code first, a C/C++ body in the same scope over its declaration"
+# (107 B) to "most-specific kind walked first, its language ahead, id last, code first, a C/C++ body in the same scope over its
+# declaration" (151 B, +44 B) and left this row where it was — splice that pre-e5d39f70 term back into THIS build's answer and
+# the same probe measures 768 B, inside the old 770, which localises the whole breach to that one reading. The (U) arm was
+# therefore already red on the branch before this round. This round's own half of the same fix — the FULL --around seed clause,
+# re-worded to the tower-front pick — costs (U) nothing: the compact dialect drops that clause, so no full-legend phrase is
+# billed here. No (U-twin): a twin holds an OLD PATH that still exists, and here the same probe in the same dialect simply
+# speaks the pick correctly, so the row is the whole story.
+# RE-PINNED 2026-10-21 (this review-fix round, the BYTES are the reviewed branch's): ripwire.safe-delete/v1 measured
+# 828 -> 830 (the --safe-delete=distance probe), pin 840 UNCHANGED. e5d39f70 re-worded that verb's own compact purpose
+# clause (compactlegend.h:130, "t= p= its lowest-id match's kind and file:line" -> "its tower-front match's ...", 9 B ->
+# 11 B, +2 B), a clause every compact --safe-delete answer emits, and left this row at 828. Nothing goes red:
+# round-up-to-10(830) + 10 is still 840, and the (U-twin) cut holds its own reading — so this is the attribution the
+# table's rule above asks for (re-pin in the commit that adds the bytes, with the bytes attributed there), the same one
+# the around/v1 row carries.
 # RE-PINNED 2026-10-10 (lane lean-trio, idea #11): ripwire.edit-check/v1 610 -> 650 (measured 636, the --edit-check=distance
 # probe; 595 on main 0852bc0f). The probe's contract is unchanged with nothing flagged, so the answer is now the verdict
 # line (no <c> rows), and the compact legend reads its two new facts: rows_next= (the --limit call listing the callers) and
@@ -695,16 +717,16 @@ ripwire.affected/v1               840   826
 ripwire.verify/v1                 440   421
 ripwire.help-task/v1              440   429
 ripwire.query/v1                 790   775
-ripwire.grep/v1                  1380  1368
+ripwire.grep/v1                  1432  1420
 ripwire.match/v1                  370   355
 ripwire.lego/v1                  290   275
 ripwire.exemplar/v1               440   422
-ripwire.around/v1                770   760
+ripwire.around/v1                830   812
 ripwire.callers/v1               450   438
 ripwire.callees/v1                500   484
 ripwire.uses/v1                   510   500
 ripwire.batch/v1                  250   238
-ripwire.safe-delete/v1           840   828
+ripwire.safe-delete/v1           840   830
 ripwire.at/v1                    180   161
 ripwire.from-trace/v1            1300  1281
 ripwire.plan-lint/v1              570   551
@@ -717,7 +739,11 @@ ripwire.pack-top-n/v1            830   813
 ripwire.expand/v1                280   265
 ripwire.expand-file/v1            510   508
 ripwire.for/v1                   1100  1099
+ripwire.defs/v1                   490   472
 '
+# PINNED 2026-10-27 (lane/defs-lookup): ripwire.defs/v1 on this gate's --defs=zzqq9 probe. First pin 340 on 316 B, measured BEFORE
+# the not-found readings existed; RE-PINNED 2026-10-28 to 490 on 472 B = the verb's purpose line (~290 B) plus the shared not-found
+# answer's found=/of=/near= readings (compactlegendcheck UG required them). Present-only: none of the defs row readings ride here.
 pinFor()
 {
     printf '%s\n' "$PIN_TABLE" | awk -v schema="$1" '$1 == schema { printf "%s", $2; exit }'
@@ -1705,6 +1731,8 @@ grep -q '^__ERROR__' "$TMP/m.bad" && ok "(M) MCP edit_check legend:\"terse\" is 
 # RE-PINNED 2026-09-19 (the L1 fix round, rv-r1-L1 HIGH-1: every emitted attribute defined — the (U) pins' note): uses 290 -> 510
 # (measured 500), path_between 280 -> 430 (419), exemplar 260 -> 350 (331); impact and lego did not cross their pins.
 # Fix round 2: path_between 430 -> 540 (measured 535 — the no-path hint= reading).
+# RE-PINNED 2026-10-24 (honest-lex fix 2): grep/v1 1380 -> 1432 (measured 1420; 1368 on the base binary) -- the +52 B clause
+# "(beside pattern_meta=, of the literal reading only)" that says complete=/hits= speak of the literal reading (review N1).
 # RE-PINNED 2026-10-18 (lane ix2-slice): path_between 540 -> 860 — the same <near_sink>/<ns> readings the (U) table's
 # ripwire.path/v1 row states (one emitter, src/pathgaps.h pathNearSinkXml); the (U-twin-path) arm keeps the old 550 B CLI pin.
 # RE-PINNED 2026-09-23 (cut-fix C): impact 780 -> 810 (measured 797; 777 on the base binary) — the same +20 B
@@ -2010,9 +2038,10 @@ for v in "" "--query=distance" "--rank-by=hub" "--around=total_area" "--impact=d
     for spec in pr_iters pr_converged "#declined" "#external" "#locality_pinned" "#extent_suspect_syms" "#macro_blanked_files" \
                 "#ignored_files" "#ignored_dirs" "#max_tokens" "#fit_bytes" "#over_ceiling" r:defs r:rank_by r:window; do
         attr="${spec#*:}"; attr="${attr#\#}"
-        # Since the fourth sweep (2026-09-12) --impact's purpose line reads its OWN defs=, so the map root's defs= reading is
-        # found by its opener rather than its attribute name, the way (D17)/(D23) find theirs.
-        if [ "$spec" = r:defs ]; then isRead="$( ca mentions "$TMP/d12.c" "the lowest-id one was walked" )"; else isRead="$( ca defines "$TMP/d12.c" "$attr" )"; fi
+        # Since the fourth sweep (2026-09-12) --impact's purpose line reads its OWN defs=, so the map root's defs= reading is found by its opener rather
+        # than its attribute name, the way (D17)/(D23) find theirs. THE NEEDLE IS THE COMPACT TERM'S OPENER (compactlegend.h's defs row) — these documents
+        # are read under --legend=compact, where the full clause is never printed, so a full-legend phrase here would silently match nothing.
+        if [ "$spec" = r:defs ]; then isRead="$( ca mentions "$TMP/d12.c" "most-specific kind walked first" )"; else isRead="$( ca defines "$TMP/d12.c" "$attr" )"; fi
         if [ "$isRead" = 1 ] && [ "$( ca carries "$TMP/d12.c" "$spec" )" != 1 ]; then
             no "(D12) ${v:-the flagless map}: the compact legend defines $attr= but the document carries no $spec — a reading of a field that is not there"
             d12bad=1
@@ -2843,6 +2872,10 @@ for f in leak_anon.cpp leak_plain.cpp leak_lambda.cpp leak_c.c leak_objc.m leak_
 done
 "$BIN" "$XHOT"  --skipped --legend=compact >"$TMP/s.hot"  2>/dev/null </dev/null
 "$BIN" "$XLEAK" --skipped --legend=compact >"$TMP/s.leak" 2>/dev/null </dev/null
+# the Rust layer of the same re-parse (src/rustusebounds.h): its row and root counts take the same live route
+XRUST="$TMP/xrust"; mkdir -p "$XRUST"
+for f in capture_plus.rs capture_split.rs; do cp "$ROOT/test/macroreparsefix/rust/$f" "$XRUST/" 2>/dev/null || no "(S) fixture missing: test/macroreparsefix/rust/$f"; done
+"$BIN" "$XRUST" --skipped --legend=compact >"$TMP/s.rust" 2>/dev/null </dev/null
 # #60: graphlegend.h kModScopeLegend is conditional and its clause opens with `t="modscope"`, so the source
 # reader above asks for a `t` term. It deliberately has none. `t=` is not an absent-at-zero attribute like
 # the rest of this population — it is on EVERY <s> row of every ranked answer, and a term keyed on it would
@@ -2855,7 +2888,7 @@ MODS="$TMP/modscope/src"; mkdir -p "$MODS"
 printf 'export function setPhase(p: string): void { console.log(p) }\n' > "$MODS/lifecycle.ts"
 printf "import { setPhase } from './lifecycle'\nsetPhase('starting')\n"  > "$MODS/index.ts"
 "$BIN" "$TMP/modscope" --no-cache --callers=setPhase --legend=compact >"$TMP/s.mods" 2>/dev/null </dev/null
-liveDoc(){ case "$1" in extent_suspect_files|extent_suspect_syms) printf '%s' "$TMP/s.hot" ;; macro_blanked_files|macro_blanked) printf '%s' "$TMP/s.leak" ;; t) printf '%s' "$TMP/s.mods" ;; *) printf '' ;; esac; }
+liveDoc(){ case "$1" in extent_suspect_files|extent_suspect_syms) printf '%s' "$TMP/s.hot" ;; macro_blanked_files|macro_blanked) printf '%s' "$TMP/s.leak" ;; use_bounds_blanked_files|use_bounds_blanked) printf '%s' "$TMP/s.rust" ;; t) printf '%s' "$TMP/s.mods" ;; *) printf '' ;; esac; }
 while IFS='|' read -r kind name where <&3; do
     case "$kind" in
         PASS) ok "(S) $name" ;;

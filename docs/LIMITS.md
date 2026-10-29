@@ -30,10 +30,10 @@ a small explicit bound" is safe only when nothing inside the group repeats; it i
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 276 | 108 | 165 | **111** |
+| 298 | 115 | 180 | **118** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 276 + 7 is the 283 constants this generator parses out of `src/`.
+are not counted as caps, and 298 + 7 is the 305 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -51,8 +51,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **140 of 276 caps are classified
-(50 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 136 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **142 of 298 caps are classified
+(50 INDEXING, 46 OUTPUT, 46 BOUNDARY); the remaining 156 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -102,7 +102,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 108 files that declare a cap — the 276 caps counted above, and no parameter.
+One table for each of the 115 files that declare a cap — the 298 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -128,6 +128,16 @@ Discloses: `count_capped`
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kAtomsQueryBudget` | `100000` | — | — |
+
+### `src/backhops.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kBackHopWidth` | `16` | — | — |
+| `kImpactRingRowCap` | `16` | — | — |
+| `kImpactRingSlotDepth` | `3` | — | a field-only chain's depth; pathgaps.h pins it to kBridgeSlotCrossings |
 
 ### `src/binstale.h`
 
@@ -242,6 +252,14 @@ Discloses: **none**
 | --- | --- | --- | --- |
 | `kDefTableCap` | `16` | — | — |
 
+### `src/defslookup.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kDefsNamesMax` | `16` | — | — |
+
 ### `src/didyoumean.h`
 
 Discloses: **none**
@@ -311,6 +329,16 @@ Discloses: `files_capped`, `findings_capped`, `syms_capped`
 | `kEnsembleSymbolRowCap` | `40` | — | — |
 | `kOrdinalWindowCap` | `40` | — | — |
 
+### `src/epmanifest.h`
+
+Discloses: `entries_capped`, `groups_capped`, `used_capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kForEpEntryRows` | `12` | — | entries shown per group |
+| `kForEpGroupRows` | `4` | — | groups per answer |
+| `kForEpUsedAtRows` | `3` | — | consumer sites shown per group (used_total= counts all) |
+
 ### `src/eval.h`
 
 Discloses: **none**
@@ -370,6 +398,16 @@ Discloses: `capped`
 | --- | --- | --- | --- |
 | `kForCallerHopDepth2Rows` | `4` | — | — |
 | `kForCallerHopRows` | `16` | — | — |
+| `kForRankedHopHeadRows` | `3` | BOUNDARY | r=1..3: the emitted head the seed is read from |
+| `kForRankedHopMaxCallers` | `3` | BOUNDARY | the narrow-funnel bar: a wider fan-in is the callers verb's page, not a chain |
+
+### `src/forctorhop.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kForCtorHopCap` | `16` | — | callee names listed on ctor_calls=; the rest counted in ctor_calls_more= |
 
 ### `src/forfold.h`
 
@@ -404,6 +442,15 @@ Discloses: `capped`
 | --- | --- | --- | --- |
 | `kForPageRowsDefault` | `40` | OUTPUT | `--for --limit=N` with no N is never accepted (the flag refuses 0); |
 | `kForPageUnionSymbolCap` | `8` | INDEXING | symbols per file whose term masks join that file's union |
+
+### `src/forslots.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kForSlotByCap` | `4` | — | — |
+| `kForSlotCap` | `16` | — | — |
 
 ### `src/gitmine.h`
 
@@ -469,6 +516,17 @@ Discloses: `capped`, `syms_capped`
 | `kHandoffNoteRows` | `8` | OUTPUT | heuristic note rows shown |
 | `kHandoffSymbolsPerCodeFile` | `50` | OUTPUT | — |
 | `kHandoffSymbolsPerDocFile` | `12` | OUTPUT | — |
+
+### `src/hopbody.h`
+
+Discloses: `capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kHopBodyCapBytes` | `4000` | — | — |
+| `kPathHopBodyMaxHops` | `2` | — | — |
+| `kWrapperFollowDepth` | `2` | — | — |
+| `kWrapperFollowMax` | `3` | — | — |
 
 ### `src/infra/blanktext.h`
 
@@ -831,9 +889,22 @@ Discloses: `gap_syms_capped`, `rows_capped`
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kBridgeMaxHops` | `8` | — | a longer chain is no answer a reader would follow: none is printed |
+| `kHandlerRuleListMax` | `16` | — | the bridge's own width limit: at most this many defs are listed as <h> |
+| `kHandlerRuleShown` | `3` | — | <hm> rows: the widest posted classes first |
 | `kNearSinkDepth` | `2` | — | proven caller hops back from to= (1 = a direct caller) |
 | `kNearSinkRows` | `4` | — | <ns> rows printed; rows= counts them all, rows_capped="1" says so |
 | `kPathGapRows` | `3` | — | <gap> rows printed; gap_syms= counts them all, gap_syms_capped="1" says so |
+| `kRouteBodyMax` | `4` | — | spew guard: bodies per answer; past it capped="1" next= the first unshown |
+| `kRouteBodyMaxHops` | `2` | — | bridge rows 0..2 (from= and the next two), never the to= row |
+
+### `src/pathpairs.h`
+
+Discloses: `alt_capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kPathPairAltRows` | `12` | — | knob: <alt> rows printed; alt= counts them all, alt_capped="1" says rows were cut |
+| `kPathPairMaxDstGroups` | `16` | — | knob: reverse walks per answer; more to= groups keep today's answer |
 
 ### `src/pattern.h`
 

@@ -122,6 +122,53 @@ inline bool isStructOrNamedType( SymKind k ) noexcept
     return k == SymKind::Struct || k >= SymKind::NamedType;
 }
 
+// The specificity ladder, hoisted out of dedupRawDefs (ingest_model.h) by RIPWIRE-RUBY task C so the
+// resolver's tower (graph.h's name matchers) and the def dedup order the SAME way from ONE table — higher =
+// more specific / preferred when two matches collide on one name byte. A table, not a switch (§3's
+// table-over-switch rule; --quality-delta scored the hoisted switch as a clone of the SymKind readers).
+// Values are load-bearing: the dedup's total order and the picker's Method > Var > Section answer sequence
+// are byte-pinned (rubyattrs/rubyschema checks, lspcheck 18). Index order is the SymKind enumerator order
+// above; the size assert pins the length, so appending a kind without arming it is a build error, not a
+// silent 0. The three keyed asserts below pin the enumerator ORDER at three rungs — Method at 1, Section at 6, FuncType at
+// 13, each together with its table weight — so moving the top rung, the floor or the tail without its row is a build error.
+// They do not pin the other eleven: a swap of two unanchored enumerators (Var with Interface) leaves every guard true while
+// the position-indexed table reweights them, which is what the byte-pinned answers above are for. DISTINCT from gitmine.h's
+// §H6 "specificity-ordered mapper", which orders file PATHS on a different axis; nothing there reads or shares this ladder.
+inline constexpr auto kKindSpecificityTable = std::array{   // extent DEDUCED from the rows: a missing/extra row changes size() and trips the assert below
+    /* Function = */   2,   // a bare function definition
+    /* Method = */     5,   // most specific: a behaviour owned by a type
+    /* Class = */      3,
+    /* Struct = */     3,
+    /* Interface = */  4,
+    /* Var = */        1,
+    /* Section = */    0,   // doc headings, JSON/YAML keys, schema columns: never beat a code kind on one name byte
+    /* Macro = */      0,   // a #define comes from its own single capture, same value as Section/Other
+    /* Field = */      1,   // never collides with Var in practice: the static/non-static gates are complementary
+    /* Other = */      0,
+    /* ModuleScope = */ 0,  // minted after the dedup pass runs; it can never reach it
+    /* NamedType = */  1,   // Go's type_spec fires the generic definedtype AND functype on the same name byte for
+    /* Alias = */      1,   // `type F func(...)`: the form-specific kind must win — FuncType below — and an alias is
+                             // its own node (type_alias) that never collides
+    /* FuncType = */   2,
+};
+static_assert( kKindSpecificityTable.size() == kSymKindCount,
+               "kKindSpecificityTable: one weight per SymKind, in enum order" );
+// The size assert arms an APPENDED kind; these arm a REORDERED enumerator, which no length can see. House pattern
+// (serialize.h pins int(Lang::Unknown) == 12; the NamedType..FuncType assert above pins a range): ordinal and rung
+// are asserted TOGETHER, keyed by enumerator. Three anchors — the top of the ladder, its floor, its tail — so a reorder
+// that moves one of THOSE without its table row trips one of them; a permutation confined to the eleven unanchored
+// enumerators trips none, and arming one of those is a fourth keyed assert, not a stronger claim about these three.
+static_assert( unsigned( SymKind::Method ) == 1 && kKindSpecificityTable[ unsigned( SymKind::Method ) ] == 5,
+               "SymKind::Method is enumerator 1 with weight 5 — the tower's top rung; move the enumerator and the table row together" );
+static_assert( unsigned( SymKind::Section ) == 6 && kKindSpecificityTable[ unsigned( SymKind::Section ) ] == 0,
+               "SymKind::Section is enumerator 6 with weight 0 — headings, keys and schema columns never beat a code kind on one name byte" );
+static_assert( unsigned( SymKind::FuncType ) == 13 && kKindSpecificityTable[ unsigned( SymKind::FuncType ) ] == 2,
+               "SymKind::FuncType is enumerator 13 (the last) with weight 2 — the Go func-type rung over NamedType/Alias" );
+inline int kindSpecificity( SymKind k ) noexcept
+{
+    return enumTableAt( kKindSpecificityTable, k, 0 );   // a byte past the enum (a corrupt cache byte is VALIDATEd on read)
+}
+
 // The last segment of a scope (Symbol::scope) as written ("outer::Scanner" or "pkg.Outer" -> the innermost owner): the spelling the selector
 // resolves as Owner.name (graph.h scopeSuffixMatches).
 inline std::string_view scopeLastSegment( std::string_view sc ) noexcept
@@ -458,7 +505,7 @@ inline const char* refRoleTag( RefRole r ) noexcept
 // Reference-as-value round: the grammar family whose value positions src/ingest_valuerefs.h reads, and whose
 // visibility rule src/valuerefs.h resolves under — ONE table both sides index, so the capture and the resolver
 // cannot disagree about which languages are armed. None = not armed (no Value/Through rows are captured).
-enum class ValueRefFamily : std::uint8_t { None, C, Js, Py, Go };
+enum class ValueRefFamily : std::uint8_t { None, C, Js, Py, Go, Rust };   // Rust: the slot join's records only (ingest_rustslots.h)
 inline constexpr std::array<ValueRefFamily, kLangCount> kValueRefFamilyOfLang = []
 {
     std::array<ValueRefFamily, kLangCount> table {};   // value-initialised: every language None unless armed below
@@ -468,6 +515,7 @@ inline constexpr std::array<ValueRefFamily, kLangCount> kValueRefFamilyOfLang = 
     table[ static_cast<std::size_t>( Lang::TypeScript ) ] = ValueRefFamily::Js;
     table[ static_cast<std::size_t>( Lang::Python ) ]     = ValueRefFamily::Py;
     table[ static_cast<std::size_t>( Lang::Go ) ]         = ValueRefFamily::Go;
+    table[ static_cast<std::size_t>( Lang::Rust ) ]       = ValueRefFamily::Rust;
     return table;
 }();
 inline ValueRefFamily valueRefFamily( Lang l ) noexcept
@@ -526,6 +574,81 @@ inline constexpr char kValueRefDepthCutScope = 'd';
 // declared struct type, or a typedef alias). Distinct from every other scope char.
 inline constexpr char kValueRefSlotCallScope = 's';
 inline constexpr char kValueRefSlotFactScope = 't';
+// IX1-V2 (lane fn-slot): a PARAMETER stored into a slot (`func Reg( impl F ) { … Command{ EvalRW: impl } … }`): role Value,
+// name "" (no row), recvVar = the storing function's name, argCount = the parameter's position (argCountKnown), memberPath =
+// the field, memberCtor = the slot's type ("" unknown). valuerefindex.h SlotIndex re-slots an ARGUMENT row of a bare call of
+// that function at that position (`Reg( Put )`) into the same field. Distinct from every other scope char.
+inline constexpr char kValueRefSlotParamScope = 'q';
+
+// IX-1 / IX1-V2: which languages record a slot join, and how — the one table both the extractor (ingest_valuerefs.h) and the
+// join (valuerefindex.h) read. A language's row supplies the per-language pieces of the language-blind join (SlotIndex):
+// callSide — how a call THROUGH a field is found:
+//   ThroughRows: the extractor records the field calls itself (C family: kValueRefSlotCallScope rows; everyFieldCall = every
+//     `x->f( … )` in C, the C++ gate otherwise);
+//   MemberCallByName: an ordinary member call `x.F( … )` (a Call reference with memberCall) is a call through field F when some
+//     function value is stored in a field F, joined at index time by the field name (the receiver's type is not read: the name
+//     tier, via="slot-name"); the extractor records only the STORE side (Go);
+//   ParenFieldCall: `(x.f)( … )`, the only spelling that calls a function-valued field (`x.f( … )` is always a method call), recorded
+//     by the extractor as a kValueRefSlotCallScope row, typed when x is `self` (Rust: ingest_rustslots.h).
+// typeKey — how a slot's declared struct type is keyed (both sides and --for's struct rows key the same way):
+//   TypedefFacts: the type as written, through the typedef / field-type slot facts (C family);
+//   PackageDir: the package DIRECTORY the type is declared in, plus its name (Go: valuerefindex.h slot_join::GoTypeKeys);
+//   ModuleType: the one in-tree struct the name spells — its own file's, else its crate's, else the repo's only one (Rust:
+//     slot_join::RustTypeKeys; `Self` is resolved to the impl type by the extractor).
+// pathSep — a registrar may be an associated function reached by a PATH call (`CallEval::new( … )`): the argument row's callee
+//   is written `Owner<pathSep>name`, resolved to the owner type's function of that name ("" = bare callees only, never a method).
+enum class VrSlotCallSide : std::uint8_t { ThroughRows, MemberCallByName, ParenFieldCall };
+enum class VrSlotTypeKey : std::uint8_t { TypedefFacts, PackageDir, ModuleType };
+struct VrSlotLang
+{
+    Lang             lang;
+    bool             everyFieldCall;
+    VrSlotCallSide   callSide;
+    VrSlotTypeKey    typeKey;
+    std::string_view pathSep;
+};
+inline constexpr VrSlotLang kVrSlotLangs[] = {
+    { Lang::C, true, VrSlotCallSide::ThroughRows, VrSlotTypeKey::TypedefFacts, "" },
+    { Lang::Cpp, false, VrSlotCallSide::ThroughRows, VrSlotTypeKey::TypedefFacts, "" },
+    { Lang::Go, false, VrSlotCallSide::MemberCallByName, VrSlotTypeKey::PackageDir, "" },
+    { Lang::Rust, false, VrSlotCallSide::ParenFieldCall, VrSlotTypeKey::ModuleType, "::" },
+};
+inline constexpr std::array<const VrSlotLang*, kLangCount> kVrSlotLangOf = []
+{
+    std::array<const VrSlotLang*, kLangCount> byLang {};
+    for( const VrSlotLang& row : kVrSlotLangs )
+    {
+        byLang[ static_cast<std::size_t>( row.lang ) ] = &row;
+    }
+    return byLang;
+}();
+// The slot row of language `l`, nullptr when it records no slot join.
+inline const VrSlotLang* vrSlotLang( Lang l ) noexcept
+{
+    return enumTableAt( kVrSlotLangOf, l, static_cast<const VrSlotLang*>( nullptr ) );
+}
+inline bool slotJoinsByFieldName( Lang l ) noexcept
+{
+    const VrSlotLang* row = vrSlotLang( l );
+    return row != nullptr && row->callSide == VrSlotCallSide::MemberCallByName;
+}
+// How language `l` keys a slot type (TypedefFacts for a language with no slot row: it keys nothing of its own).
+inline VrSlotTypeKey slotTypeKeyOf( Lang l ) noexcept
+{
+    const VrSlotLang* row = vrSlotLang( l );
+    return row == nullptr ? VrSlotTypeKey::TypedefFacts : row->typeKey;
+}
+// The path separator of language `l`'s registrar callees ("" = bare callees only).
+inline std::string_view slotPathSep( Lang l ) noexcept
+{
+    const VrSlotLang* row = vrSlotLang( l );
+    return row == nullptr ? std::string_view() : row->pathSep;
+}
+// A language whose slot types key by its own rule (valuerefindex.h slot_join), not through the C family's typedef facts.
+inline bool slotKeysOwnTypes( Lang l ) noexcept
+{
+    return slotTypeKeyOf( l ) != VrSlotTypeKey::TypedefFacts;
+}
 // A slot type key written with the `struct` / `union` keyword (`struct thandle`) leads with this mark: a C tag is no typedef
 // name, so the join never reads it through an alias. A slot fact whose composeRel is kValueRefSlotBodyRel declares that its
 // owner's struct BODY is in this file (no field): one tag with bodies in two files is two types, so it joins nothing.
@@ -848,6 +971,50 @@ struct LocalNameFact
 // The prefix of a C++ call's memberPath that marks an ELEMENT-ACCESS receiver (Reference::memberPath, its C++ reading).
 inline constexpr std::string_view kCppElementMark = "[]";
 
+// A Python queue call's KEYWORD arguments (isQueueCallName), carried on its call reference's composeRel (a call is no compose record and no value-ref slot, so the
+// field is free there): "" none, else "k<count>" and a trailing "o" when any keyword is spelled other than `timeout` / `block` (the two
+// keywords queue.Queue.put/get and asyncio.Queue take). argCount counts them too (the resolver's arity filter needs that), so
+// QueueHops (backhops.h) subtracts the count to read the positional arguments. Written by ingest_sidecap.h, read by pyKwArgsOf.
+inline constexpr std::uint8_t kCallKwCount = 0x7F;   // the count's mask in callArity's keyword byte (saturating)
+inline constexpr std::uint8_t kCallKwOther = 0x80;   // …and the flag: a keyword other than timeout / block
+// The four calls QueueHops reads (backhops.h): the only Python calls whose keyword arguments ingest records.
+inline bool isQueueCallName( std::string_view name ) noexcept
+{
+    static constexpr std::string_view kQueueCalls[] = { "get", "get_nowait", "put", "put_nowait" };
+    return std::ranges::contains( kQueueCalls, name );
+}
+// The languages whose queue operations the hop rule reads (a per-kind table, as backhops.h selfKeyword's: Go channels need an ingest record first).
+// Ingest records the queue calls' keywords for these; QueueHops (backhops.h) pairs only their symbols.
+inline bool isQueueLang( Lang lang ) noexcept
+{
+    static constexpr Lang kQueueLangs[] = { Lang::Python };
+    return std::ranges::contains( kQueueLangs, lang );
+}
+inline std::string pyKwTag( std::uint8_t kw )
+{
+    return "k" + std::to_string( unsigned( kw & kCallKwCount ) ) + ( ( kw & kCallKwOther ) != 0 ? "o" : "" );
+}
+struct PyKwArgs
+{
+    std::uint32_t count = 0;
+    bool          other = false;
+};
+inline PyKwArgs pyKwArgsOf( std::string_view composeRel ) noexcept
+{
+    PyKwArgs out;
+    if( composeRel.size() < 2 || composeRel[ 0 ] != 'k' )
+    {
+        return out;
+    }
+    std::size_t i = 1;
+    for( ; i < composeRel.size() && composeRel[ i ] >= '0' && composeRel[ i ] <= '9'; ++i )
+    {
+        out.count = out.count * 10 + std::uint32_t( composeRel[ i ] - '0' );
+    }
+    out.other = i < composeRel.size() && composeRel[ i ] == 'o';
+    return out;
+}
+
 struct Reference
 {
     NodeId        fromSymbol = kNoNode;   // enclosing symbol (caller); kNoNode if file-scope
@@ -929,6 +1096,10 @@ struct Reference
     //   Function/Method (no via="name", no class/const/object target): an import proves a binding, not a function.
     //   Sits beside memberFactory in the alignment padding before baseBind: sizeof(Reference) is unchanged.
     bool          forwarded = false;
+    // #155 (test/kotlincheck.sh §15, test/falseedgecheck.sh arm J): a Kotlin call whose lambda is written AFTER the argument list
+    //   (`s.run { }`, `with( x ) { }`); the trailing lambda of a stdlib scope function. graph.h FalseEdgeRules' Kotlin arm drops
+    //   the Java-method edge such a call would bind.
+    bool          trailingLambda = false;
     // lane lego-transitive fix 1 (test/legotransitivecheck.sh NS arms), an INHERIT ref only (isInherit): the same-file declaration
     //   the base name binds to by the language's lexical lookup, as 1 + the byte its name starts at (ingest_relations.h
     //   localBaseBinding; 0 = no enclosing scope declares it, 0xFFFFFFFF = a scope too large to read, nothing proven). On an
@@ -1157,6 +1328,8 @@ enum class LocalBindKind : std::uint8_t
                //     import x [as y]` (`var` names a MEMBER of m, not m). The module-alias receiver narrow
                //     (graph.h buildGraph) reads this to refuse `x.attr()` when `x` was bound the second way
                //     — `x` there is a value from inside m, and `.attr` is not a lookup in m's own namespace.
+               //     ind4b fix 5: `from m import x as y` with y != x records "from:x" (kPythonFromMemberMark + x) — the
+               //     member's ORIGINAL name, which `var` (the local alias) loses; a plain `from m import x` stays empty.
     JsImport,  // named ES import: var=local name, typeName=module, importedName=export (empty for type-only).
     JsExport,  // ES export: var=EXPORTED name; importedName=the LOCAL name it binds (empty on the declaration
                //     form, where the two are the same word). spanStart/spanEnd is the region a definition must
@@ -1307,6 +1480,27 @@ enum class LocalBindKind : std::uint8_t
                    //     expression `object : T { … }` or `fun interface T` (a lambda), a Rust trait under a mock attribute
                    //     (`#[automock]` writes MockT). Read by graph.h's implementors-map pass (an unnamed one opens T's list) and
                    //     ifacedispatch.h ONLY. APPENDED.
+    // FC3 (T1 class 14 ALIAS-THROUGH-ASSIGNMENT): a JS/TS binding WRITTEN after its declaration — `Eng = Foo`, `[Eng] = [Foo]`,
+    // `({ Eng } = { Eng: Foo })`, `Eng += …`, `Eng++`, `for ( Eng of xs )`, a second `var Eng = Foo`, but not a write whose
+    // value keeps the name (`equal = util.equal`) — so a BARE call or construction by that name in its scope is undecided
+    // (ingest_jsimports.h captureJsRebindFacts). var = the name; spanStart/spanEnd = the WHOLE scope of the declaration the
+    // write resolves to (the program, for a name the file never declares): byte order is not run order, a closure or a loop
+    // sees the write anywhere in it; startByte = the file's END, so the record has no owner (fromSymbol kNoNode) and no
+    // (fromSymbol, var) local-name reader takes it for a function's local. An ES import or `const` binding records nothing:
+    // writing one throws. Read by graph.h buildGraph (a bare call is unresolved, no edge; a member call is hedged by name) and FalseEdgeRules (as a shadow: no
+    // external veto) ONLY. isFromAssignment = the declaration already BOUND a value (an initializer, a parameter, a `class` /
+    // `function` / import / `for` head — not `var x;` / `let x;` / an undeclared name): a MEMBER call through the name
+    // (`tank.spill()` after `let tank = new Tank(); tank = b`) has no receiver evidence at all then and goes to the by-name hedge
+    // (via=name); over a `var x;` / `let x;` / undeclared name only the root's SPELLING stops deciding (`Eng = Foo; Eng.make()` is
+    // not the class `Eng`) while a stated type (`let app; … app = new Hono(); app.request()`) keeps its receiver reading. APPENDED (cache u8).
+    JsRebind,
+    // Lane js-def-naming (QN-OBJLIT-NAMED): a JS/TS MODULE-SCOPE object literal bound to a name — `const Widget = { run() {} }`,
+    // `export const Widget = { … }`, `var Widget = { … }`. var = the binding name; spanStart/spanEnd = the object literal, so a
+    // member inside it is that literal's (the index stores no owner for it: langfacts.h objectLiteralMembers). fromSymbol kNoNode
+    // (a module-level statement). Read by graph.h resolveAllByWrittenSpelling ONLY: a spelling whose owner segment is the
+    // literal's name (`Widget.run`) could name that member, so beside a class of that name it is unknown, never the class alone.
+    // APPENDED (cache u8).
+    JsObjectLiteral,
 };
 // fix round 4: the TypeAlias rows that bind a spelling with no alias target (model.h LocalBindKind::TypeAlias, typeName)
 inline constexpr std::string_view kTypeBindForward  = "forward";
@@ -1314,7 +1508,7 @@ inline constexpr std::string_view kTypeBindShadow   = "shadow";
 inline constexpr std::string_view kTypeBindUnparsed = "unparsed";
 inline constexpr std::string_view kTypeBindUnrecorded = "unrecorded";
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
-inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::ImplBlock ) + 1;
+inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::JsObjectLiteral ) + 1;
 // FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).
 // L6's ImplBlock is in the set for the same reason: its var is the TRAIT / interface being implemented, never a name bound in the
 // enclosing function, so the generic binding readers (localNameSet, the fn-pointer tables, nonlocalstate) must skip it (its two
@@ -1387,6 +1581,7 @@ inline constexpr std::uint8_t kWholeResult = 0xFF;
 // (LocalBindKind::RubySingletonDef, RubyClassMixin; parser version 145): written in a concern's `included do`, or a def
 // in its `class_methods do`.
 inline constexpr std::string_view kRubyIncluderMark     = "included";
+inline constexpr std::string_view kPythonFromMemberMark  = "from:";   // Python Import importedName prefix: `from m import x as y` records "from:x" (never equals "module")
 inline constexpr std::string_view kRubyClassMethodsMark = "class_methods";
 static_assert( enumCountIsExact<LocalBindKind, kLocalBindKindCount>(), "kLocalBindKindCount must name the LAST LocalBindKind enumerator — move it with the append" );
 
@@ -1401,6 +1596,12 @@ struct RubyMainMixinRow
     std::uint32_t fileId = 0;
     std::uint32_t line   = 0;   // the constant's 1-based line
 };
+
+// PY-ALIAS-SPLIT-MARKER: a Python def or class statement at MODULE scope that sits inside a compound statement (`if`, `try`,
+// `with`, `for`, `while`, `match`: it may not run) files, besides its ordinary VarDecl, a second VarDecl spelled with this prefix
+// (`?f`). No identifier starts with it, so no name lookup ever matches the record; graph.h pythonRenamedImportPin reads it as "f may
+// be unbound", the case where a module `__getattr__` (PEP 562, consulted only for names the module lacks) answers instead.
+inline constexpr std::string_view kPythonCondDefPrefix = "?";
 
 struct Binding
 {
@@ -1737,6 +1938,8 @@ struct FileHealth
     std::uint32_t macroBlanked = 0;   // member-macro re-parse (src/macroreparse.h): invocations blanked for the ADOPTED
                                       // parse this file's symbols came from; 0 ⇒ the first parse was kept. errNodes and
                                       // errBytes above always describe the parse extraction actually read.
+    std::uint32_t useBoundsBlanked = 0;   // its Rust layer (src/rustusebounds.h): precise-capturing use<..> bounds
+                                          // blanked for the ADOPTED parse; 0 ⇒ the first parse was kept
 };
 
 // Output of ingestion. Deterministic: files sorted lexicographically, symbol ids assigned
@@ -2014,6 +2217,13 @@ inline bool isMacroBlankedHealth( const FileHealth& health ) noexcept
     return health.macroBlanked > 0;
 }
 
+// The Rust layer's per-file predicate (src/rustusebounds.h): this file's symbols come from a re-parse with its
+// precise-capturing use<..> bounds blanked. The skipped verb rows it (why=use-bounds-blanked).
+inline bool isUseBoundsBlankedHealth( const FileHealth& health ) noexcept
+{
+    return health.useBoundsBlanked > 0;
+}
+
 // ...and its corpus count: macro_blanked_files= on the map and --json headers (the skipped verb's root counts the same rows).
 inline std::size_t macroBlankedFileCount( const IngestResult& ing ) noexcept
 {
@@ -2207,7 +2417,7 @@ inline bool isSlotJoinRecord( const Reference& r ) noexcept
     {
         return false;
     }
-    return ( r.role == RefRole::Value && r.qualifier[0] == kValueRefSlotFactScope )
+    return ( r.role == RefRole::Value && ( r.qualifier[0] == kValueRefSlotFactScope || r.qualifier[0] == kValueRefSlotParamScope ) )
         || ( r.role == RefRole::Through && r.qualifier[0] == kValueRefSlotCallScope );
 }
 
