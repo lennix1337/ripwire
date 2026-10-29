@@ -33,6 +33,10 @@
 #   B1b an alias name that is not visible there (another namespace, a wrong qualifier) keeps the base reading
 #   B1c an external using-declaration `using extlib::SpinPtr;` of the name keeps the base reading
 #   B1d [P] the same namespace, an enclosing namespace, a written qualifier and a using-directive all still peel
+#   S1a the chain cap: an alias reached through 3 plain aliases still peels (ch::V3), 4 do not (ch::V4: the base hedge) — a cap lowered to 2 fails V3
+#   S1b the real-class refusal: an alias name that is also an in-tree class (e2::Tank beside f2::Tank) is never peeled
+#   S1c the disagreement refusal: two same-scope aliases of one name with different pointees (dis::QPtr) are never peeled
+#   S1d a raw-pointer typedef of the alias's name in another namespace (rp2::Ptr beside rp1::Ptr) is never peeled
 #   B1e [P] class-scoped aliases of one name: each member reads its OWN class's (HoldX → iface, HoldY → the typed KyC::kick)
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
@@ -102,6 +106,19 @@ o="$( callees "$CPP" "scope.h::HoldY::goY" )"
 say "$( has "$o" 'n="KyC::kick"' )" "B1e HoldY: its own class's Ptr (unique_ptr<KyC>) is the typed KyC::kick"
 say "$( hasnt "$o" 'via="name"' )" "B1e HoldY: no by-name guess beside the typed row"
 say "$( hasnt "$o" 'KxI1::kick' )" "B1e HoldY: HoldX's pointee never reaches it"
+# ---- fix round 1, S1 (scope2.h): the guards the contract names each have an arm ----
+o="$( callees "$CPP" "scope2.h::Pipe::d0" )"
+say "$( isiface "$o" )" "S1a a smart alias itself declines gate=iface"
+o="$( callees "$CPP" "scope2.h::Pipe::d3" )"
+say "$( isiface "$o" )" "S1a an alias behind 3 plain aliases declines gate=iface (the cap is 4 alias declarations)"
+o="$( callees "$CPP" "scope2.h::Pipe::d4" )"
+say "$( hedge "$o" )" "S1a an alias behind 4 plain aliases is past the cap: the base by-name rows"
+o="$( callees "$CPP" "scope2.h::Rig::go" )"
+say "$( hasnt "$o" 'gate="iface"' )" "S1b an alias name that is also a real class (f2::Tank) is never peeled"
+o="$( callees "$CPP" "scope2.h::DisUser::go" )"
+say "$( hedge "$o" )" "S1c two same-scope aliases with different pointees are never peeled"
+o="$( callees "$CPP" "scope2.h::Holder::go" )"
+say "$( hedge "$o" )" "S1d a raw-pointer typedef of the alias's name in another namespace is never peeled"
 echo "ifacepeelcheck: $npass passed, $nfail failed"
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"
