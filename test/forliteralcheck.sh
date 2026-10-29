@@ -22,7 +22,8 @@
 #   L4 [P] a body over the cap (big_dispatch): an <x> excerpt holding the site line, of= the body's lines, next="--expand=…big_dispatch"
 #   L2b [P] a triple-quoted string is a docstring only as the FIRST statement of a module / class / def body (Python): a `"""`
 #          opening a call-argument line (raise ValueError(\n """msg""")), a bare string in an `if` body and a Kotlin raw
-#          string are string SITES (rows), the four real docstrings stay counted (comment="4")
+#          string and a GDScript triple-quoted string at the top of the file are string SITES (rows), the four real docstrings stay
+#          counted (comment="4")
 #   L4b [P] two far-apart sites in one over-ten-line body: ONE window per site, joined by an ellipsis, never the span between
 #   L4c [P] a ten-line body is printed whole (<b>); an eleven-line body is an excerpt [site-1, site+5] plus its signature line
 #   L4d [G] a ten-line body over 3000 bytes is still an excerpt (the byte cap on a short body), the long line left out
@@ -96,10 +97,10 @@ else no "L4 excerpt wrong: ${X:0:600}"; fi
 QB="$( run '--for="bad things happened here" error' )"; B2="$( lit <<<"$QB" )"
 if has "$B2" 's="bad things happened here" shape="quoted"' && has "$B2" 'comment="4"' \
    && has "$B2" '<ls p="app/errs.py" l="24" k="string" in="fail_hard" ink="fn"' \
-   && has "$B2" '<ls p="app/errs.py" l="31" k="string" in="branch_str" ink="fn"' && has "$B2" '<ls p="app/Msg.kt" l="4"' \
+   && has "$B2" '<ls p="app/errs.py" l="31" k="string" in="branch_str" ink="fn"' && has "$B2" '<ls p="app/Msg.kt" l="4"' && has "$B2" '<ls p="app/top.gd" l="1" k="string"' \
    && ! has "$B2" 'p="app/errs.py" l="1"' && ! has "$B2" 'p="app/errs.py" l="6"' && ! has "$B2" 'p="app/errs.py" l="9"' \
    && ! has "$B2" 'p="app/errs.py" l="17"'; then
-    ok "L2b only a first-statement string of a module/class/def body is a docstring (4); a call argument, an if-body string, a Kotlin raw string are sites"
+    ok "L2b only a first-statement string of a module/class/def body is a docstring (4); a call argument, an if-body string, a Kotlin raw string and a GDScript file-top string are sites"
 else no "L2b docstring position/language wrong: ${B2:0:900}"; fi
 # ── L4b ──
 F="$( run --for=APPTOOL_FAR_FLAG | lit )"
