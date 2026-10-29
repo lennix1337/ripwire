@@ -34,6 +34,10 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-28, lane alias-import (ALIAS-IMPORT, base integration/train-41 251ac97c; PLACEHOLDER, the train renumbers): RE-PINNED ONCE
+#   with UPDATE_GOLDEN=1. Watched text: kParserVer 259 -> 261 (rich 262: the TS/TSX/JS tags queries capture re-export specifiers as
+#   LocalBindKind::ReExport records) and kCacheVersion 46 -> 47 (ReExport appended, readBind's kind bound moves), quality.h's two
+#   kIngest*Mirror constants with them. kQSnapCacheScheme stays 24: no watched quality.h function moved.
 # 2026-10-28, train 41 (lanes ci-flakes-3, defs-lookup, py-split-marker, fn-slot-2, path-hop-body-fix1, upward-2hop merged onto main
 #   12056c16): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the composed tree (main's pin f4d5b120… and the py-split-marker and fn-slot-2
 #   (127443d5…) branch pins conflicted). Watched text: kParserVer 251 -> 259 (rich 260; above the placeholders 249, 255 and fn-slot-s2's

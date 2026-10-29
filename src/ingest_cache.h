@@ -150,7 +150,9 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 // lane rust-degraded's placeholder 42.
 // 44 (train 37b, lane rust-degraded; its placeholder was 42): the FILE record gains a sixth FileHealth u32, useBoundsBlanked
 // (the Rust precise-capture re-parse, src/rustusebounds.h), so an older cache must be rejected. 44 is above train 36's 43.
-constexpr std::uint32_t kCacheVersion = 46;           // 46: train 40 — lane js-def-naming's LocalBindKind JsObjectLiteral (appended; its placeholder 45),
+constexpr std::uint32_t kCacheVersion = 47;           // 47: PLACEHOLDER (lane alias-import) — LocalBindKind ReExport appended (readBind's kind bound moves);
+                                                      //    the train takes the next free value above every live one.
+                                                      // 46: train 40 — lane js-def-naming's LocalBindKind JsObjectLiteral (appended; its placeholder 45),
                                                       //    strictly above main 44 and that placeholder; no other train-40 lane changed a record format.
                                                       // 44: train 37b — rust-degraded FileHealth::useBoundsBlanked (above 43 / placeholder 42)
                                                       // 43: train 36 — #155 Kotlin trailingLambda ref byte (above 40 / 41 / 42)
@@ -363,7 +365,10 @@ constexpr std::uint32_t kCacheVersion = 46;           // 46: train 40 — lane j
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 259;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 261;          // bump on any grammar/.scm/extraction change
+                                                      // 261 = PLACEHOLDER (lane alias-import, stacked on train 41's 259 / rich 260): the TS/TSX/JS
+                                                      //   tags queries capture re-export specifiers (`export { a [as b] } from`, `export * from`) as
+                                                      //   LocalBindKind::ReExport records (the binds channel's Web arm). The train takes the next free value.
                                                       // 259 = 2026-10-28 (train 41: lanes fn-slot-2 (placeholder 249/250; Rust files record the slot join's records:
                                                       //   function-path arguments of path calls, field stores, registrar parameter facts, `(x.f)( … )` slot calls) and
                                                       //   py-split-marker (255/256; a Python module-scope def/class inside an if/try/with/loop files a second VarDecl

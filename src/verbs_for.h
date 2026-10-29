@@ -13,6 +13,7 @@
 #include "forctorhop.h" // OWNER-CTOR-HOP: ctor_l=/ctor_calls= on the r=1 method row of a compact-route answer
 #include "forcallerhop.h"   // mf1-nx: a name-exact answer about ONE function carries that function's callers
 #include "epmanifest.h"     // ep-manifest: the manifest entry-point groups that register a shown row
+#include "forreexport.h"    // ALIAS-IMPORT: the re-export hop rows of a definition the task names
 #include <algorithm>         // std::ranges::find: the ep manifest re-picked from the rows <sigs> emits
 #include <optional>          // the redaction-tally snapshots a degraded pre-render restores
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
@@ -4469,6 +4470,12 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             rw::emitChargedSection( stdout, graphSection, [ & ]{ packGraphBlock( stdout, ing, lensRank, g.outOff, g.outTargets ); } );
         }
         appendSubjectGraphVerbBlock( d, servedAnswerBodies().bodies );   // FOR-ROUTE-DECLINED: "" unless the task is spelled as a graph question that resolves; the bodies this answer carries print no second copy in its path hop bodies
+        // ALIAS-IMPORT (forreexport.h): the `pub use` / `export … from` hops to a definition the task names; "" when none. XML only, like the block above.
+        if( !cfg.json && !cfg.columnar && !cfg.candidates && !d.multiRoot && rw::forReexportOn() )
+        {
+            const std::string reexports = rw::renderForReexports( ing, cfg.forTask );
+            std::fwrite( reexports.data(), 1, reexports.size(), stdout );
+        }
 
         rw::emitRaw( stdout, "</ctx>" );
         reportRedactions( stderr, redactCounts );

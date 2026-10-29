@@ -1,0 +1,14 @@
+### Added — `--for` prints the re-export hops to a definition the task names
+
+A question like "where is `ShellError`, used in ls.rs, defined?" got the definition and nothing between it and the use site:
+the `pub use` / `export … from` statements a reader walks through were never rows. A `--for` answer now ends with a
+`<reexports>` block when a task word names an in-tree definition that something re-exports: one `<def>` row, then each
+re-export statement nearest the definition first (`<rx p= l= use=|from= at= as=>`), and the task-named file's own import
+(`<u>`). Rust: `pub use path::Item`, `pub use path::{A, B}`, a module re-export (`pub use other::module`) and a glob
+(`pub use path::*`, marked `glob="1"`: hedged), with paths resolved through `crate` / `self` / `super`, child modules and
+Cargo package names, so same-named items in two modules keep their module identity (`cands="N"` when two manifests spell
+one crate name). TypeScript/JavaScript: `export { a } from`, `export { a as b } from` (`as=`), `export * from`
+(`glob="1"`), recorded by the TS/TSX/JS tags queries through the shared binds channel as a new `LocalBindKind::ReExport`
+(parser version bump). Rows only: nothing here is a call edge. Not followed: a Rust `pub use a as b` rename (counted
+`as_skipped=`; help-wanted #445), `export * as ns from`, and items inside an inline `mod { }`. `RIPWIRE_NO_REEXPORT_HOPS`
+turns it off. Gate: `test/reexportcheck.sh`.
