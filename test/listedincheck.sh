@@ -22,6 +22,7 @@
 #   D1 [G] a Makefile naming the shown middleware DIRECTORIES as command arguments carries no <listed> (make lists sources by file path)
 #   P1 [P] a directory token names that directory, not a deeper one: "./dist/middleware/cors/internal/helpers.js" (l=11) is not printed
 #   V1 [G] vendored: a shown file under bower_components/ with its own package.json listing it carries no <listed> for that manifest
+#   B1 [G, RED on 2ccc0a30] a DIRECTORY named BUILD (and, on a case-insensitive file system, build/) beside the manifests is not read: no "ignoring BUILD" warning on stderr
 #   N1 [G] no creation word ("widget alpha"): no <listed>, no clause
 #   N2 [G] a glob listing ($(wildcard *.c)) is a floor: no <listed>
 #   N3 [G] prefix identity: the answer minus <listed> and its clause, est_tokens masked, equals RIPWIRE_NO_LISTED_IN=1
@@ -94,6 +95,8 @@ else no "S1 sibling rule: $(grep -o '<listed [^>]*>' "$T/a3")"; fi
 if has "$T/a3" '<listed p="package.json"' && ! has "$T/a3" '<ln l="11">'; then ok "P1 a deeper directory under the shown one is not its listing"; else no "P1 deeper-directory line printed or package.json missing"; fi
 if ! has "$T/a3" '<listed p="Makefile"'; then ok "D1 a Makefile's directory arguments are not a listing"; else no "D1 Makefile directory arguments were listed"; fi
 if grep -o '<listed [^>]*>' "$T/a3" | grep -qF 'bower_components'; then no "V1 a vendored copy's own manifest was listed"; else ok "V1 vendored bower_components/ manifest not listed"; fi
+
+if ! grep -q 'ignoring BUILD' "$T/a1.err"; then ok "B1 a BUILD directory is not opened as a manifest (stderr clean)"; else no "B1 stderr: $(grep 'ignoring BUILD' "$T/a1.err" | head -c 200)"; fi
 
 # ---- N1 / N2 / N4
 if run am "$T/n1" "widget alpha"; then

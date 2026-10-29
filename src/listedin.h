@@ -192,8 +192,30 @@ inline bool saysGenerated( std::string_view text ) noexcept
 // The fixed-name manifests of one directory (and its *.bzl files, name order, at most kListedBzlPerDir).
 inline void readDirManifests( std::string_view dir, const std::filesystem::path& disk, std::vector<Manifest>& out )
 {
-    static constexpr const char* kNames[] = { "Makefile.am", "Makefile", "GNUmakefile", "CMakeLists.txt", "meson.build", "BUILD",
-                                              "BUILD.bazel", "package.json", "jsr.json", "deno.json", "Cargo.toml" };
+    static constexpr std::string_view kNames[] = { "Makefile.am", "Makefile", "GNUmakefile", "CMakeLists.txt", "meson.build", "BUILD",
+                                                   "BUILD.bazel", "package.json", "jsr.json", "deno.json", "Cargo.toml" };
+    // ONE directory listing, exact (case-sensitive) names of REGULAR files only: on a case-insensitive file system `BUILD` would
+    // otherwise open the `build/` directory (readRegularFile refuses it, but warns on stderr), and `Makefile` a `makefile`.
+    std::vector<std::string> fixedNames;
+    std::vector<std::string> bzl;
+    std::error_code          ec;
+    for( std::filesystem::directory_iterator it( disk, ec ), end; !ec && it != end; it.increment( ec ) )
+    {
+        std::error_code   sec;
+        const std::string name = it->path().filename().string();
+        if( !std::filesystem::is_regular_file( it->symlink_status( sec ) ) || sec )
+        {
+            continue;   // a directory, FIFO, device or symlink is not a manifest
+        }
+        if( std::ranges::find( kNames, std::string_view( name ) ) != std::end( kNames ) )
+        {
+            fixedNames.push_back( name );
+        }
+        else if( name.ends_with( ".bzl" ) )
+        {
+            bzl.push_back( name );
+        }
+    }
     const auto add = [ & ]( const std::string& name )
     {
         const std::optional<std::string> text = docparse::detail::readRegularFile( name, ( disk / name ).string() );
@@ -205,25 +227,13 @@ inline void readDirManifests( std::string_view dir, const std::filesystem::path&
             out.push_back( std::move( m ) );
         }
     };
-    bool haveAm = false;
-    for( const char* name : kNames )
+    const bool haveAm = std::ranges::find( fixedNames, std::string( "Makefile.am" ) ) != fixedNames.end();
+    for( const std::string_view name : kNames )   // table order, so the output never depends on directory order
     {
-        if( std::string_view( name ) == "Makefile" && haveAm )
+        const bool present = std::ranges::find( fixedNames, std::string( name ) ) != fixedNames.end();
+        if( present && !( name == "Makefile" && haveAm ) )   // automake writes Makefile from Makefile.am: the source is the one to show
         {
-            continue;   // automake writes Makefile from Makefile.am: the source is the one to show
-        }
-        const std::size_t before = out.size();
-        add( name );
-        haveAm = haveAm || ( std::string_view( name ) == "Makefile.am" && out.size() > before );
-    }
-    std::vector<std::string> bzl;
-    std::error_code          ec;
-    for( std::filesystem::directory_iterator it( disk, ec ), end; !ec && it != end; it.increment( ec ) )
-    {
-        const std::string name = it->path().filename().string();
-        if( name.ends_with( ".bzl" ) )
-        {
-            bzl.push_back( name );
+            add( std::string( name ) );
         }
     }
     std::ranges::sort( bzl );
