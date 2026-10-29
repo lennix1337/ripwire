@@ -11,7 +11,7 @@
 #   NOT      a task without a creation word, a glob listing, a comment line, --json, RIPWIRE_NO_LISTED_IN=1.
 #
 # Arms:
-#   (S1 is [G] on 251ac97c — no <listed> there at all — and RED on 15322563, which printed one-file manifests)
+#   (D1 holds on 251ac97c — no <listed> at all — and is RED on f8399b64, which matched directory tokens in make files)
 #   A1 [P] automake: "new widget" → <listed p="Makefile.am" of="widget-alpha.c" by="path"> with ln l=4 (the SOURCES opener) and l=5
 #   A2 [G] a comment line naming a file (`# widget-old.c is gone`) is not a listing: no ln l="3", widget-old.c in no also=
 #   A3 [P] package manifests: package.json by="dir" l=8,9 (the ./cors exports key + its build output), jsr.json by="path" l=2,4
@@ -19,6 +19,8 @@
 #   A5 [G] a creation word inside an identifier is not one: "addWidget alpha run" and "widget_new_alpha run" carry no <listed>
 #   A6 [P] an all-caps creation word is a word, not a camel boundary: "NEW widget" carries <listed p="Makefile.am"
 #   S1 [P] a registry needs a sibling: deno.json names ONE shown file (its "exports") and carries no <listed>; package.json names two (also=)
+#   D1 [G] a Makefile naming the shown middleware DIRECTORIES as command arguments carries no <listed> (make lists sources by file path)
+#   P1 [P] a directory token names that directory, not a deeper one: "./dist/middleware/cors/internal/helpers.js" (l=11) is not printed
 #   V1 [G] vendored: a shown file under bower_components/ with its own package.json listing it carries no <listed> for that manifest
 #   N1 [G] no creation word ("widget alpha"): no <listed>, no clause
 #   N2 [G] a glob listing ($(wildcard *.c)) is a floor: no <listed>
@@ -89,6 +91,8 @@ fi
 
 if ! has "$T/a3" '<listed p="deno.json"' && grep -o '<listed p="package.json"[^>]*>' "$T/a3" | grep -qF 'also="src/middleware/logger/index.ts'; then ok "S1 one-file manifest (deno.json) not printed; package.json carries its sibling in also="
 else no "S1 sibling rule: $(grep -o '<listed [^>]*>' "$T/a3")"; fi
+if has "$T/a3" '<listed p="package.json"' && ! has "$T/a3" '<ln l="11">'; then ok "P1 a deeper directory under the shown one is not its listing"; else no "P1 deeper-directory line printed or package.json missing"; fi
+if ! has "$T/a3" '<listed p="Makefile"'; then ok "D1 a Makefile's directory arguments are not a listing"; else no "D1 Makefile directory arguments were listed"; fi
 if grep -o '<listed [^>]*>' "$T/a3" | grep -qF 'bower_components'; then no "V1 a vendored copy's own manifest was listed"; else ok "V1 vendored bower_components/ manifest not listed"; fi
 
 # ---- N1 / N2 / N4

@@ -4,8 +4,8 @@
 //
 // WHY. "Add a new tmux command / a new hono middleware / a new Envoy extension" is answered by the code pattern AND by the
 // non-code files every new instance must also be listed in: automake's `dist_tmux_SOURCES` list, package.json "exports" +
-// "typesVersions" and jsr.json "exports", Bazel's extensions_build_config.bzl. No code edge reaches them (Makefile.am, .bzl and
-// CODEOWNERS are not crawled; package.json keys are indexed as data rows that never rank for the task), so the answer stopped at
+// "typesVersions" and jsr.json "exports", Bazel's extensions_build_config.bzl. No code edge reaches them (Makefile.am and .bzl
+// are not crawled; package.json keys are indexed as data rows that never rank for the task), so the answer stopped at
 // the source files. Measured before this code (reports/manifest-noncode.md Stage 0): mf1-tmux-01, mf1-hono-03 and ld-envoy-07
 // printed no manifest line although the shown exemplar files ARE listed in one.
 //
@@ -15,7 +15,9 @@
 // preceded once by its nearest less-indented line above (the stanza it sits in: the `dist_tmux_SOURCES = \` assignment, the
 // `"./timing": {` key, the `EXTENSIONS = {` dict). by="path" the line names of='s path (relative to the manifest's directory, or
 // root-relative); by="dir" it names of='s directory by a tail of two or more path segments (package.json lists a build output
-// under that directory, a .bzl a Bazel label) — the file's directory, not the file. also= the other shown files the same manifest
+// under that directory, a .bzl a Bazel label) — the file's directory, not the file. Make, CMake, meson and Bazel BUILD files are
+// matched by file path only: a directory there is a command argument (fzf's `go test ./src/algo`) or a dep label, not a listing
+// (fire table fzf-02, cockroach-07); a .bzl registry (Envoy's extensions_build_config.bzl) keeps directory labels. also= the other shown files the same manifest
 // names (by either rule), at most kListedAlsoNames, also_total= all of them. A path token matches whole segments only (bounded by a
 // non-name character on both sides), so `middleware/log` never matches `middleware/logger`. gen="1": the manifest says it was
 // generated (an automake Makefile.in, a configure-written Makefile) — the file to edit is its source.
@@ -23,7 +25,7 @@
 // GATE (present-only): the task has a creation word (new, add, adding, register, registration, plugin, plugins, extension,
 // extensions) as a whole word (not inside an identifier: `Plan::AddTarget`, `new_local`, `createX` do not fire); the DEFAULT regime and the XML dialect only, as the caller hop and
 // <ep>. RIPWIRE_NO_LISTED_IN (any value) turns it off — the A/B handle.
-// FLOORS: a manifest that lists a file by a glob or a variable (`$(wildcard src/*.c)`, `glob(["*.cc"])`), a list keyed by a
+// FLOORS: CODEOWNERS (ownership, not a build listing: it fired on a codec question, fire table cpython-08), a manifest that lists a file by a glob or a variable (`$(wildcard src/*.c)`, `glob(["*.cc"])`), a list keyed by a
 // registered NAME string (a man page's command list, a docs index — mf1-lit's literal anchors), a manifest outside the shown
 // files' ancestor directories, a multi-root run. Files under vendor/, third_party/, node_modules/, bower_components/ are vendored: neither a shown file
 // there nor a manifest there is read.
@@ -118,9 +120,10 @@ inline bool isNameChar( char c ) noexcept
 }
 
 // `tok` occurs in `line` bounded on both sides: the byte before is not a name character or '.', the byte after is not a name
-// character (a '.' after is allowed only when the token itself ends in a path segment, never mid-name: "abi.h" vs "abi.hpp" is
-// handled by the name rule since 'p' is a name character).
-inline bool boundedFind( std::string_view line, std::string_view tok ) noexcept
+// character ("abi.h" never matches "abi.hpp"). A DIRECTORY token (`stem` non-empty) names that directory itself, not a deeper one:
+// when a '/' follows, the next segment must be the shown file's stem (`middleware/logger/index.js` for index.ts, the build output of
+// that file) — `pkg/sql/appstatspb:proto` is another package, not pkg/sql (fire table cockroach-07).
+inline bool boundedFind( std::string_view line, std::string_view tok, std::string_view stem = {} ) noexcept
 {
     if( tok.empty() )
     {
@@ -128,9 +131,14 @@ inline bool boundedFind( std::string_view line, std::string_view tok ) noexcept
     }
     for( std::size_t at = line.find( tok ); at != std::string_view::npos; at = line.find( tok, at + 1 ) )
     {
-        const bool leftOk  = at == 0 || ( !isNameChar( line[at - 1] ) && line[at - 1] != '.' );
-        const std::size_t end = at + tok.size();
-        const bool rightOk = end == line.size() || !isNameChar( line[end] );
+        const bool        leftOk = at == 0 || ( !isNameChar( line[at - 1] ) && line[at - 1] != '.' );
+        const std::size_t end    = at + tok.size();
+        bool              rightOk = end == line.size() || !isNameChar( line[end] );
+        if( rightOk && !stem.empty() && end < line.size() && line[end] == '/' )
+        {
+            const std::string_view next = line.substr( end + 1 );
+            rightOk = next.starts_with( stem ) && ( next.size() == stem.size() || !isNameChar( next[stem.size()] ) );
+        }
         if( leftOk && rightOk )
         {
             return true;
@@ -164,6 +172,8 @@ struct Manifest
     std::string dir;    // its root-relative directory ("" = the root)
     std::string text;
     bool        gen = false;
+    bool        dirTokens = true;   // false for make / CMake / meson / Bazel BUILD: they list sources by FILE path; a directory there is a
+                                    // command's argument or a dep label
 };
 
 struct ManifestLine
@@ -183,13 +193,15 @@ inline bool saysGenerated( std::string_view text ) noexcept
 inline void readDirManifests( std::string_view dir, const std::filesystem::path& disk, std::vector<Manifest>& out )
 {
     static constexpr const char* kNames[] = { "Makefile.am", "Makefile", "GNUmakefile", "CMakeLists.txt", "meson.build", "BUILD",
-                                              "BUILD.bazel", "package.json", "jsr.json", "deno.json", "Cargo.toml", "CODEOWNERS" };
+                                              "BUILD.bazel", "package.json", "jsr.json", "deno.json", "Cargo.toml" };
     const auto add = [ & ]( const std::string& name )
     {
         const std::optional<std::string> text = docparse::detail::readRegularFile( name, ( disk / name ).string() );
         if( text && !text->empty() )
         {
-            Manifest m{ dir.empty() ? name : std::string( dir ) + "/" + name, std::string( dir ), *text, saysGenerated( *text ) };
+            const bool byFile = name.starts_with( "Makefile" ) || name == "GNUmakefile" || name == "CMakeLists.txt" || name == "meson.build"
+                             || name.starts_with( "BUILD" );   // a Bazel BUILD names other packages only as deps (fire table cockroach-07)
+            Manifest   m{ dir.empty() ? name : std::string( dir ) + "/" + name, std::string( dir ), *text, saysGenerated( *text ), !byFile };
             out.push_back( std::move( m ) );
         }
     };
@@ -203,13 +215,6 @@ inline void readDirManifests( std::string_view dir, const std::filesystem::path&
         const std::size_t before = out.size();
         add( name );
         haveAm = haveAm || ( std::string_view( name ) == "Makefile.am" && out.size() > before );
-    }
-    if( dir.empty() )
-    {
-        for( const char* name : { ".github/CODEOWNERS", "docs/CODEOWNERS" } )
-        {
-            add( name );
-        }
     }
     std::vector<std::string> bzl;
     std::error_code          ec;
@@ -235,7 +240,7 @@ struct Token
     bool        isDir = false;
 };
 
-inline std::vector<Token> tokensFor( std::string_view fileRel, std::string_view mdir )
+inline std::vector<Token> tokensFor( std::string_view fileRel, std::string_view mdir, bool dirTokens )
 {
     std::vector<Token> t;
     const std::string_view below = mdir.empty() ? fileRel
@@ -253,7 +258,7 @@ inline std::vector<Token> tokensFor( std::string_view fileRel, std::string_view 
     // A manifest in the file's own directory names it by its file name only: a directory tail there is the package's own label
     // (a Bazel BUILD's `//pkg:dep` deps), not a listing of the file.
     const bool sameDir = slash == std::string_view::npos ? mdir.empty() : fileRel.substr( 0, slash ) == mdir;
-    if( slash != std::string_view::npos && !sameDir )
+    if( slash != std::string_view::npos && !sameDir && dirTokens )
     {
         std::string_view dir = fileRel.substr( 0, slash );
         // directory tails of two or more segments, longest first
@@ -328,9 +333,12 @@ struct Hit
 };
 
 // The non-comment lines of `lines` naming `rel` (from a manifest in `mdir`), and whether every one names only its directory.
-inline std::vector<std::size_t> linesNaming( const std::vector<ManifestLine>& lines, std::string_view rel, std::string_view mdir, bool& dirOnly )
+inline std::vector<std::size_t> linesNaming( const std::vector<ManifestLine>& lines, std::string_view rel, std::string_view mdir, bool dirTokens,
+                                             bool& dirOnly )
 {
-    const std::vector<Token> toks = tokensFor( rel, mdir );
+    const std::vector<Token> toks = tokensFor( rel, mdir, dirTokens );
+    const std::string_view   base = rel.substr( rel.rfind( '/' ) == std::string_view::npos ? 0 : rel.rfind( '/' ) + 1 );
+    const std::string_view   stem = base.substr( 0, std::min( base.find( '.' ), base.size() ) );   // index.ts → index
     std::vector<std::size_t> mine;
     dirOnly = true;
     for( std::size_t li = 0; li < lines.size(); ++li )
@@ -340,7 +348,7 @@ inline std::vector<std::size_t> linesNaming( const std::vector<ManifestLine>& li
             continue;
         }
         // the first token the line names, in specificity order (path before directory tails)
-        const auto k = std::ranges::find_if( toks, [ & ]( const Token& t ) { return boundedFind( lines[li].text, t.text ); } );
+        const auto k = std::ranges::find_if( toks, [ & ]( const Token& t ) { return boundedFind( lines[li].text, t.text, t.isDir ? stem : std::string_view() ); } );
         if( k != toks.end() )
         {
             mine.push_back( li );
@@ -359,7 +367,7 @@ inline bool manifestHit( const IngestResult& ing, const std::vector<std::uint32_
     {
         const std::string_view rel = rootRelPath( ing, files[fi] );
         bool                   dirOnly = true;
-        std::vector<std::size_t> mine = rel == man.rel ? std::vector<std::size_t>{} : linesNaming( h.lines, rel, man.dir, dirOnly );   // never itself
+        std::vector<std::size_t> mine = rel == man.rel ? std::vector<std::size_t>{} : linesNaming( h.lines, rel, man.dir, man.dirTokens, dirOnly );   // never itself
         if( mine.empty() )
         {
             continue;
@@ -486,7 +494,7 @@ inline ListedRender renderForListedIn( const IngestResult& ing, std::span<const 
 // The element's legend clauses, present-only beside it: the full and the compact dialect. No "--": they ride inside an XML comment.
 inline constexpr std::string_view kForListedInLegend =
     "; listed p= of= by=: a build, package or registry manifest (Makefile.am, CMakeLists.txt, meson.build, BUILD, *.bzl, package.json, "
-    "jsr.json, deno.json, Cargo.toml, CODEOWNERS) at the root or above a shown file that lists of=, the first shown file it names, "
+    "jsr.json, deno.json, Cargo.toml) at the root or above a shown file that lists of=, the first shown file it names, "
     "and at least one more shown file, on a creation task; ln l=: each line naming of= byte-exact, after the less-indented line it sits under; by=path the line names "
     "the file, by=dir only its directory (2+ path segments); also=: other shown files the manifest names, also_total= all; gen=1 the "
     "manifest says it is generated; capped=1 lines_total=, manifests_capped=1 manifests_total=: cut, the total; a glob or "

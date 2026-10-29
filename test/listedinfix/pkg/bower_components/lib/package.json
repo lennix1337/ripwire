@@ -1,4 +1,7 @@
 {
   "name": "lib",
-  "main": "./lib.js"
+  "files": [
+    "lib.js",
+    "lib2.js"
+  ]
 }
