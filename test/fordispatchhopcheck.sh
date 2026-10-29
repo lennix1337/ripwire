@@ -45,6 +45,14 @@
 #   F-A [P] an impl built only in an OS-run C/C++ entry (WinMain, wWinMain, DllMain, wmain, _tmain) stays shown; twin: a
 #       non-entry name keeps D2's demotion (fixture osentry, entry name written at run time)
 #
+# CR pre-pass 42a (the honesty finding; C1 is RED on train head 76cd281a, the rest are controls and twins that hold on both):
+#   C-pre [G] the fixture cuts as planned: _memory_stop on the cut call, the uncut control whole
+#   C0 [G] control: the MCP `for` over the UNCUT index shows RealDisk and CachedDisk, FakeDisk (an atests/ definition) counted in test=1
+#   C1 [P] MCP `for` over a MEMORY-CUT index (fixture cutmcp; RealDisk is built only in src/zmain.cc, which the crawl order cuts): a
+#          candidate whose production evidence the cut dropped is NOT demoted to a test double from that absence (shown=2), and the
+#          candidate that is a double by its OWN path (FakeDisk) stays in test=1 (kills a mutant that drops the demotion wholesale)
+#   C3 [G] the CLI over the whole fixture is unchanged (the CLI refuses a cut index before --for runs)
+#
 # Usage:  bash test/fordispatchhopcheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/fordispatchhopcheck.sh
 # BIN is $1, else RIPWIRE_BIN, else build/ripwire; the first output line names the binary used. Exits non-zero on any failure.
 
@@ -66,7 +74,7 @@ cd "$ROOT"
 F="test/fordispatchhopfix"
 [ -f "$F/cpp/loader.cc" ] && [ -f "$F/cpp1/tests/loader_test.cc" ] && [ -f "$F/rs/src/pick.rs" ] && [ -f "$F/cppwrap/cached.cc" ] && [ -f "$F/ladder/main.py" ] \
     && [ -f "$F/factory/pg_store.cc" ] && [ -f "$F/double/loader_test.cc" ] && [ -f "$F/recv/loader.cc" ] && [ -f "$F/initm/loader.cc" ] \
-    && [ -f "$F/ts/src/loader.ts" ] && [ -f "$F/alltest/tests/fakes.cc" ] && [ -f "$F/recvbound/rc.cc" ] && [ -f "$F/dumpfs/src/test.cc" ] && [ -f "$F/osentry/src/disk.cc" ] || { echo "fixture $F missing"; exit 2; }
+    && [ -f "$F/ts/src/loader.ts" ] && [ -f "$F/alltest/tests/fakes.cc" ] && [ -f "$F/recvbound/rc.cc" ] && [ -f "$F/dumpfs/src/test.cc" ] && [ -f "$F/osentry/src/disk.cc" ] && [ -f "$F/cutmcp/src/zmain.cc" ] || { echo "fixture $F missing"; exit 2; }
 
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"; mkdir -p "$HOME"
@@ -269,6 +277,39 @@ for en in WinMain wWinMain DllMain wmain _tmain NotAnEntry; do
         ok "(F-A) $en() is a runtime root: RealDisk built there stays shown, no single other body printed"
     else no "(F-A) $en() counted as dead code: RealDisk demoted [$HFA]"; fi
 done
+
+# ── C (CR pre-pass 42a: the honesty finding) ─────────────────────────────────────────────────────────────────────────────────────
+# The demotion of a candidate to a test double reads ABSENCE (no production code names its type). On a memory-guard-cut index the
+# file that builds RealDisk may be exactly what the cut dropped, so absence proves nothing: the element must not call it a double.
+# RIPWIRE_TEST_MEMGUARD=crawl:CUTAT stops the crawl before src/zmain.cc (entries by name: atests/, then src/); mcp_raw keeps the
+# envelope (text + _memory_stop + _index), which mcp_for drops.
+CUTAT=11
+mcp_raw(){ local trip="$3"; printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"for","arguments":{"path":"%s","task":"%s"}}}\n' "$ROOT/$1" "$2" \
+           | env ${trip:+RIPWIRE_TEST_MEMGUARD="$trip"} "$BIN" --mcp ${trip:+--max-memory=64M} 2>/dev/null | python3 -c '
+import sys, json
+for l in sys.stdin:
+    try: j = json.loads(l)
+    except ValueError: continue
+    r = j.get("result", {})
+    sys.stdout.write("".join(c.get("text", "") for c in r.get("content", [])))
+    sys.stdout.write("\n@@STOP@@" + str(r.get("_memory_stop", "")) + "\n@@INDEX@@" + str(r.get("_index", "")) + "\n")'; }
+CT="Builder::Run disk_->ReadFile"
+mcp_raw "$F/cutmcp" "$CT" "crawl:$CUTAT" >"$TMP/c1"
+mcp_raw "$F/cutmcp" "$CT" "" >"$TMP/c0"
+HC1="$( hop "$TMP/c1" )"; HC0="$( hop "$TMP/c0" )"
+if grep -q '@@STOP@@the memory guard stopped the crawl' "$TMP/c1" && grep -q '@@INDEX@@\[index: files=8 ' "$TMP/c1" && grep -q '^@@STOP@@$' "$TMP/c0"; then
+    ok "(C-pre) the cut call is a cut index (_memory_stop, files=8) and the control is whole: the fixture proves something"
+else no "(C-pre) the cut fixture did not cut as planned: $( grep -E '@@(STOP|INDEX)@@' "$TMP/c1" | cut -c1-160 )"; fi
+if has "$HC0" 'cands="3" shown="2" test="1"' && has "$HC0" 'n="RealDisk::ReadFile"' && has "$HC0" 'n="CachedDisk::ReadFile"' && ! has "$HC0" 'FakeDisk'; then
+    ok "(C0) uncut MCP for: RealDisk and CachedDisk shown, the atests/ FakeDisk counted (test=1)"
+else no "(C0) control: [$HC0]"; fi
+if has "$HC1" 'cands="3" shown="2" test="1"' && has "$HC1" 'n="RealDisk::ReadFile"' && has "$HC1" 'n="CachedDisk::ReadFile"' && ! has "$HC1" 'FakeDisk'; then
+    ok "(C1) cut MCP for: RealDisk is not demoted from an absence the cut caused (shown=2); FakeDisk, a double by its own path, stays test=1"
+else no "(C1) a cut index presented missing production evidence as a test double: [$HC1]"; fi
+run "$F/cutmcp" "--for=$CT" >"$TMP/c3"
+HC3="$( hop "$TMP/c3" )"
+if has "$HC3" 'cands="3" shown="2" test="1"' && has "$HC3" 'n="RealDisk::ReadFile"'; then ok "(C3) CLI over the whole fixture: the same element as the uncut MCP call (the CLI refuses a cut index, so its rule is unchanged)"
+else no "(C3) CLI answer: [$HC3]"; fi
 
 # ── S4 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 est(){ python3 -c 'import re,sys; m=re.search(r"est_tokens=\"(\d+)\"", sys.stdin.read()); print(m.group(1) if m else "")'; }

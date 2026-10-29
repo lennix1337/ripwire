@@ -261,12 +261,19 @@ struct DispatchCands
     std::vector<NodeId> prod;
     std::size_t         tests = 0;
 };
+//
+// On an index the memory guard CUT (the MCP surface answers over one; the CLI refuses it before --for runs) the second test reads
+// an ABSENCE — "no kept file builds this type" — and the cut may have dropped exactly the file that does (the crawl keeps files in
+// name order, so a late `main.cc` goes first). An absence on a partial index proves nothing, so only POSITIVE evidence demotes
+// there (the candidate's own definition sits on a test path); a type named only by tests stays a shown candidate. The answer's
+// `_memory_stop` already says the index is a floor.
 inline DispatchCands splitDispatchCands( const IngestResult& ing, const Graph& g, std::uint32_t site )
 {
     DispatchCands out;
+    const bool    partialIndex = ing.memoryStop.isSet();
     for( const NodeId c : dispatch_detail::siteCandidates( g, site ) )
     {
-        if( isTestSymbol( ing, c ) || !ownerNamedByProduction( ing, g, c ) )
+        if( isTestSymbol( ing, c ) || ( !partialIndex && !ownerNamedByProduction( ing, g, c ) ) )
         {
             ++out.tests;
         }
