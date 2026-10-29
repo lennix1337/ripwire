@@ -236,24 +236,52 @@ inline bool prevLine( const std::string& text, std::size_t& ls, std::string_view
     return true;
 }
 
-inline std::size_t indentOf( std::string_view line ) noexcept
-{
-    const std::size_t f = line.find_first_not_of( " \t" );
-    return f == std::string_view::npos ? line.size() : f;
-}
-
 // the previous line that holds code (not blank, not a whole-line # comment)
 inline bool prevCodeLine( const std::string& text, std::size_t& ls, std::string_view& line ) noexcept
 {
     while( prevLine( text, ls, line ) )
     {
-        const std::size_t f = line.find_first_not_of( " \t" );
-        if( f != std::string_view::npos && line[f] != '#' )
+        const std::string_view t = lintdetail::ltrim( line );
+        if( !t.empty() && t.front() != '#' )
         {
             return true;
         }
     }
     return false;
+}
+
+// step back through code lines until one is indented LESS than `limit` (at most 200 lines); false when the top of the file comes first
+inline bool climbBelow( const std::string& text, std::size_t& pos, std::string_view& line, std::size_t limit ) noexcept
+{
+    for( std::size_t steps = 0; lintdetail::indentOf( line ) >= limit; ++steps )
+    {
+        if( steps >= 200 || !prevCodeLine( text, pos, line ) )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// `start` opens a (r/b/u-prefixed) triple-quoted string that is the first thing on its line: ls = that line's start, ind = its indent
+inline bool opensTripleQuoteLine( const std::string& text, std::size_t start, std::size_t& ls, std::size_t& ind ) noexcept
+{
+    if( start >= text.size() )
+    {
+        return false;
+    }
+    for( ls = start; ls > 0 && text[ls - 1] != '\n'; --ls )
+    {
+    }
+    const std::size_t fs = ls + lintdetail::indentOf( std::string_view( text ).substr( ls, start - ls ) );
+    ind                  = fs - ls;
+    return start - fs <= 2 && pythonDocstringQuote( std::string_view( text ).substr( fs, 8 ) ).size() == 3;
+}
+
+// a code line that ends a statement header: a trailing ':' (a trailing # comment aside)
+inline bool endsWithColon( std::string_view line ) noexcept
+{
+    return lintdetail::rtrim( line.substr( 0, line.rfind( '#' ) ) ).ends_with( ':' ) || lintdetail::rtrim( line ).ends_with( ':' );
 }
 
 // A Python DOCSTRING: a triple-quoted string statement that is the FIRST statement of a module, class or def body — the line
@@ -264,81 +292,32 @@ inline bool prevCodeLine( const std::string& text, std::size_t& ls, std::string_
 // are the parse's own Comment tier.
 inline bool isPythonDocstringAt( const std::string& text, std::size_t start ) noexcept
 {
-    if( start >= text.size() )
+    std::size_t ls = 0, ind = 0;
+    if( !opensTripleQuoteLine( text, start, ls, ind ) )
     {
-        return false;
+        return false;   // not the first thing on its line, or not a triple-quoted string
     }
-    std::size_t ls = start;
-    while( ls > 0 && text[ls - 1] != '\n' )
-    {
-        --ls;
-    }
-    const std::string_view first = std::string_view( text ).substr( ls );
-    const std::size_t      fs    = ls + indentOf( first.substr( 0, start - ls ) );
-    if( fs > start || start - fs > 2 || pythonDocstringQuote( std::string_view( text ).substr( fs, 8 ) ).size() != 3 )
-    {
-        return false;   // not the first thing on its line, or not a triple-quoted string (an r/b/u prefix aside)
-    }
-    const std::size_t ind = fs - ls;
-    std::size_t       pos = ls;
-    std::string_view  line;
+    std::size_t      pos = ls;
+    std::string_view line;
     if( !prevCodeLine( text, pos, line ) )
     {
         return true;   // nothing but comments before it: the module docstring
     }
-    const auto headerEnds = []( std::string_view l )
-    {
-        while( !l.empty() && ( l.back() == ' ' || l.back() == '\t' ) )
-        {
-            l.remove_suffix( 1 );
-        }
-        if( const std::size_t h = l.rfind( '#' ); h != std::string_view::npos )
-        {
-            std::string_view before = l.substr( 0, h );
-            while( !before.empty() && ( before.back() == ' ' || before.back() == '\t' ) )
-            {
-                before.remove_suffix( 1 );
-            }
-            if( before.ends_with( ':' ) )
-            {
-                return true;   // def f():  # comment
-            }
-        }
-        return l.ends_with( ':' );
-    };
-    if( !headerEnds( line ) )
+    // the header's first line: the nearest code line indented LESS than the string (a multi-line signature closes with `) -> T:` at
+    // the def's own indent; its parameters sit deeper or at the string's indent)
+    if( !endsWithColon( line ) || !climbBelow( text, pos, line, ind ) )
     {
         return false;
     }
-    // the header's first line: the nearest code line indented LESS than the string (a multi-line signature closes with `) -> T:` at
-    // the def's own indent; its parameters sit deeper or at the string's indent)
-    for( std::size_t steps = 0; indentOf( line ) >= ind && steps < 200; ++steps )
+    std::string_view t = lintdetail::ltrim( line );
+    if( !t.empty() && std::string_view( ")]}" ).find( t[0] ) != std::string_view::npos )   // `) -> None:` — on to the line that opened it
     {
-        if( !prevCodeLine( text, pos, line ) )
+        const std::size_t closeIndent = lintdetail::indentOf( line );
+        if( !prevCodeLine( text, pos, line ) || !climbBelow( text, pos, line, closeIndent + 1 ) )
         {
             return false;
         }
-    }
-    if( indentOf( line ) >= ind )
-    {
-        return false;
-    }
-    std::string_view t = line.substr( indentOf( line ) );
-    if( !t.empty() && ( t[0] == ')' || t[0] == ']' || t[0] == '}' ) )   // `) -> None:` — on to the line that opened it
-    {
-        const std::size_t hind = indentOf( line );
-        for( std::size_t steps = 0; steps < 200; ++steps )
-        {
-            if( !prevCodeLine( text, pos, line ) )
-            {
-                return false;
-            }
-            if( indentOf( line ) <= hind )
-            {
-                break;
-            }
-        }
-        t = line.substr( indentOf( line ) );
+        t = lintdetail::ltrim( line );
     }
     return t.starts_with( "def " ) || t.starts_with( "async def " ) || t.starts_with( "class " );
 }
@@ -415,6 +394,24 @@ inline std::string rangesAttr( const std::vector<LineRange>& ranges )
         }
     }
     return out;
+}
+// <x> for the body [first, last] of `s` in `text`: the signature line and one window per site line (l= lists the ranges, of= the body,
+// next= the whole body)
+inline std::string excerptElement( const std::string& text, const std::string& path, const Symbol& s, std::uint32_t first, std::uint32_t last,
+                                   const std::vector<std::uint32_t>& siteLines )
+{
+    std::vector<char>      esc;
+    const std::vector<LineRange> ranges = excerptRanges( siteLines, first, last );
+    std::string x = "<x p=\"";
+    x += escapeXml( path, esc );
+    x += "\" n=\"";
+    x += escapeXml( s.name, esc );
+    x += "\" l=\"" + rangesAttr( ranges ) + "\" of=\"" + std::to_string( first ) + "-" + std::to_string( last ) + "\"";
+    x += nextAttrXml( nextFlag( "--expand=", path + ":" + std::to_string( s.line ) + ":" + s.name ) );
+    x += "><![CDATA[";
+    appendCdataSafe( linesOfRanges( text, ranges ), x );
+    x += "]]></x>";
+    return x;
 }
 }   // namespace lit_detail
 
@@ -615,17 +612,7 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
                 siteLines.push_back( o.line );
             }
         }
-        const std::vector<lit_detail::LineRange> ranges = lit_detail::excerptRanges( siteLines, first, last );
-        std::string x = "<x p=\"";
-        x += escapeXml( path, esc );
-        x += "\" n=\"";
-        x += escapeXml( s.name, esc );
-        x += "\" l=\"" + lit_detail::rangesAttr( ranges ) + "\" of=\"" + std::to_string( first ) + "-" + std::to_string( last ) + "\"";
-        x += nextAttrXml( nextFlag( "--expand=", path + ":" + std::to_string( s.line ) + ":" + s.name ) );
-        x += "><![CDATA[";
-        appendCdataSafe( lit_detail::linesOfRanges( text, ranges ), x );
-        x += "]]></x>";
-        bodiesXml += x;
+        bodiesXml += lit_detail::excerptElement( text, path, s, first, last, siteLines );
         ++out.bodies;
     }
 
