@@ -10,5 +10,5 @@ Cargo package names, so same-named items in two modules keep their module identi
 one crate name). TypeScript/JavaScript: `export { a } from`, `export { a as b } from` (`as=`), `export * from`
 (`glob="1"`), recorded by the TS/TSX/JS tags queries through the shared binds channel as a new `LocalBindKind::ReExport`
 (parser version bump). Rows only: nothing here is a call edge. Not followed: a Rust `pub use a as b` rename (counted
-`as_skipped=`; help-wanted #445), `export * as ns from`, and items inside an inline `mod { }`. `RIPWIRE_NO_REEXPORT_HOPS`
+`as_skipped=`; help-wanted #445), `export * as ns from`, and items defined inside an inline `mod { }`. A `pub use` inside an inline `mod { }` prints its full module path; `src/main.rs` beside a lib.rs and `src/bin/**` are binary crates, never the library's modules; a path through a name the file imports reads through that import (never a same-named workspace crate); `pub(crate) use` is labelled `vis="restricted"`; a walk that stops at 256 spellings says `capped="1"` beside `total=`. `RIPWIRE_NO_REEXPORT_HOPS`
 turns it off. Gate: `test/reexportcheck.sh`.

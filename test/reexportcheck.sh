@@ -22,6 +22,20 @@
 #   P1  `X from <module>` keeps only definitions under that package's directory (`from @x/ts`: ts/…, never core_x/…).
 #   N1  a task with no code-shaped name prints no block; --json prints none; RIPWIRE_NO_REEXPORT_HOPS=1 removes exactly the block.
 #
+#   Fix round 1 (rv-alias-import F1-F4, L-1/L-2, N-3), fixture test/reexportfix2 (crate c + decoys) and one runtime TS chain:
+#   F1  `pub mod private { pub use crate::m::Xray; }` publishes `c::private::Xray` (the inline mod is in the path), never `c::Xray`; the
+#       next hop `pub use c::private::Xray` (facade) chains from it.
+#   F2  `src/main.rs` beside lib.rs and `src/bin/**` are binary crates: a private `struct Widget` in main.rs is never the lib's Widget,
+#       and a `pub struct Gizmo` in src/bin/tool.rs gets no block at all.
+#   F3  `use crate::inner; pub use inner::Thing;` reads `inner` through its own import: the row belongs to c's Thing, never to the
+#       workspace crate that happens to be named `inner`.
+#       a `use` inside a sibling inline mod binds nothing at file level (`mod scoped { use crate::inner as m; } pub use m::Zed;` is c::Zed).
+#       `extern crate dup as inner; pub use inner::Thing;` binds `inner` to the crate dup: refused, never the workspace crate `inner`.
+#   F4  `pub(crate) use inner::Hidden;` is labelled vis="restricted", never a bare public path.
+#   G1  two manifests that spell one crate name: cands="2" hedge on the row, and the twin definition prints same="1".
+#   G2  `pub use super::n::SupItem;` resolves `super::` and publishes `c::m::p::SupItem`.
+#   N-3 a 300-deep `export *` chain stops at 256 spellings and says capped="1" (a short chain never does).
+#
 # Usage: bash test/reexportcheck.sh [BIN]     (default build/ripwire; exits non-zero on any failure)
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
@@ -94,6 +108,42 @@ if grep -q 'reexports' "$TMP/n2.json"; then no "N1 --json carries no block"; els
 ( cd "$FIX" || exit 1; RIPWIRE_NO_REEXPORT_HOPS=1 HOME="$TMP" "$BIN" "$FIX" --no-cache "--for=where Boom used in main.rs is defined" </dev/null 2>/dev/null ) >"$TMP/off.xml"
 sed 's|<reexports>.*</reexports>||' "$TMP/r1.xml" >"$TMP/r1.stripped"
 if cmp -s "$TMP/off.xml" "$TMP/r1.stripped"; then ok "N1 the off switch removes exactly the block"; else no "N1 the off switch changed more than the block"; fi
+# ── fix round 1: the Rust module-identity guards (fixture test/reexportfix2) ────────────────────────────────────────────
+FIX2="$ROOT/test/reexportfix2"
+ask2(){ ( cd "$FIX2" || exit 1; HOME="$TMP" "$BIN" "$FIX2" --no-cache "$@" </dev/null 2>/dev/null ); }
+ask2 "--for=where Xray is defined" >"$TMP/f1.xml"
+has   "$TMP/f1.xml" "F1 a pub use inside an inline mod carries the mod in its path" '<rx p="c/src/lib.rs" l="4" use="crate::m::Xray" at="c::private::Xray"/>'
+hasnt "$TMP/f1.xml" "F1 never the outer path"                                       'at="c::Xray"'
+has   "$TMP/f1.xml" "F1 the next hop chains from the inline spelling"               '<rx p="facade/src/lib.rs" l="1" use="c::private::Xray" at="facade::Xray"/>'
+ask2 "--for=where Widget is defined" >"$TMP/f2.xml"
+has   "$TMP/f2.xml" "F2 the lib's Widget is the def"                                '<def n="Widget" p="c/src/lib.rs"'
+hasnt "$TMP/f2.xml" "F2 main.rs is a binary crate: its private Widget is no def"    'c/src/main.rs'
+ask2 "--for=where Gizmo is defined" >"$TMP/f2b.xml"
+if grep -q '<reexports>' "$TMP/f2b.xml"; then no "F2 a src/bin/** type is no module of the lib: no block"; else ok "F2 a src/bin/** type is no module of the lib: no block"; fi
+ask2 "--for=where Thing is defined" >"$TMP/f3.xml"
+has   "$TMP/f3.xml" "F3 a path through a use-imported name resolves through the import" '<rx p="c/src/x/y.rs" l="2" use="inner::Thing" at="c::x::y::Thing"/>'
+hasnt "$TMP/f3.xml" "F3 never the same-named workspace crate's Thing"               '<def n="Thing" p="inner/src/lib.rs"'
+hasnt "$TMP/f3.xml" "F3 an extern crate alias is no same-named workspace crate"    'p="c/src/x/z.rs"'
+ask2 "--for=where Zed is defined" >"$TMP/f3b.xml"
+has   "$TMP/f3b.xml" "F3 an import inside another inline mod is not in scope here"   '<rx p="c/src/lib.rs" l="8" use="m::Zed" at="c::Zed"/>'
+ask2 "--for=where Hidden is defined" >"$TMP/f4.xml"
+has   "$TMP/f4.xml" "F4 pub(crate) use is labelled restricted"                      'use="inner::Hidden" at="c::Hidden" vis="restricted"/>'
+ask2 "--for=where Entry is defined" >"$TMP/g1.xml"
+has   "$TMP/g1.xml" "G1 two manifests spell the crate name: cands hedge"            'cands="2"'
+has   "$TMP/g1.xml" "G1 the twin definition reached by the same statement is same" 'same="1"'
+ask2 "--for=where SupItem is defined" >"$TMP/g2.xml"
+has   "$TMP/g2.xml" "G2 a super:: path resolves"                                    '<rx p="c/src/m/p.rs" l="1" use="super::n::SupItem" at="c::m::p::SupItem"/>'
+hasnt "$TMP/r1.xml" "N-3 a short chain is never capped"                             'capped="1"'
+DEEP="$TMP/deep"; mkdir -p "$DEEP"
+printf 'export function deepFn() {}\n' >"$DEEP/f0.ts"
+for i in $( seq 1 300 ); do printf "export * from './f%d';\n" $(( i - 1 )) >"$DEEP/f$i.ts"; done
+( cd "$DEEP" && HOME="$TMP" "$BIN" "$DEEP" --no-cache "--for=where deepFn is defined" </dev/null 2>/dev/null ) >"$TMP/n3deep.xml"
+has   "$TMP/n3deep.xml" "N-3 the 256-spelling stop is disclosed beside total="       'capped="1"'
+n=$( grep -o '<rx ' "$TMP/n3deep.xml" | wc -l | tr -d ' ' )
+if [ "$n" = 8 ]; then ok "N-3 the row cap prints 8 of the capped chain's rows"; else no "N-3 the capped chain printed $n rx rows (cap 8)"; fi
+if command -v xmllint >/dev/null 2>&1; then
+    for f in f1 f3 f4 g1 n3deep; do if xmllint --noout "$TMP/$f.xml" 2>/dev/null; then ok "xml well-formed $f"; else no "xml malformed $f"; fi; done
+fi
 if command -v xmllint >/dev/null 2>&1; then
     for f in r1 t1 t2 c1; do if xmllint --noout "$TMP/$f.xml" 2>/dev/null; then ok "xml well-formed $f"; else no "xml malformed $f"; fi; done
 fi

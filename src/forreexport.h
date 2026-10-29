@@ -23,7 +23,8 @@
 // row like any other (it moves a name, not a call).
 //
 // NOT ON. A definition nothing re-exports (no block); a definition inside a function, impl or inline `mod { }` (its module
-// path is not the file's: a disclosed floor); a Rust `pub use a as b` RENAME (counted as_skipped=, not followed: help-wanted
+// path is not the file's: a disclosed floor; a `pub use` STATEMENT inside an inline `mod { }` is read, with the inline module in
+// its path); `src/main.rs` beside a lib.rs and `src/bin/**` (their own binary crates, never the lib's modules); a Rust `pub use a as b` RENAME (counted as_skipped=, not followed: help-wanted
 // #445 owns renames); an external target (the walk starts at an in-tree definition, so an outside crate is never a row);
 // `export * as ns from` (a namespace, not a name). Cycles terminate (each public spelling is visited once).
 // RIPWIRE_NO_REEXPORT_HOPS (any value) turns it off.
@@ -53,6 +54,7 @@ inline constexpr std::size_t kReexportDefCap  = 2;   // definitions per word tha
 inline constexpr std::size_t kReexportRowCap  = 8;   // hop rows per definition (BFS order); the rest counted in total=
 static_assert( kReexportRowCap == 8, "kReexportLegend states the cap (8 shown): move the sentence with the constant" );
 inline constexpr std::size_t kReexportUseCap  = 2;   // use-site rows per definition, from task-named files
+inline constexpr std::size_t kReexportSpellingCap = 256;   // spellings one walk visits; past it total= is a floor (capped="1")
 
 inline bool forReexportOn()
 {
@@ -61,8 +63,9 @@ inline bool forReexportOn()
 
 inline constexpr std::string_view kReexportLegend =
     "<!-- reexports: the statements that re-export a definition the task names, nearest the definition first. def p= l= the "
-    "definition, at= its path, total= its rx rows (8 shown), same=1 the same rows as a def above; rx p= l= one `pub use`/`export … from` statement, use= its written path (or from= the module), "
-    "at= the path it makes public, as= the new name; glob=1 a glob/star hop (hedged: the module may not supply the name); "
+    "definition, at= its path, total= its rx rows (8 shown; capped=1: the walk stopped at 256 spellings, total= is a floor), same=1 the same rows as a def above; "
+    "rx p= l= one `pub use`/`export … from` statement, use= its written path (or from= the module), "
+    "at= the path it makes public (vis=restricted: pub(crate)/pub(super)/pub(in …), visible only inside its crate), as= the new name; glob=1 a glob/star hop (hedged: the module may not supply the name); "
     "cands=N the path names N same-named crates (hedged); u p= l= a task-named file's own import of it (the chain's start); "
     "as_skipped=N renamed re-exports not followed; rows, not call edges -->";
 
@@ -82,6 +85,7 @@ struct Row
     const Binding* b     = nullptr;
     bool           glob  = false;
     bool           use   = false;   // a task-named file's own import (no new spelling)
+    bool           restricted = false;   // Rust `pub(crate)` / `pub(super)` / `pub(in …)`: visible only inside its crate, not a public path
     std::size_t    cands = 1;
     Spelling       at;
 };
@@ -109,12 +113,41 @@ struct Sources
         }
         return std::uint32_t( std::count( t->begin(), t->begin() + byte, '\n' ) ) + 1;
     }
-    // Is the statement at `byte` a `pub` / `pub(crate)` one? Unknown (unreadable, or not a statement start) reads as no.
-    bool isPub( std::uint32_t f, std::uint32_t byte )
+    // The visibility the statement at `byte` is written with: 0 none (or unreadable / not a statement start: reads as private),
+    // 1 `pub`, 2 `pub(crate)` / `pub(super)` / `pub(in path)` (visible only inside part of its crate: not a public path).
+    int visOf( std::uint32_t f, std::uint32_t byte )
     {
         const std::string* t = of( f );
-        return t != nullptr && byte < t->size() && std::string_view( *t ).substr( byte ).starts_with( "pub" )
-            && byte + 3 < t->size() && !namesplit::isIdentChar( ( *t )[ byte + 3 ] );
+        if( t == nullptr || byte >= t->size() || !std::string_view( *t ).substr( byte ).starts_with( "pub" ) || byte + 3 >= t->size() )
+        {
+            return 0;
+        }
+        std::size_t at = byte + 3;
+        if( namesplit::isIdentChar( ( *t )[ at ] ) )
+        {
+            return 0;
+        }
+        while( at < t->size() && ( ( *t )[ at ] == ' ' || ( *t )[ at ] == '\t' ) )
+        {
+            ++at;
+        }
+        return at < t->size() && ( *t )[ at ] == '(' ? 2 : 1;
+    }
+    // Does file `f` bind `name` with `extern crate x as name;`? (no use record is written for it: a path through `name` is the
+    // crate x, never a same-named crate of the tree)
+    bool externCrateAs( std::uint32_t f, std::string_view name )
+    {
+        const std::string* t = of( f );
+        for( std::size_t at = t == nullptr ? std::string::npos : t->find( "extern crate" ); at != std::string::npos; at = t->find( "extern crate", at + 1 ) )
+        {
+            const std::string_view stmt = std::string_view( *t ).substr( at, std::min( t->find( ';', at ), t->size() ) - at );
+            const std::size_t      as   = stmt.rfind( " as " );
+            if( as != std::string_view::npos && stmt.substr( as + 4 ) == name )
+            {
+                return true;
+            }
+        }
+        return false;
     }
 };
 
@@ -142,22 +175,52 @@ inline std::vector<std::string> splitColons( std::string_view path )
 }
 
 // ── Rust: crates, module paths, `use` paths ─────────────────────────────────────────────────────────────────────────────────
+// An inline `mod name { … }` of a file: its body spans [start, end).
+struct InlineMod
+{
+    std::uint32_t start = 0;
+    std::uint32_t end   = 0;
+    std::string   name;
+};
+
 struct RustCrates
 {
     std::vector<std::string>                          names;      // crate index -> its (first) Cargo name, `_` for `-`
     std::vector<std::uint32_t>                        crateOf;    // file -> crate index (kNoFile: outside every crate's source root)
-    std::vector<std::vector<std::string>>             modOf;      // file -> module path below its crate root
+    std::vector<std::vector<std::string>>             modOf;      // file -> module path below its crate root (the FILE's own path)
+    std::vector<std::vector<InlineMod>>               inlineOf;   // file -> its inline `mod { }` bodies, outermost first (by start)
     HashMap<std::string, std::vector<std::uint32_t>> byName;      // Cargo name -> crate indices (two manifests may spell one)
-    HashMap<std::string, char>                        modules;    // "<crate>#a::b" -> the module exists as a file
+    HashMap<std::string, char>                        modules;    // "<crate>#a::b" -> the module exists (a file, or an inline body)
+    HashMap<std::string, std::vector<const Binding*>> imported;   // "<file>#name" -> the file's `use` records that bind `name` (no globs)
 
     [[nodiscard]] bool hasModule( std::uint32_t crate, const std::vector<std::string>& mods ) const
     {
         return modules.contains( std::to_string( crate ) + "#" + joinPath( mods, "", "::" ) );
     }
+    // The module path in force at `byte` of file `f`: the file's module path, then each inline mod whose body holds the byte.
+    // A `pub use` inside `pub mod private { }` publishes `<file path>::private::Name`, never `<file path>::Name`.
+    [[nodiscard]] std::vector<std::string> modsAt( std::uint32_t f, std::uint32_t byte ) const
+    {
+        std::vector<std::string> mods = modOf[ f ];
+        for( const InlineMod& m : inlineOf[ f ] )
+        {
+            if( m.start < byte && byte < m.end )
+            {
+                mods.push_back( m.name );
+            }
+        }
+        return mods;
+    }
+    [[nodiscard]] static std::string importKey( std::uint32_t f, std::string_view name )
+    {
+        return std::to_string( f ).append( "#" ).append( name );
+    }
 };
 
 // The module path of `rel` below the crate root file `root` (`src/lib.rs`): `src/a/b.rs` and `src/a/b/mod.rs` -> [a, b], the
-// root itself -> []. nullopt for a file outside the root's directory (tests/, examples/, build.rs: their own crate roots).
+// root itself -> []. nullopt for a file outside the root's directory (tests/, examples/, build.rs: their own crate roots) and for
+// the package's OTHER crate roots: `src/main.rs` beside a lib.rs and every `src/bin/**` file are binary crates, not modules of
+// the lib (a private `struct Widget` in main.rs is not the lib's `Widget`).
 inline std::optional<std::vector<std::string>> rustModulePath( std::string_view rel, std::string_view root )
 {
     const std::size_t      slash = root.rfind( '/' );
@@ -166,11 +229,15 @@ inline std::optional<std::vector<std::string>> rustModulePath( std::string_view 
     {
         return std::vector<std::string>{};
     }
-    if( !rel.starts_with( dir ) || !rel.ends_with( ".rs" ) || ( rel.substr( dir.size() ) == "main.rs" ) )
+    if( !rel.starts_with( dir ) || !rel.ends_with( ".rs" ) )
     {
-        return rel.substr( dir.size() ) == "main.rs" ? std::optional<std::vector<std::string>>( std::vector<std::string>{} ) : std::nullopt;
+        return std::nullopt;
     }
     std::string_view below = rel.substr( dir.size(), rel.size() - dir.size() - 3 );
+    if( below == "main" || below.starts_with( "bin/" ) )
+    {
+        return std::nullopt;
+    }
     std::vector<std::string> mods;
     for( std::size_t at = 0; at <= below.size(); )
     {
@@ -183,6 +250,38 @@ inline std::optional<std::vector<std::string>> rustModulePath( std::string_view 
         mods.pop_back();
     }
     return mods;
+}
+
+// The inline `mod name { … }` bodies (queries/rust/tags.scm `@definition.module`: a module is the one Rust SymKind::Other) and the
+// `use` records that bind a name, per file. An inline body is a module of its crate like a file (a 2018 path may start at it).
+inline void indexRustInlineMods( const IngestResult& ing, RustCrates& rc )
+{
+    for( const Symbol& s : ing.symbols )
+    {
+        if( s.kind == SymKind::Other && dependencyDialect( s.lang ) == DepDialect::Rust && s.fileId < rc.crateOf.size() && rc.crateOf[ s.fileId ] != kNoFile
+            && s.endByte > s.sigStartByte )
+        {
+            rc.inlineOf[ s.fileId ].push_back( InlineMod{ s.sigStartByte, s.endByte, s.name } );
+        }
+    }
+    for( std::uint32_t f = 0; f < rc.inlineOf.size(); ++f )
+    {
+        std::vector<InlineMod>& inl = rc.inlineOf[ f ];
+        std::ranges::sort( inl, []( const InlineMod& a, const InlineMod& b ) { return a.start != b.start ? a.start < b.start : a.end > b.end; } );
+        for( const InlineMod& m : inl )
+        {
+            std::vector<std::string> path = rc.modsAt( f, m.start );
+            path.push_back( m.name );
+            rc.modules.try_emplace( std::to_string( rc.crateOf[ f ] ) + "#" + joinPath( path, "", "::" ), '\0' );
+        }
+    }
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.kind == LocalBindKind::TypeImport && b.var != "*" && b.fileId < rc.crateOf.size() && rc.crateOf[ b.fileId ] != kNoFile )
+        {
+            rc.imported[ RustCrates::importKey( b.fileId, b.var ) ].push_back( &b );
+        }
+    }
 }
 
 inline RustCrates buildRustCrates( const IngestResult& ing, const HashMap<std::string, std::uint32_t>& files )
@@ -230,6 +329,7 @@ inline RustCrates buildRustCrates( const IngestResult& ing, const HashMap<std::s
     }
     rc.crateOf.assign( ing.files.size(), kNoFile );
     rc.modOf.resize( ing.files.size() );
+    rc.inlineOf.resize( ing.files.size() );
     for( std::uint32_t f = 0; f < ing.files.size() && !roots.empty(); ++f )
     {
         const std::string_view rel = rootRelPath( ing, f );
@@ -266,31 +366,73 @@ inline RustCrates buildRustCrates( const IngestResult& ing, const HashMap<std::s
             rc.modules.try_emplace( std::to_string( rc.crateOf[ f ] ) + "#" + joinPath( prefix, "", "::" ), '\0' );
         }
     }
+    indexRustInlineMods( ing, rc );
     return rc;
 }
 
-// Where a `use` path written in file `f` points: the crates it may name (empty = outside the tree, or unreadable) and the
-// whole segment path below that crate's root. `crate`/`self`/`super` stay in the file's crate; a first segment that is a child
-// module of the file's own module is local (2018 paths); otherwise it is a crate of the tree by its Cargo name.
+// Where a `use` path written at `byte` of file `f` points: the crates it may name (empty = outside the tree, refused, or
+// unreadable) and the whole segment path below that crate's root. `crate`/`self`/`super` stay in the file's crate (relative to
+// the module in force at `byte`, inline `mod { }` bodies included); a first segment the file itself binds (a `use` record of the
+// file, in scope here) is read through that import; a first segment that is a child module of the current module is local (2018
+// paths); otherwise it is a crate of the tree by its Cargo name. `boundHere` = the first segment is bound by a statement this
+// function cannot read (`extern crate x as y`): refused, never a same-named crate.
 struct RustTarget
 {
     std::vector<std::uint32_t> crates;
     std::vector<std::string>   segs;
 };
 
-inline RustTarget resolveRustPath( const RustCrates& rc, std::uint32_t f, std::string_view path )
+inline bool isPrefixOf( const std::vector<std::string>& pre, const std::vector<std::string>& whole )
+{
+    return pre.size() <= whole.size() && std::equal( pre.begin(), pre.end(), whole.begin() );
+}
+
+inline RustTarget resolveRustPath( const RustCrates& rc, std::uint32_t f, std::uint32_t byte, std::string_view path, bool boundHere = false, int depth = 0 )
 {
     RustTarget                     t;
     const std::vector<std::string> segs = splitColons( path );
-    if( segs.empty() || segs.front().empty() || f >= rc.crateOf.size() )
+    if( segs.empty() || segs.front().empty() || f >= rc.crateOf.size() || depth > 4 )
     {
         return t;
     }
     const std::uint32_t      own  = rc.crateOf[ f ];
-    std::vector<std::string> base = own == kNoFile ? std::vector<std::string>{} : rc.modOf[ f ];
+    std::vector<std::string> base = own == kNoFile ? std::vector<std::string>{} : rc.modsAt( f, byte );
     std::vector<std::string> child = base;
     child.push_back( segs.front() );
     const bool crateHead = segs.front() == "crate" || segs.front() == "self" || segs.front() == "super";
+    if( !crateHead && !path.starts_with( "::" ) )
+    {
+        if( boundHere )
+        {
+            return t;   // `extern crate x as segs.front();` — the crate x, which this walk does not follow
+        }
+        if( const auto hit = rc.imported.find( RustCrates::importKey( f, segs.front() ) ); hit != rc.imported.end() )
+        {
+            const Binding* only    = nullptr;
+            std::size_t    visible = 0;
+            for( const Binding* b : hit->second )   // the imports in scope at `byte`: file level, or inside an enclosing inline mod
+            {
+                if( isPrefixOf( rc.modsAt( f, b->startByte ), base ) && splitColons( b->importedName ).front() != segs.front() )
+                {
+                    ++visible;
+                    only = b;
+                }
+            }
+            if( visible > 1 || ( visible == 1 && only->var != only->typeName ) )
+            {
+                return t;   // two imports bind the name, or it is a rename (#445): not followed, never a same-named crate
+            }
+            if( visible == 1 )
+            {
+                std::string through = only->importedName;
+                for( std::size_t i = 1; i < segs.size(); ++i )
+                {
+                    through.append( "::" ).append( segs[ i ] );
+                }
+                return resolveRustPath( rc, f, only->startByte, through, false, depth + 1 );
+            }
+        }
+    }
     if( !crateHead && ( own == kNoFile || path.starts_with( "::" ) || !rc.hasModule( own, child ) ) )
     {
         const auto hit = rc.byName.find( segs.front() );   // a crate of the tree by its Cargo name (else outside the tree)
@@ -345,7 +487,8 @@ struct Walk
         auto [ it, fresh ] = rustTargets.try_emplace( b );
         if( fresh )
         {
-            it->second = resolveRustPath( rc, b->fileId, b->importedName );
+            const std::string_view head = std::string_view( b->importedName ).substr( 0, b->importedName.find( "::" ) );
+            it->second = resolveRustPath( rc, b->fileId, b->startByte, b->importedName, src.externCrateAs( b->fileId, head ) );
         }
         return it->second;
     }
@@ -372,7 +515,7 @@ struct Walk
         Row                 row{ .b = b, .cands = t.crates.size() };
         row.at.crate = rc.crateOf[ g ];
         row.at.name  = s.name;
-        row.at.mods  = rc.modOf[ g ];
+        row.at.mods  = rc.modsAt( g, b->startByte );   // the FILE's path plus any inline `mod { }` the statement sits in
         const bool renamed = b->var != "*" && b->var != b->typeName;
         if( b->var == "*" )
         {
@@ -436,6 +579,7 @@ struct Chain
     std::vector<Row> rows;   // BFS order
     std::vector<Row> uses;
     std::size_t      asSkipped = 0;
+    bool             capped    = false;   // the walk stopped at kReexportSpellingCap spellings: total= is a floor
 };
 
 // The statements that may re-export spelling `s`: by its name, every glob, and (Rust) by each module segment of its path.
@@ -497,13 +641,19 @@ inline void walkChain( Walk& w, Chain& c )
     HashMap<std::string, char> seen;
     seen.try_emplace( spellingKey( c.start ), '\0' );
     std::vector<Spelling> frontier{ c.start };
-    for( std::size_t at = 0; at < frontier.size() && frontier.size() < 256; ++at )
+    std::size_t at = 0;
+    for( ; at < frontier.size() && frontier.size() < kReexportSpellingCap; ++at )
     {
         const Spelling s = frontier[ at ];
         for( const Binding* b : reexportCandidates( w, c.rust, s ) )
         {
             std::optional<Row> row = c.rust ? w.rustMatch( b, s, c.asSkipped ) : w.webMatch( b, s );
-            const bool publishes = row && ( !c.rust || ( w.src.isPub( b->fileId, b->startByte ) && w.rc.crateOf[ b->fileId ] != kNoFile ) );
+            const int  vis       = row && c.rust ? w.src.visOf( b->fileId, b->startByte ) : 1;
+            const bool publishes = row && vis > 0 && ( !c.rust || w.rc.crateOf[ b->fileId ] != kNoFile );
+            if( publishes )
+            {
+                row->restricted = vis == 2;
+            }
             if( row && !publishes )
             {
                 noteReexportUse( w, c, std::move( *row ) );
@@ -519,6 +669,7 @@ inline void walkChain( Walk& w, Chain& c )
             }
         }
     }
+    c.capped = at < frontier.size();   // the loop ended on the cap with spellings still unvisited
     if( !c.rust )
     {
         webReexportUses( w, c, seen );
@@ -700,6 +851,7 @@ struct ReexportXml
         if( c.rust && !r.use )
         {
             attr( "at", spelled( r.at ) );
+            out.append( r.restricted ? " vis=\"restricted\"" : "" );
         }
         if( !c.rust && !r.use && !r.glob && r.b->var != r.b->importedName )
         {
@@ -724,6 +876,7 @@ struct ReexportXml
             attr( "at", spelled( c.start ) );
         }
         num( "total", c.rows.size() );
+        out.append( c.capped ? " capped=\"1\"" : "" );
         if( c.asSkipped > 0 )
         {
             num( "as_skipped", c.asSkipped );
