@@ -42,6 +42,8 @@
 #
 #   D1 [P] fix round 2: a task receiver bound by name (never declined) does not answer another receiver's declined call (fixture recvbound)
 #   D2 [P] a non-test-file double named by tests and an uncalled helper stays demoted (fixture dumpfs)
+#   F-A [P] an impl built only in an OS-run C/C++ entry (WinMain, wWinMain, DllMain, wmain, _tmain) stays shown; twin: a
+#       non-entry name keeps D2's demotion (fixture osentry, entry name written at run time)
 #
 # Usage:  bash test/fordispatchhopcheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/fordispatchhopcheck.sh
 # BIN is $1, else RIPWIRE_BIN, else build/ripwire; the first output line names the binary used. Exits non-zero on any failure.
@@ -64,7 +66,7 @@ cd "$ROOT"
 F="test/fordispatchhopfix"
 [ -f "$F/cpp/loader.cc" ] && [ -f "$F/cpp1/tests/loader_test.cc" ] && [ -f "$F/rs/src/pick.rs" ] && [ -f "$F/cppwrap/cached.cc" ] && [ -f "$F/ladder/main.py" ] \
     && [ -f "$F/factory/pg_store.cc" ] && [ -f "$F/double/loader_test.cc" ] && [ -f "$F/recv/loader.cc" ] && [ -f "$F/initm/loader.cc" ] \
-    && [ -f "$F/ts/src/loader.ts" ] && [ -f "$F/alltest/tests/fakes.cc" ] && [ -f "$F/recvbound/rc.cc" ] && [ -f "$F/dumpfs/src/test.cc" ] || { echo "fixture $F missing"; exit 2; }
+    && [ -f "$F/ts/src/loader.ts" ] && [ -f "$F/alltest/tests/fakes.cc" ] && [ -f "$F/recvbound/rc.cc" ] && [ -f "$F/dumpfs/src/test.cc" ] && [ -f "$F/osentry/src/disk.cc" ] || { echo "fixture $F missing"; exit 2; }
 
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"; mkdir -p "$HOME"
@@ -250,6 +252,23 @@ HD2="$( hop "$TMP/d2" )"
 if has "$HD2" 'cands="2" shown="1" test="1"' && has "$HD2" 'n="RealDisk::ReadFile"' && ! has "$HD2" 'VirtualFS' && has "$HD2" 'p * 7 + 1'; then
     ok "(D2) a double in a non-test file named only by tests and an UNCALLED helper stays demoted (test=1), the other candidate's body rides"
 else no "(D2) uncalled helper un-demoted the double: [$HD2]"; fi
+
+# ── F-A (train 42a: rv-mf1nx-delta2 E1) ───────────────────────────────────────────────────────────────────────────────────────────
+# An OS-run C/C++ entry (WinMain, wWinMain, DllMain, wmain, _tmain) is a caller-less root like main: a production impl built ONLY
+# there, and named by tests, is NOT a test double (the other impl's body must not be printed as THE answer). The fixture's
+# disk.cc spells ENTRY; each arm writes one name into a runtime copy. Twin: a non-entry name keeps D2's rule (uncalled = no evidence).
+for en in WinMain wWinMain DllMain wmain _tmain NotAnEntry; do
+    rm -rf "$TMP/osentry"; cp -R "$F/osentry" "$TMP/osentry"
+    sed "s/int ENTRY()/int $en()/" "$F/osentry/src/disk.cc" >"$TMP/osentry/src/disk.cc"
+    run "$TMP/osentry" "--for=Builder::Run disk_->ReadFile" >"$TMP/fa"
+    HFA="$( hop "$TMP/fa" )"
+    if [ "$en" = NotAnEntry ]; then
+        if has "$HFA" 'cands="2" shown="1" test="1"'; then ok "(F-A twin) an uncalled $en() is not a root: RealDisk stays demoted (test=1)"
+        else no "(F-A twin) a non-entry name became a root: [$HFA]"; fi
+    elif has "$HFA" 'cands="2" shown="2"' && ! has "$HFA" 'test="1"' && ! has "$HFA" 'p * 11 + 5'; then
+        ok "(F-A) $en() is a runtime root: RealDisk built there stays shown, no single other body printed"
+    else no "(F-A) $en() counted as dead code: RealDisk demoted [$HFA]"; fi
+done
 
 # ── S4 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 est(){ python3 -c 'import re,sys; m=re.search(r"est_tokens=\"(\d+)\"", sys.stdin.read()); print(m.group(1) if m else "")'; }

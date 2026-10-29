@@ -178,14 +178,17 @@ inline std::span<const NodeId> siteCandidates( const Graph& g, std::uint32_t sit
 }
 }   // namespace dispatch_detail
 
-// An entry point the runtime itself runs, with no caller in the code: `main`, and a Go `init`. A switch, not a `== Lang::` predicate:
-// the language-identity ratchet (test/langidentity/ratchet.tsv) counts predicates in shared files and may never rise.
+// An entry point the runtime itself runs, with no caller in the code: `main`, a Go `init`, and the C/C++ entries the OS runs under
+// another name (`wmain`, `_tmain`, `WinMain`, `wWinMain`, `DllMain`). A switch, not a `== Lang::` predicate: the language-identity
+// ratchet (test/langidentity/ratchet.tsv) counts predicates in shared files and may never rise.
 inline bool runtimeRoot( Lang lang, std::string_view name ) noexcept
 {
     switch( lang )
     {
-        case Lang::Go: return name == "main" || name == "init";
-        default:       return name == "main";
+        case Lang::Go:  return name == "main" || name == "init";
+        case Lang::C:
+        case Lang::Cpp: return name == "main" || name == "wmain" || name == "_tmain" || name == "WinMain" || name == "wWinMain" || name == "DllMain";
+        default:        return name == "main";
     }
 }
 
@@ -193,7 +196,7 @@ inline bool runtimeRoot( Lang lang, std::string_view name ) noexcept
 // the owner's name from a non-test symbol in a non-test file is production evidence when it comes
 //   * from a file holding none of the owner's members (a registry, a main, a composition root), or
 //   * from INSIDE the owner's own files, by a non-member that production runs: a factory (`Store* MakePg() { return new Pg(); }`)
-//     with a non-test caller, a file-level registrar, `main`, a Go `init` — a type made where it is defined is still made. An
+//     with a non-test caller, a file-level registrar, `main`, a Go `init`, a C/C++ OS entry (`WinMain`, `DllMain`, …) — a type made where it is defined is still made. An
 //     uncalled helper (dead code, a debug dump) is not evidence: it is not known to run.
 // By name only, so a collision keeps a candidate shown (never the other way): a candidate whose type test code names and nothing
 // else does (ninja's VirtualFileSystem, defined in src/test.cc and used by *_test.cc only) is a test double, counted in test=; a
@@ -240,7 +243,7 @@ inline bool ownerNamedByProduction( const IngestResult& ing, const Graph& g, Nod
         }
         const std::vector<NodeId> fromTarget{ r.fromSymbol };
         const std::vector<NodeId> who = oneHopCallerRows( ing, g, fromTarget );
-        // a root the runtime runs (main, a Go init; a file-level registrar is the kNoNode case above) has no callers; a factory has a
+        // a root the runtime runs (main, a Go init, a C/C++ OS entry; a file-level registrar is the kNoNode case above) has no callers; a factory has a
         // non-test caller. Any OTHER caller-less function is dead code or a debug helper: not evidence production runs the type
         if( runtimeRoot( from.lang, from.name ) || std::ranges::any_of( who, [ & ]( NodeId w ) { return !isTestSymbol( ing, w ); } ) )
         {
