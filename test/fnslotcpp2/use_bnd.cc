@@ -5,7 +5,7 @@ typedef int (grpc::GServer::*BndSFn)(int);
 struct BndEntB { const char* k; BndSFn f; };
 static const BndEntB kBndB[] = { { "gstart", &grpc::GServer::gstart } };
 struct BndHoldB { const BndEntB* e; };
-int go_bnd(grpc::GServer& s, int k) { if( k > 3 ) { return 0; } BndHoldB h; h.e = &kBndB[k]; return (s.*h.e->f)(k); }
+int go_bnd(grpc::GServer& s, int k) { BndHoldB h; h.e = &kBndB[k]; (s.*h.e->f)(k - 1); return (s.*h.e->f)(k); }
 typedef int (mygrpc::GServer::*BndOFn)(int);
 struct BndEntC { const char* k; BndOFn f; };
 static const BndEntC kBndC[] = { { "gstart", &mygrpc::GServer::gstart } };
