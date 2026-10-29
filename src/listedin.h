@@ -21,7 +21,7 @@
 // generated (an automake Makefile.in, a configure-written Makefile) — the file to edit is its source.
 //
 // GATE (present-only): the task has a creation word (new, add, adding, register, registration, create, creating, plugin, plugins,
-// extension, extensions) as a whole word or a subtoken; the DEFAULT regime and the XML dialect only, as the caller hop and
+// extension, extensions) as a whole word (not inside an identifier: `Plan::AddTarget`, `new_local`, `createX` do not fire); the DEFAULT regime and the XML dialect only, as the caller hop and
 // <ep>. RIPWIRE_NO_LISTED_IN (any value) turns it off — the A/B handle.
 // FLOORS: a manifest that lists a file by a glob or a variable (`$(wildcard src/*.c)`, `glob(["*.cc"])`), a list keyed by a
 // registered NAME string (a man page's command list, a docs index — mf1-lit's literal anchors), a manifest outside the shown
@@ -70,8 +70,9 @@ struct ListedRender
 namespace listeddetail
 {
 
-// A creation word as a whole lowercase word or subtoken of the task (split on every non-alphanumeric character and on a
-// lower→upper camel boundary): "hono/<new-middleware>" → new; "addFilter" → add.
+// A creation word as a whole word of the task, case-folded; words split on every character that is not alphanumeric or '_', so a
+// creation word inside an identifier (`Plan::AddTarget`, `Workspace::new_local`, `createSingletons`) is not one: that task names a
+// symbol, it does not ask to add one. "hono/<new-middleware>" → new.
 inline bool isCreationTask( std::string_view task )
 {
     static constexpr std::string_view kWords[] = { "new", "add", "adding", "register", "registration", "create", "creating",
@@ -83,10 +84,13 @@ inline bool isCreationTask( std::string_view task )
         word.clear();
         return hit;
     };
-    for( std::size_t i = 0; i < task.size(); ++i )
+    char prev = ' ';   // the previous ORIGINAL character (word holds the folded ones, so "NEW" is not a camel boundary)
+    for( const char ch : task )
     {
-        const unsigned char c = static_cast<unsigned char>( task[i] );
-        if( !std::isalnum( c ) )
+        const unsigned char c = static_cast<unsigned char>( ch );
+        const bool          camel = std::isupper( c ) && !word.empty() && std::islower( static_cast<unsigned char>( prev ) );
+        prev = ch;
+        if( !std::isalnum( c ) && ch != '_' )
         {
             if( flush() )
             {
@@ -94,9 +98,9 @@ inline bool isCreationTask( std::string_view task )
             }
             continue;
         }
-        if( std::isupper( c ) && i > 0 && std::islower( static_cast<unsigned char>( task[i - 1] ) ) && flush() )
+        if( camel )
         {
-            return true;
+            word += '\x01';   // a lower→upper camel boundary inside one word: the word is an identifier, never a creation word
         }
         word += char( std::tolower( c ) );
     }

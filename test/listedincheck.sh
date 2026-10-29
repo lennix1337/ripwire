@@ -15,7 +15,8 @@
 #   A2 [G] a comment line naming a file (`# widget-old.c is gone`) is not a listing: no ln l="3", widget-old.c in no also=
 #   A3 [P] package manifests: package.json by="dir" l=4..6 (exports key + its build outputs), jsr.json by="path" l=2,3
 #   A4 [G] segment-bounded: src/middleware/log/index.ts is never named by `middleware/logger` lines (absent from of=/also=)
-#   A5 [P] a camelCase creation word fires: "addWidget alpha run" (subtoken route) carries <listed p="Makefile.am"
+#   A5 [G] a creation word inside an identifier is not one: "addWidget alpha run" and "widget_new_alpha run" carry no <listed>
+#   A6 [P] an all-caps creation word is a word, not a camel boundary: "NEW widget" carries <listed p="Makefile.am"
 #   N1 [G] no creation word ("widget alpha"): no <listed>, no clause
 #   N2 [G] a glob listing ($(wildcard *.c)) is a floor: no <listed>
 #   N3 [G] prefix identity: the answer minus <listed> and its clause, est_tokens masked, equals RIPWIRE_NO_LISTED_IN=1
@@ -61,8 +62,14 @@ if run am "$T/a1" "new widget"; then
     if ! has "$T/a1" '<ln l="3">' && ! grep -o '<listed [^>]*>' "$T/a1" | grep -qF 'widget-old.c'; then ok "A2 a comment line naming widget-old.c is not a listing"
     else no "A2 the comment line was taken as a listing"; fi
 fi
-if run am "$T/a5" "addWidget alpha run"; then
-    if has "$T/a5" '<listed p="Makefile.am"'; then ok "A5 camelCase creation word (addWidget alpha run) fires"; else no "A5 addWidget carried no <listed>"; fi
+for t5 in "addWidget alpha run" "widget_new_alpha run"; do   # [G] identifiers; A6 below is the all-caps twin that DOES fire
+    if run am "$T/a5" "$t5"; then
+        if ! has "$T/a5" '<listed'; then ok "A5 identifier subtoken is not a creation word ($t5)"; else no "A5 '$t5' fired <listed>"; fi
+    fi
+done
+
+if run am "$T/a6" "NEW widget"; then
+    if has "$T/a6" '<listed p="Makefile.am"'; then ok "A6 an all-caps creation word (NEW widget) fires"; else no "A6 'NEW widget' carried no <listed>"; fi
 fi
 
 # ---- A3 / A4
