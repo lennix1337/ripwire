@@ -278,10 +278,13 @@ if [ -x "$REALBIN" ]; then
     # RED when the hook hardcodes `wrap claude`: the codex arm would carry Claude's offset/limit text.
     # The arm is pinned to treatment (as A4 does): the default auto split could put a session id in control, silent.
     T3IC="$TMP/t3ic"; mkdir -p "$T3IC"; T3IX="$TMP/t3ix"; mkdir -p "$T3IX"
+    # CR 5712563408 (hookcheck.sh:281): the Codex wrapper's output adapter is jq; without jq it exits 0 silent, so the shared hook is
+    # driven directly under RIPWIRE_METER_AGENT=codex there (the agent selection is the shared hook's)
+    CODEX_ENTRY="$ROOT/hooks/ripwire-codex-nudge.sh"; command -v jq >/dev/null 2>&1 || CODEX_ENTRY="$HOOK"
     OUT3IC="$( printf '%s' '{"session_id":"sscodex","cwd":"'"$REPO"'","source":"startup"}' \
-        | env RIPWIRE_METER_ARM=treatment PATH="$WITH_REAL" TMPDIR="$T3IC" bash "$ROOT/hooks/ripwire-codex-nudge.sh" --session-start )"
+        | env RIPWIRE_METER_AGENT=codex RIPWIRE_METER_ARM=treatment PATH="$WITH_REAL" TMPDIR="$T3IC" bash "$CODEX_ENTRY" --session-start )"
     OUT3IX="$( printf '%s' '{"session_id":"ssclaude","cwd":"'"$REPO"'","source":"startup"}' \
-        | env RIPWIRE_METER_ARM=treatment PATH="$WITH_REAL" TMPDIR="$T3IX" bash "$HOOK" --session-start )"
+        | env RIPWIRE_METER_AGENT=claude RIPWIRE_METER_ARM=treatment PATH="$WITH_REAL" TMPDIR="$T3IX" bash "$HOOK" --session-start )"
     if printf '%s' "$OUT3IC" | grep -Fq -e '--replace-symbol-body' && ! printf '%s' "$OUT3IC" | grep -Fq 'offset/limit'; then
         ok "SessionStart F1: the Codex primer keeps --replace-symbol-body and carries no ranged-Read route"
     else no "SessionStart F1: the Codex primer is not wrap codex's blurb (replace-body=$( printf '%s' "$OUT3IC" | grep -Fc -e '--replace-symbol-body' ) ranged-read=$( printf '%s' "$OUT3IC" | grep -Fc 'offset/limit' ))"; fi

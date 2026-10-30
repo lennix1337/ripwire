@@ -148,7 +148,7 @@ has   "$TMP/n3deep.xml" "N-3 the 256-spelling stop is disclosed beside total="  
 n=$( grep -o '<rx ' "$TMP/n3deep.xml" | wc -l | tr -d ' ' )
 if [ "$n" = 8 ]; then ok "N-3 the row cap prints 8 of the capped chain's rows"; else no "N-3 the capped chain printed $n rx rows (cap 8)"; fi
 T2="$TMP/t2"; mkdir -p "$T2/c/src/x" "$T2/inner/src"
-printf '[package]\nname = "c"\nversion = "0.1.0"\n' >"$T2/c/Cargo.toml"
+printf '[package]\nname = "c"\nversion = "0.1.0"\nedition = "2021"\n[dependencies]\ninner = { path = "../inner" }\n' >"$T2/c/Cargo.toml"
 printf '[package]\nname = "inner"\nversion = "0.1.0"\n' >"$T2/inner/Cargo.toml"
 printf 'pub mod inner;\npub mod x;\npub mod scope2 { use crate::inner; pub use inner::Thing2; }\n' >"$T2/c/src/lib.rs"
 printf 'pub struct Thing2;\npub struct Thing4;\npub struct Thing5;\n' >"$T2/c/src/inner.rs"

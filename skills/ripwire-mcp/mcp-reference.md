@@ -54,7 +54,10 @@ followed by `\nint sub(...) {...}` on its own line, with every other byte of the
   edit — rebuilds from the just-written disk state. The response JSON includes the applied `span`,
   `old_file_bytes`/`new_file_bytes`, the pre-edit `stale_index` stamp, and a note that the index will refresh.
 
-**When to reach for these vs your normal editor tool** — lead with the harness-independent case: **if you
+**When to reach for these vs your normal editor tool** — these three verbs exist only when your server lists them: the default
+`ripwire wrap claude` server is registered with `--mcp-tools=no-edit` and omits them (Claude Code edits through its native Edit after a
+ranged Read), so everything below applies to a server started without that profile (`--mcp-tools=full`, or another agent's recipe).
+Lead with the harness-independent case: **if you
 already have the body** — `fetch_body` or `--expand` served it this session — these verbs never re-read the
 file. They splice directly at the already-known span, checked against their own staleness hash (see above),
 not a fresh Read. Several coding-agent harnesses require their native edit tool to Read a file immediately

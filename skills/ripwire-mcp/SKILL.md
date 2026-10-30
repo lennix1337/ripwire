@@ -227,7 +227,9 @@ stamps, warm content-hash rebuilds, working-set PageRank personalization, the ba
 large workspaces). Short version: every edit-verb failure leaves the file byte-for-byte unchanged, writes are
 atomic (`tmp` + `rename(2)`), and the server never goes stale silently — it rebuilds warm from mtime checks
 before every verb call. **Lead with this MCP form when the body already came from `fetch_body` this
-session**; after a CLI `--expand`, keep the zero-standing-schema CLI path and use `--edit-payload=-`.
+session AND your server lists the edit verbs** (the default `ripwire wrap claude` server omits them with `--mcp-tools=no-edit`:
+there, take the ranged-Read plus native-Edit route, or the CLI `--replace-symbol-body` below); after a CLI `--expand`, keep the
+zero-standing-schema CLI path and use `--edit-payload=-`.
 Several harnesses' native Edit tool
 needs a fresh Read of the file immediately before the edit, even when you already have the body from
 elsewhere in the session — these verbs check their own staleness hash instead of requiring one, so under any
