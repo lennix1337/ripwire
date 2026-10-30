@@ -1022,6 +1022,15 @@ inline std::string renderForReexports( const IngestResult& ing, std::string_view
     {
         return {};
     }
+    // CR nitpick (review 5712563408, forreexport.h:1025): no cue word and no task-named file means no chain can print (a chain prints
+    // when cued, or when it carries a use row, and a use row is only noted from a task-named file): return before the file map and
+    // the Cargo.toml reads
+    const bool        cued      = reexportTaskCued( tokens );   // otherwise only a chain that reaches a task-named file prints
+    std::vector<char> taskFiles = reexportTaskFiles( ing, tokens );
+    if( !cued && std::ranges::none_of( taskFiles, []( char c ) { return c != 0; } ) )
+    {
+        return {};
+    }
     const auto dialectOf = []( DepDialect want ) { return [ want ]( const Symbol* d ) { return dependencyDialect( d->lang ) == want; }; };
     const bool rust      = std::ranges::any_of( defs, dialectOf( DepDialect::Rust ) );
     const bool web       = std::ranges::any_of( defs, dialectOf( DepDialect::Web ) );
@@ -1033,8 +1042,7 @@ inline std::string renderForReexports( const IngestResult& ing, std::string_view
     }
     const RustCrates rc = rust ? buildRustCrates( ing, files ) : RustCrates{ .crateOf = std::vector<std::uint32_t>( ing.files.size(), kNoFile ) };
     Sources          src{ ing, {} };
-    const bool cued = reexportTaskCued( tokens );   // otherwise only a chain that reaches a task-named file prints
-    Walk             w{ ing, src, rc, files, {}, {}, {}, {}, reexportTaskFiles( ing, tokens ) };
+    Walk             w{ ing, src, rc, files, {}, {}, {}, {}, std::move( taskFiles ) };
     indexReexportRecords( ing, rust, web, w );
     ReexportXml xml{ ing, rc, src, {}, {}, {} };
     std::size_t printedDefs = 0;   // the def rows printed (the held marker's count)
