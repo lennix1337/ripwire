@@ -90,9 +90,10 @@ inline constexpr std::string_view kForLiteralLegend =
     "above. floor=1: scan stopped early, "
     "counts are floors; next= on lit lists every site. -->";
 inline constexpr std::string_view kForCompactLiteralLegend =
-    "<!-- ripwire for lit: byte-exact scan for the task's literal (s=), not in est_tokens. ls: a source line with it (k=string|code|?; "
-    "in=/ink= its def; lines=a-b adds the lines after). comment= test= doc= counted, not rows; floor=1: floors. b whole fn, "
-    "x excerpt (l= ranges, \xE2\x80\xA6 between; of= whole; cut=1: cut); body=above: printed above. -->";
+    "<!-- ripwire for lit: byte-exact scan for the task's literal (s=, shape=), not in est_tokens (bytes=). ls: a source line with it "
+    "(k=string|code|?; in=/ink= its def; lines=a-b adds the lines after). hits=/src= all/source lines (shown=; capped=1: more); "
+    "comment= test= doc= counted, not rows; floor=1: floors. b whole fn, x excerpt (l= ranges, \xE2\x80\xA6 between; of= body lines; "
+    "cut=1: lines cut; next= whole); body=above: printed above. -->";
 static_assert( kForLiteralLegend.find( "--", 4 ) == kForLiteralLegend.size() - 3 && kForCompactLiteralLegend.find( "--", 4 ) == kForCompactLiteralLegend.size() - 3,
                "the only double hyphen in a legend comment is its closing: one inside is not well-formed XML" );
 

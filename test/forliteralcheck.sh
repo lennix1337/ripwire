@@ -165,8 +165,12 @@ legendOf(){ python3 -I -c 'import sys,re;m=re.search(r"<!-- ripwire for lit:.*?-
 noLegend(){ python3 -I -c 'import sys,re;print(re.sub(r"<!-- ripwire for lit:.*?-->","",sys.stdin.read(),flags=re.S),end="")'; }
 LC="$( run --for=APPTOOL_RENDER_MODE | legendOf )"; LF="$( run --for=APPTOOL_RENDER_MODE --legend=full | legendOf )"
 PC="$( run --for=APPTOOL_RENDER_MODE | lit | noLegend )"; PF="$( run --for=APPTOOL_RENDER_MODE --legend=full | lit | noLegend )"
-if [ "${#LC}" -le 340 ] && [ "${#LC}" -ge 250 ] && [ "${#LF}" -ge 700 ] && has "$LF" 'docs, shell, config' && [ "$LC" != "MISSING" ] \
-   && has "$LC" 'k=' && has "$LC" 'comment=' && has "$LC" 'floor=' && has "$LC" 'body=above' && [ -n "$PC" ] && [ "$PC" = "$PF" ]; then
+# train 42b T-4 (rv-mf1-lit-delta N3): the compact form names every attribute the element prints (hits= src= shown= capped= shape=
+# bytes= next= and T-3's cut=) and says of= is the body's line range, never "whole": the ceiling moved 340 -> 450 for those names only
+if [ "${#LC}" -le 450 ] && [ "${#LC}" -ge 250 ] && [ "${#LF}" -ge 700 ] && has "$LF" 'docs, shell, config' && [ "$LC" != "MISSING" ] \
+   && has "$LC" 'k=' && has "$LC" 'comment=' && has "$LC" 'floor=' && has "$LC" 'body=above' && [ -n "$PC" ] && [ "$PC" = "$PF" ] \
+   && has "$LC" 'hits=' && has "$LC" 'src=' && has "$LC" 'shown=' && has "$LC" 'capped=' && has "$LC" 'shape=' && has "$LC" 'bytes=' \
+   && has "$LC" 'next=' && has "$LC" 'cut=' && has "$LF" 'cut=' && has "$LC" 'of= body lines' && ! has "$LC" 'of= whole'; then
     ok "L11 compact legend ${#LC} B (the default); --legend=full keeps ${#LF} B naming docs, shell, config; same payload"
 else no "L11 legend sizes wrong: compact=${#LC} full=${#LF} samepayload=$([ "$PC" = "$PF" ] && echo y || echo n)"; fi
 # ── N1 (train 42b T-3, rv-mf1-lit-delta N1): an <x> excerpt cuts each line at 200 bytes (a minified one-line body printed 48.9 KB) ──
