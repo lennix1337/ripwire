@@ -1649,6 +1649,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // record their memory-guard stops here; a count that grew during this request means the answer may rest on
             // a partial ingest even when the resident index is whole, and the envelope says so (textResult).
             const std::uint32_t stopsAtEntry = memguard::stopCounts().recorded.load( std::memory_order_relaxed );
+            ownIngestCutNote().clear();   // notfound-on-cut: this request's own-ingest note starts empty (mcpindex.h)
             const auto textResult = [ & ]( const std::string& text )
             {
                 // stamp FIRST, then the pass count: on a verb that never touched the index, building the
@@ -1705,11 +1706,29 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // HEAD tree that was only partly read) — so every error built after a stop carries the guard's sentence too
             const auto memoryStopSuffix = [ & ]( std::string_view msg ) -> std::string
             {
-                if( memguard::stopCounts().recorded.load( std::memory_order_relaxed ) <= stopsAtEntry || msg.find( "memory guard" ) != std::string_view::npos )
+                // every guard sentence ends with memguard::kOverride; the words "memory guard" can ride in echoed caller text
+                // (`symbol not found: 'memory guard'`), which is not a disclosure (CR 4419328423)
+                if( msg.find( memguard::kOverride ) != std::string_view::npos )
                 {
                     return {};
                 }
-                return "; the memory guard stopped an ingest this request ran, which may be the real cause — " + std::string( memguard::kOverride );
+                // notfound-on-cut: the resident index for this root is cut — the request that BUILT it (an agent's first call), a
+                // LATER one served from it, and the edit_check / quality_delta ingests that left it resident all say the same
+                // shared sentence (mcpindex.h): the partial-absence clause, the file count and the override
+                if( std::string clause = cutIndexErrorClause( path ); !clause.empty() )
+                {
+                    return clause;
+                }
+                if( const std::string& own = ownIngestCutNote(); !own.empty() )   // edit_check / quality_delta ingest on their own
+                {
+                    return own;
+                }
+                // #350: an ingest this request ran that left no resident index for `path` (a root served without the slot)
+                if( memguard::stopCounts().recorded.load( std::memory_order_relaxed ) > stopsAtEntry )
+                {
+                    return "; the memory guard stopped an ingest this request ran, which may be the real cause — " + std::string( memguard::kOverride );
+                }
+                return {};
             };
             const auto errResult = [ & ]( int code, const char* msg )
             {
@@ -2806,6 +2825,15 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                             for( std::size_t i = 0; i < take; ++i )
                             {
                                 subs.push_back( runBatchSub( path, objs[i], topK, stable, redactPtr, legendCompactPosture ) );
+                            }
+                            // notfound-on-cut: a sub-query's not-found is an ok="0" err= inside a RESULT, not a JSON-RPC error, so
+                            // errResult never saw it — it takes the same partial-index clause (one helper, memoryStopSuffix)
+                            for( BatchSub& sub : subs )
+                            {
+                                if( !sub.ok )
+                                {
+                                    sub.err += memoryStopSuffix( sub.err );
+                                }
                             }
                             // M1: the posture reaches INSIDE the CDATA — the rule, its measurement and the one
                             // skipped verb live once, on applyCompactToBatchSubs (mcpverbs.h), because the CLI
