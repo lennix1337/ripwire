@@ -981,10 +981,15 @@ inline std::vector<std::pair<std::uint32_t, NodeId>> matchNamedIdents( const Ing
 // B8's resolved file mentions). The ambiguity bound counts EVERY definition first, fixtures and prototypes included.
 // Appends to `out`, deduplicated.
 inline void resolveNamedIdents( const IngestResult& ing, const std::vector<float>& lensRank, const std::vector<NamedIdent>& named,
-                                const std::vector<std::uint32_t>& namedFiles, std::vector<NodeId>& out )
+                                const std::vector<std::uint32_t>& namedFiles, std::vector<NodeId>& out,
+                                std::vector<bool>* resolvedMask = nullptr )
 {
     EXPECTS( lensRank.size() == ing.symbols.size() );
     ASSUME_NO_ALIAS( lensRank, out );
+    if( resolvedMask != nullptr )
+    {
+        resolvedMask->assign( named.size(), false );
+    }
     const std::vector<std::pair<std::uint32_t, NodeId>> matches = matchNamedIdents( ing, named );
     std::vector<std::pair<std::uint32_t, NodeId>>       perFile;   // (fileId, best symbol in it) for one identifier
     for( std::size_t m = 0; m < matches.size(); )
@@ -1011,6 +1016,10 @@ inline void resolveNamedIdents( const IngestResult& ing, const std::vector<float
         if( perFile.empty() || perFile.size() > kMentionMaxNameFiles )
         {
             continue;   // unmatched, or ambiguous: precision over recall — no lift, no reordering
+        }
+        if( resolvedMask != nullptr )
+        {
+            ( *resolvedMask )[ k ] = true;
         }
         // definition over declaration (model.h isDefinitionNotDeclaration, the house test), for callables: a C-family
         // prototype or an abstract method beside a real definition of the same name does not spend a lift of its own
@@ -1156,29 +1165,43 @@ inline bool applyMentionBoost( const IngestResult& ing, std::string_view task, s
     const std::size_t       namedDistinct = finalizeNamedIdents( identToks, named );
     noteCap( outInfo, "mention_idents_capped", "mention_idents_total", namedDistinct > named.size(), namedDistinct );
     std::vector<NodeId> namedSymbols;
-    resolveNamedIdents( ing, lensRank, named, mentionedFiles, namedSymbols );
+    std::vector<bool>   identResolved;
+    resolveNamedIdents( ing, lensRank, named, mentionedFiles, namedSymbols, &identResolved );
 
     // If an identifier in named did not match any symbol, check if it matches an indexed file's stem (e.g. sync_ledger -> sync_ledger.py)
-    for( const NamedIdent& n : named )
+    for( std::size_t i = 0; i < named.size(); ++i )
     {
+        if( i < identResolved.size() && identResolved[ i ] )
+        {
+            continue;
+        }
         if( mentionedFiles.size() >= kMentionMaxFiles )
         {
             break;
         }
-        std::uint32_t matchFile  = UINT32_MAX;
-        std::uint32_t matchCount = 0;
+        const NamedIdent&          n = named[ i ];
+        std::vector<std::uint32_t> stemMatches;
+        std::uint32_t              matchCount = 0;
         for( std::uint32_t f = 0; f < fileCount; ++f )
         {
-            if( stripExt( baseNameOf( ing.files[f] ) ) == n.name )
+            if( stripExt( baseNameOf( ing.files[ f ] ) ) == n.name )
             {
                 ++matchCount;
-                matchFile = f;
+                stemMatches.push_back( f );
             }
         }
         if( matchCount >= 1 && matchCount <= kMentionMaxNameFiles )
         {
-            if( std::find( mentionedFiles.begin(), mentionedFiles.end(), matchFile ) == mentionedFiles.end() )
+            for( const std::uint32_t matchFile : stemMatches )
             {
+                if( mentionedFiles.size() >= kMentionMaxFiles )
+                {
+                    break;
+                }
+                if( std::find( mentionedFiles.begin(), mentionedFiles.end(), matchFile ) != mentionedFiles.end() )
+                {
+                    continue;
+                }
                 mentionedFiles.push_back( matchFile );
             }
         }
