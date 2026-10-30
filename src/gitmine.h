@@ -2477,7 +2477,6 @@ inline std::vector<FileOwnership> gitFileAuthors(
             const std::size_t      pipePos = rest.rfind( '|' );
             if( pipePos == std::string_view::npos || pipePos == 0 || pipePos + 1 >= rest.size() )
             {
-                DISCLOSE( "gitmine: malformed git commit header (missing timestamp pipe)" );
                 haveCommit = false;
                 continue;
             }
@@ -2489,10 +2488,6 @@ inline std::vector<FileOwnership> gitFileAuthors(
             const std::string_view tsView = rest.substr( pipePos + 1 );
             const auto [ ptr, ec ]        = std::from_chars( tsView.data(), tsView.data() + tsView.size(), curTs );
             haveCommit                    = ( ec == std::errc{} && ptr == tsView.data() + tsView.size() );
-            if( !haveCommit )
-            {
-                DISCLOSE( "gitmine: failed to parse commit timestamp in git header" );
-            }
             continue;
         }
         if( s.empty() || !haveCommit )
