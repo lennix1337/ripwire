@@ -165,8 +165,22 @@ has   "$TMP/t2b.xml" "X1b a fn-body use binds nothing at file level: the crate i
 hasnt "$TMP/t2b.xml" "X1b never c's own Thing4 through the fn-body import"                      '<def n="Thing4" p="c/src/inner.rs"'
 ask3 "--for=where Thing2 is defined" >"$TMP/t2c.xml"
 has   "$TMP/t2c.xml" "X1c twin: a same-module import is still read through: c's Thing2"         '<def n="Thing2" p="c/src/inner.rs"'
+# ── CR pre-pass 42b (budget-audit honesty item): the block under --token-budget ────────────────────────────────────────────
+# A token budget is a request the block must obey: the rows sit outside est_tokens, so under one they are NOT printed and a held marker
+# names the count. RED on train head b50d9518 (rows printed, no marker); H3/H4 are twins that hold on both.
+HB="--for=where sayHello used in use.ts is defined"
+ask --token-budget=3000 "$HB" >"$TMP/h1.xml"
+( cd "$FIX" || exit 1; RIPWIRE_NO_REEXPORT_HOPS=1 HOME="$TMP" "$BIN" "$FIX" --no-cache --token-budget=3000 "$HB" </dev/null 2>/dev/null ) >"$TMP/h1off.xml"
+if grep -qE '<(def|rx|u) ' "$TMP/h1.xml"; then no "H1 --token-budget=3000 prints no re-export row"; else ok "H1 --token-budget=3000 prints no re-export row"; fi
+if grep -qF '<reexports held="budget" defs="1"/>' "$TMP/h1.xml"; then ok "H2 the held marker names the definitions (defs=1)"; else no "H2 the held marker names the definitions (defs=1)"; fi
+sed 's|<!-- reexports held=[^>]*-->||; s|<reexports held="budget"[^>]*/>||' "$TMP/h1.xml" >"$TMP/h1.stripped"
+if cmp -s "$TMP/h1off.xml" "$TMP/h1.stripped"; then ok "H3 the answer minus the marker is the off-switch answer, est_tokens included"; else no "H3 the held marker changed more than itself"; fi
+ask "$HB" >"$TMP/h4.xml"
+if grep -qF '<rx p="ts/m/index.ts"' "$TMP/h4.xml" && ! grep -qF 'held="budget"' "$TMP/h4.xml"; then ok "H4 twin: no budget, the rows print and no marker"; else no "H4 twin: no budget, the rows print and no marker"; fi
+ask --token-budget=3000 "--for=add a new built-in filter command" >"$TMP/h5.xml"
+if grep -qF 'reexports' "$TMP/h5.xml"; then no "H5 twin: a task with no chain carries no marker under a budget"; else ok "H5 twin: a task with no chain carries no marker under a budget"; fi
 if command -v xmllint >/dev/null 2>&1; then
-    for f in f1 f3 f4 g1 n3deep t2a t2b t2c; do if xmllint --noout "$TMP/$f.xml" 2>/dev/null; then ok "xml well-formed $f"; else no "xml malformed $f"; fi; done
+    for f in f1 f3 f4 g1 n3deep t2a t2b t2c h1; do if xmllint --noout "$TMP/$f.xml" 2>/dev/null; then ok "xml well-formed $f"; else no "xml malformed $f"; fi; done
 fi
 if command -v xmllint >/dev/null 2>&1; then
     for f in r1 t1 t2 c1; do if xmllint --noout "$TMP/$f.xml" 2>/dev/null; then ok "xml well-formed $f"; else no "xml malformed $f"; fi; done

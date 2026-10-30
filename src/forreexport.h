@@ -1001,8 +1001,23 @@ inline std::vector<Chain> reexportChains( Walk& w, const std::vector<const Symbo
 
 }   // namespace reexport_detail
 
-// The <reexports> block for `task` ("" when no task word names a definition that something re-exports).
-inline std::string renderForReexports( const IngestResult& ing, std::string_view task )
+// CR pre-pass 42b: a token budget is a request the block must obey, so under one the rows are NOT printed (they sit outside
+// est_tokens). A one-line marker names how many definitions carry a chain; the legend sentence holds no double dash.
+inline std::string reexportHeldMarker( const std::string& rows )
+{
+    std::size_t defs = 0;
+    for( std::size_t at = rows.find( "<def " ); at != std::string::npos; at = rows.find( "<def ", at + 1 ) )
+    {
+        ++defs;
+    }
+    return "<!-- reexports held=\"budget\": a token budget is set, so the re-export rows are not printed (they sit outside est_tokens); "
+           "defs= definitions carry a chain: ask again without the token budget for the rows -->"
+           "<reexports held=\"budget\" defs=\"" + std::to_string( defs ) + "\"/>";
+}
+
+// The <reexports> block for `task` ("" when no task word names a definition that something re-exports; `held`: a token budget is
+// set, so a marker stands in for the rows).
+inline std::string renderForReexports( const IngestResult& ing, std::string_view task, bool held = false )
 {
     using namespace reexport_detail;
     const std::vector<std::string>      names  = reexportTaskNames( task );
@@ -1038,7 +1053,11 @@ inline std::string renderForReexports( const IngestResult& ing, std::string_view
             }
         }
     }
-    return xml.out.empty() ? xml.out : xml.out.append( "</reexports>" );
+    if( xml.out.empty() || !held )
+    {
+        return xml.out.empty() ? xml.out : xml.out.append( "</reexports>" );
+    }
+    return reexportHeldMarker( xml.out );
 }
 
 }   // namespace rw

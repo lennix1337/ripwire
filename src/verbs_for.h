@@ -4566,7 +4566,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // ALIAS-IMPORT (forreexport.h): the `pub use` / `export … from` hops to a definition the task names; "" when none. XML only, like the block above.
         if( !cfg.json && !cfg.columnar && !cfg.candidates && !d.multiRoot && rw::forReexportOn() )
         {
-            const std::string reexports = rw::renderForReexports( ing, cfg.forTask );
+            const std::string reexports = rw::renderForReexports( ing, cfg.forTask, /*held=*/cfg.tokenBudget > 0 );   // CR pre-pass 42b: held under --token-budget
             std::fwrite( reexports.data(), 1, reexports.size(), stdout );
         }
         appendLiteralAnchorBlock( d, flRootArg, detailSection.xml + autoSection.xml + slot.xml + fold.xml + callerHop.xml + dispatchHop.xml );   // MF1-LIT: "" unless the task names a literal with a site (dispatchHop: train 42b, its single-candidate <b>)
