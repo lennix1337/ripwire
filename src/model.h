@@ -1639,6 +1639,9 @@ inline constexpr std::uint8_t kDispatchResultBit = 0x80;
 // the smart-pointer alias of that spelling in some namespace. resolve.h SmartAliasPeel::pointeeOf alone reads it, to keep the
 // member's base reading; every other reader of a compose record ignores memberVia (a C++ member record carries none otherwise).
 inline constexpr std::string_view kTemplateParamMemberType = "<tparam>";
+// train 42b CR harvest: the memberVia of a C++ MEMBER record declared as a POINTER to a non-smart written type (`FilterSharedPtr* p_;`):
+// `p_->` reaches the alias's smart pointer, never the pointee. resolve.h SmartAliasPeel::pointeeOf alone reads it (base reading kept).
+inline constexpr std::string_view kPointerMemberType = "<ptr>";
 // lane iface-peel fix 1 (B1): the LEXICAL SCOPE of a C++ declaration, written on its record's memberRoot (a compose record's only
 // use of that field): the enclosing namespaces and classes, outermost first, joined by "::" — a class element is prefixed "#"
 // (`Envoy::Network::#ConnectionImpl`), an anonymous namespace is kAnonScopeElement, an inline namespace is transparent (left

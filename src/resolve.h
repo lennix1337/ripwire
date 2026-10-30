@@ -5072,7 +5072,7 @@ public:
     // its base reading.
     std::optional<FlatRecvType> pointeeOf( const Reference& member ) const
     {
-        if( byName_.empty() || member.memberVia == kTemplateParamMemberType || realClass_.find( member.calleeName ) != realClass_.end() )
+        if( byName_.empty() || member.memberVia == kTemplateParamMemberType || member.memberVia == kPointerMemberType || realClass_.find( member.calleeName ) != realClass_.end() )
         {
             return std::nullopt;
         }

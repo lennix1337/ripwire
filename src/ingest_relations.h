@@ -1287,6 +1287,8 @@ inline std::string cppScopePath( TSNode node, std::string_view src )
     return path;
 }
 
+inline std::vector<std::string> enclosingTemplateParameterNames( TSNode classNode, std::string_view src );   // below (one translation unit)
+
 // one alias record: `aliasNode` names `target`, the class `spec` spells (see captureTypeAlias for the record's fields)
 inline void emitTypeAlias( TypeAliasCtx& cx, TSNode aliasNode, TSNode spec, std::string_view target )
 {
@@ -1313,8 +1315,18 @@ inline void emitTypeAlias( TypeAliasCtx& cx, TSNode aliasNode, TSNode spec, std:
         // every other reader keeps reading (graph.h buildFieldNarrowTables is the one reader of the pair)
         if( const WrittenPointee pointee = stdSmartPointee( spec, cx.src ); !pointee.name.empty() )
         {
-            r.memberCtor = pointee.name;
-            r.memberVia  = pointee.qualifier;
+            // CR (review 5712563408, ingest_relations.h:1309): `template <class Handler> struct S { using HPtr = std::shared_ptr<Handler>; }`
+            // names the PARAMETER, never an in-tree class `Handler`: no pointee is recorded (the member keeps its base reading)
+            const std::vector<std::string> params = enclosingTemplateParameterNames( aliasNode, cx.src );
+            if( pointee.qualifier.empty() && std::ranges::find( params, std::string( pointee.name ) ) != params.end() )
+            {
+                r.memberCtor.clear();
+            }
+            else
+            {
+                r.memberCtor = pointee.name;
+                r.memberVia  = pointee.qualifier;
+            }
         }
         r.memberRoot = cppScopePath( aliasNode, cx.src );   // fix round 1: the lexical scope the alias is declared in (its target is looked up there)
     }
@@ -1610,7 +1622,11 @@ void captureFields( TSNode classNode, std::uint32_t fileId, Lang lang, std::stri
             r.fieldName  = std::move( fieldName );
             r.composeRel = ( isRefOrPtr || declIsRefOrPtr ) ? "uses" : "creates";
             r.memberRoot = classScope;   // the lexical scope the written type is looked up in (model.h kAnonScopeElement)
-            if( pointee.name.empty() && std::ranges::find( templateParams, r.name ) != templateParams.end() )
+            if( pointee.name.empty() && kindIs( dt, "pointer_declarator" ) )
+            {
+                r.memberVia = std::string( kPointerMemberType );   // CR (review 5712563408, :1612): `FilterSharedPtr* p_;` — `p_->` reaches the smart pointer
+            }
+            else if( pointee.name.empty() && std::ranges::find( templateParams, r.name ) != templateParams.end() )
             {
                 r.memberVia = std::string( kTemplateParamMemberType );   // `Handle h_;` under `template <class Handle>`: the parameter, not an alias
             }

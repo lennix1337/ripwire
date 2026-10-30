@@ -80,6 +80,7 @@ o="$( callees "$CPP" "filter.h::ActiveStreamDecoderFilter::viaConcrete" )"
 say "$( has "$o" '<s t="method" n="Codec::encodeFrame" p="filter.h:19"/>' )" "N1 alias of a concrete class: a typed (not by-name) edge to Codec::encodeFrame"
 say "$( hasnt "$o" 'Other::encodeFrame' )" "N1 the namesake Other::encodeFrame is gone"
 o="$( callees "$CPP" "filter.h::ActiveStreamDecoderFilter::viaDot" )"
+say "$( has "$o" 'defs="1"' )" "N4 viaDot resolves to one definition (the negative below cannot pass on an empty answer)"
 say "$( hasnt "$o" 'gate="iface"' )" "N4 '.' on the alias member (handle_.reset(): the smart pointer's own) never types it as the pointee (no iface row)"
 
 for f in eval_call eval_boxed; do
@@ -94,6 +95,7 @@ say "$( has "$o" 'n="Ls::run"' )" "N3 base by-name rows unchanged"
 o="$( callees "$CPP" "filter.h:nameLen" )"
 say "$( has "$o" '<s t="method" n="string::size" p="filter.h:22" via="name"/>' )" "N5 an alias of shared_ptr<std::string> types nothing: the in-tree namesake text::string stays a by-name row (base reading)"
 o="$( callees "$RS" "src/lib.rs:eval_generic" )"
+say "$( has "$o" 'defs="1"' )" "N6 eval_generic resolves to one definition"
 say "$( hasnt "$o" 'gate="iface"' )" "N6 a generic -> R result is not read as a trait object"
 # ---- fix round 1, B1 (scope.h): the alias must be in scope where the member is written ----
 isiface() { case "$1" in *'<dc n="'*'cands="2" via="declined" gate="iface"'*) echo 1;; *) echo 0;; esac; }
@@ -122,6 +124,17 @@ o="$( callees "$CPP" "scope.h::HoldY::goY" )"
 say "$( has "$o" 'n="KyC::kick"' )" "B1e HoldY: its own class's Ptr (unique_ptr<KyC>) is the typed KyC::kick"
 say "$( hasnt "$o" 'via="name"' )" "B1e HoldY: no by-name guess beside the typed row"
 say "$( hasnt "$o" 'KxI1::kick' )" "B1e HoldY: HoldX's pointee never reaches it"
+# ---- train 42b CodeRabbit harvest (crharvest.h): a pointer to the alias and an alias of a template parameter keep the base reading ----
+o="$( callees "$CPP" "crharvest.h::Ctl::go" )"
+say "$( isiface "$o" )" "CR0 control: a member written as the alias still declines gate=iface cands=2"
+o="$( callees "$CPP" "crharvest.h::PtrUser::go" )"
+say "$( has "$o" 'defs="1"' )" "CR1 PtrUser::go resolves to one definition"
+say "$( hasnt "$o" 'gate="iface"' )" "CR1 a POINTER to the smart-pointer alias (RunPtr* p_; p_->peek()) is no pointee typing (no iface row)"
+say "$( has "$o" 'via="name"' )" "CR1 the base by-name rows stay"
+o="$( callees "$CPP" "crharvest.h::TplHolder::go" )"
+say "$( has "$o" 'defs="1"' )" "CR2 TplHolder::go resolves to one definition"
+say "$( hasnt "$o" 'gate="iface"' )" "CR2 an alias of shared_ptr<T> where T is the enclosing template PARAMETER named like an in-tree class types nothing"
+say "$( has "$o" 'via="name"' )" "CR2 the base by-name rows stay"
 # ---- fix round 1, S1 (scope2.h): the guards the contract names each have an arm ----
 o="$( callees "$CPP" "scope2.h::Pipe::d0" )"
 say "$( isiface "$o" )" "S1a a smart alias itself declines gate=iface"
