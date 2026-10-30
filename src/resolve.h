@@ -4912,25 +4912,45 @@ struct FlatRecvType
 inline constexpr int         kAliasPeelDepth  = 4;
 inline constexpr std::size_t kAliasPeelBranch = 4;   // same-scope declarations of one name a lookup follows; more is "unknown"
 
-// A C++ member declaration starting at `from` carries a pure-specifier: its text up to the first `;` ends in `= 0`. A `{` or `}`
-// first (an inline body, a braced default argument) or an unreadable file reads as no pure-specifier — the safe direction (the
-// class stays concrete and its overrides stay hedged candidates).
-inline bool declaresPureSpecifier( std::string_view text, std::uint32_t from ) noexcept
+// A bodyless C++ member declaration that is NO contract (train 42b T-1, rv-iface-delta2 R1): `= delete` / `= default`, a `friend`
+// declaration or a member-template declaration. The declaration is read from the delimiter (`;` `{` `}`) before `from` to the first
+// `;` after it. A pure virtual (`= 0`, or a macro spelling such as Envoy's `PURE`) and anything unreadable stay a contract.
+inline bool bodylessIsNoContract( std::string_view text, std::uint32_t from ) noexcept
 {
     const std::size_t end = from < text.size() ? text.find_first_of( ";{}", from ) : std::string_view::npos;
     if( end == std::string_view::npos || text[ end ] != ';' )
     {
         return false;
     }
-    std::string_view decl = text.substr( from, end - from );
-    decl                  = decl.substr( 0, decl.find_last_not_of( " \t\r\n" ) + 1 );   // npos + 1 = 0: all blank
-    if( !decl.ends_with( '0' ) )
+    const std::size_t prev = from == 0 ? std::string_view::npos : text.find_last_of( ";{}", from - 1 );
+    const std::size_t head = prev == std::string_view::npos ? 0 : prev + 1;
+    std::string_view  decl = text.substr( head, end - head );
+    decl                   = decl.substr( 0, decl.find_last_not_of( " \t\r\n" ) + 1 );   // npos + 1 = 0: all blank
+    const auto word = []( std::string_view in, std::string_view w ) noexcept
     {
+        for( std::size_t at = in.find( w ); at != std::string_view::npos; at = in.find( w, at + 1 ) )
+        {
+            if( ( at == 0 || !namesplit::isIdentChar( in[ at - 1 ] ) ) && ( at + w.size() == in.size() || !namesplit::isIdentChar( in[ at + w.size() ] ) ) )
+            {
+                return true;
+            }
+        }
         return false;
+    };
+    for( const std::string_view tail : { std::string_view( "delete" ), std::string_view( "default" ) } )
+    {
+        if( decl.ends_with( tail ) && word( decl, tail ) )
+        {
+            std::string_view rest = decl.substr( 0, decl.size() - tail.size() );
+            rest                  = rest.substr( 0, rest.find_last_not_of( " \t\r\n" ) + 1 );
+            if( rest.ends_with( '=' ) )
+            {
+                return true;
+            }
+        }
     }
-    decl.remove_suffix( 1 );
-    decl = decl.substr( 0, decl.find_last_not_of( " \t\r\n" ) + 1 );
-    return decl.ends_with( '=' );
+    const std::string_view lead = decl.substr( 0, decl.find( '(' ) );   // the specifiers and the name, before the parameter list
+    return word( lead, "friend" ) || word( lead, "template" );
 }
 
 class SmartAliasPeel
@@ -5016,26 +5036,26 @@ public:
                     defined.try_emplace( std::move( member ), '\0' );
                     continue;
                 }
-                // '\0' = a contract: a pure-virtual `= 0` declaration of a base class (only a base's contract is consulted: pointeeOf).
-                // `= delete` / `= default`, a friend or a member-template declaration and a constructor / destructor are none.
-                bool pure = false;
-                if( s.name != owner && !s.name.starts_with( '~' ) && bases_.contains( owner ) )
+                // '\0' = a contract (only a base's contract is consulted: pointeeOf); a constructor / destructor, `= delete` /
+                // `= default`, a friend or a member-template declaration is none ('\1')
+                bool contract = s.name != owner && !s.name.starts_with( '~' );
+                if( contract && bases_.contains( owner ) )
                 {
                     if( textOf != s.fileId )
                     {
-                        text   = readConfigBytes( diskPath( ing, s.fileId ) );   // capped at 1 MiB: a larger header reads as concrete (a hedge)
+                        text   = readConfigBytes( diskPath( ing, s.fileId ) );   // capped at 1 MiB: past it, read as the lane did (a contract)
                         textOf = s.fileId;
                     }
-                    pure = declaresPureSpecifier( text, s.sigStartByte );
+                    contract = !bodylessIsNoContract( text, s.sigStartByte );
                 }
-                const auto [ at, fresh ] = declared.try_emplace( std::move( member ), pure ? '\0' : '\1' );
-                if( !fresh && pure )
+                const auto [ at, fresh ] = declared.try_emplace( std::move( member ), contract ? '\0' : '\1' );
+                if( !fresh && contract )
                 {
-                    at->second = '\0';   // one pure overload of the name is enough
+                    at->second = '\0';   // one contract overload of the name is enough
                 }
             }
         }
-        // A class declares a CONTRACT only through a pure-virtual member (`= 0`; train 42b T-1) that has no out-of-line definition
+        // A class declares a CONTRACT only through a bodyless member (a pure virtual; train 42b T-1) that has no out-of-line definition
         // (`int Base::act() { … }` in a .cc, same owner and name): a concrete base that merely declares its methods in the header,
         // or whose only bodyless member is a deleted / defaulted operator, a friend or a member template, is still concrete, so its
         // overrides stay candidates (pointeeOf).
