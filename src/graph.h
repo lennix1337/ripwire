@@ -5573,7 +5573,8 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
     }
     for( const Binding& b : ing.bindings )
     {
-        if( !isReceiverEvidenceKind( b.kind ) && b.kind != LocalBindKind::RubyMainMixin )   // FE-B's receiver evidence is read by ReceiverEvidence alone; a main mixin by --lego alone
+        // FE-B's receiver evidence is read by ReceiverEvidence alone; a main mixin by --lego alone; a re-export by the --for hop rows alone
+        if( !isReceiverEvidenceKind( b.kind ) && b.kind != LocalBindKind::RubyMainMixin && b.kind != LocalBindKind::ReExport )
         {
             noteBindingClasses( gate, fileGated, b );
         }
@@ -6458,9 +6459,10 @@ inline HashMap<std::string, char> rustModuleNames( const IngestResult& ing )
     return names;
 }
 
-// Every `name = "x"` line of a TOML text's `[section]` tables listed in `sections`, appended to `out` (a bare line scan: a
+// Every `name = "x"` line (or `key = "x"` for another key: the --for re-export rows read `[lib] path`) of a TOML text's `[section]` tables listed in `sections`, appended to `out` (a bare line scan: a
 // dotted key, an inline table or a multi-line string is not read, which can only miss a name, never invent one).
-inline void tomlSectionNames( std::string_view text, std::initializer_list<std::string_view> sections, std::vector<std::string>& out )
+inline void tomlSectionNames( std::string_view text, std::initializer_list<std::string_view> sections, std::vector<std::string>& out,
+                              std::string_view key = "name" )
 {
     bool inSection = false;
     while( !text.empty() )
@@ -6474,11 +6476,11 @@ inline void tomlSectionNames( std::string_view text, std::initializer_list<std::
             inSection = std::ranges::any_of( sections, [ & ]( std::string_view h ) { return line.starts_with( h ); } );
             continue;
         }
-        if( !inSection || !line.starts_with( "name" ) )
+        if( !inSection || !line.starts_with( key ) )
         {
             continue;
         }
-        line.remove_prefix( 4 );
+        line.remove_prefix( key.size() );
         line.remove_prefix( std::min( line.find_first_not_of( " \t" ), line.size() ) );
         if( !line.starts_with( '=' ) )
         {
