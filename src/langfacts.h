@@ -329,10 +329,34 @@ inline constexpr LangFacts langFacts( Lang l ) noexcept
     return enumTableAt( kLangFacts, l, LangFacts { .lang = Lang::Unknown } );
 }
 
-// Slice 6c static checks: verify new columns and near-misses
-static_assert( kLangFacts[ static_cast<std::size_t>( Lang::Kotlin ) ].implicitReceiver && !kLangFacts[ static_cast<std::size_t>( Lang::Kotlin ) ].memberNeverReachesFreeFunction );
-static_assert( !kLangFacts[ static_cast<std::size_t>( Lang::C ) ].implicitReceiver && !kLangFacts[ static_cast<std::size_t>( Lang::C ) ].memberNeverReachesFreeFunction );
-static_assert( kLangFacts[ static_cast<std::size_t>( Lang::Ruby ) ].implicitReceiver && kLangFacts[ static_cast<std::size_t>( Lang::Ruby ) ].memberNeverReachesFreeFunction );
+// Slice 6c compile-time assertions: verify all 5 columns against the exact original language sets for every Lang.
+static_assert( []() constexpr
+{
+    for( std::size_t i = 0; i < kLangCount; ++i )
+    {
+        const Lang l = static_cast<Lang>( i );
+        const bool expectedImplicit = ( l == Lang::Java || l == Lang::Kotlin || l == Lang::CSharp ||
+                                        l == Lang::Swift || l == Lang::Cpp || l == Lang::Ruby );
+        const bool expectedMemberNeverReachesFree = ( l == Lang::Python || l == Lang::Go || l == Lang::Cpp ||
+                                                     l == Lang::Rust || l == Lang::Ruby || l == Lang::Java ||
+                                                     l == Lang::CSharp || l == Lang::Swift );
+        const bool expectedModuleCallReachesFnsOnly = ( l == Lang::Go );
+        const bool expectedClassNameReceiver = ( l == Lang::JavaScript || l == Lang::TypeScript ||
+                                                l == Lang::Python || l == Lang::Java || l == Lang::Kotlin ||
+                                                l == Lang::CSharp || l == Lang::Swift );
+        const bool expectedHashComment = ( l == Lang::Python || l == Lang::Bash || l == Lang::Ruby ||
+                                           l == Lang::Elixir || l == Lang::Toml || l == Lang::Yaml ||
+                                           l == Lang::GDScript );
+
+        const auto& f = kLangFacts[ i ];
+        if( f.implicitReceiver != expectedImplicit ) return false;
+        if( f.memberNeverReachesFreeFunction != expectedMemberNeverReachesFree ) return false;
+        if( f.moduleCallReachesFunctionsOnly != expectedModuleCallReachesFnsOnly ) return false;
+        if( f.classNameReceiver != expectedClassNameReceiver ) return false;
+        if( f.hashComment != expectedHashComment ) return false;
+    }
+    return true;
+}(), "Slice 6c: all 5 columns in kLangFacts must match the exact original language predicate sets" );
 static_assert( !langFacts( Lang::Unknown ).implicitReceiver && !langFacts( Lang::Unknown ).memberNeverReachesFreeFunction );
 static_assert( !langFacts( Lang::Unknown ).moduleCallReachesFunctionsOnly && !langFacts( Lang::Unknown ).classNameReceiver && !langFacts( Lang::Unknown ).hashComment );
 static_assert( !langFacts( static_cast<Lang>( 99 ) ).implicitReceiver && !langFacts( static_cast<Lang>( 99 ) ).hashComment );

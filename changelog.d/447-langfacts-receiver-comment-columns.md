@@ -8,4 +8,4 @@ Call sites in `src/receiverevidence.h`, `src/graph.h`, and `src/quality.h` now r
 directly, eliminating Type-2 clone group 99 (`langUsesHashComment` / `classNameReceiverLang`) from
 `--clones` output and lowering the shared-file `== Lang::` ratchet ceiling in `test/langidentity/ratchet.tsv`
 from 333 to 326. `isJsTsLitRecv` remains in `src/model.h` as it partitions `RecvKind` rather than `Lang`.
-Output across all 11 languages is verified byte-identical.
+Output across the repository is verified byte-identical with 0 quality-delta regressions.
