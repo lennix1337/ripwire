@@ -23,6 +23,7 @@
 #include <array>        // popenTrimmed's 64 KB read block
 #include <atomic>       // the join's once-per-process disclosure flags
 #include <bit>          // std::popcount — the recurrence mask's set-bit count (Clio sub-windows)
+#include <charconv>     // std::from_chars — zero-allocation integer parsing
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -2408,13 +2409,10 @@ inline std::vector<FileOwnership> gitFileAuthors(
     // rather than a growth. Coverage 84.9%/77.2% across the two census corpora against 73.0%/59.9% at N=1;
     // marginal coverage per byte then falls 2.16 → 0.70 going 2→4, so 2 is the knee. Most (file, author)
     // pairs are one commit — 1 613/3 002 inner lists on the two corpora, nearly all of them singletons.
-    HashMap<std::uint32_t, HashMap<std::string, rw::SmallVec<std::int64_t, 2>>> perFile;
-    HashMap<std::uint32_t, std::int64_t>                                        newestTsByFile;
-    if( !singleFile )
-    {
-        perFile.reserve( fileCount );
-        newestTsByFile.reserve( fileCount );
-    }
+    // Flat table accumulators indexed directly by fileId: eliminates HashMap hashing, probing and
+    // bucket allocations on every path row, and visits naturally in ascending fileId order.
+    std::vector<HashMap<std::string, rw::SmallVec<std::int64_t, 2>>> perFile( fileCount );
+    std::vector<std::int64_t>                                        newestTsByFile( fileCount, 0 );
 
     // F6 companion: this used to be a SIXTH hand-rolled index, and a DIVERGENT one — it keyed on the
     // root-stripped `relPath` where the shared builder keyed on the full ingested path, so the fit measure the
@@ -2472,15 +2470,14 @@ inline std::vector<FileOwnership> gitFileAuthors(
                 haveCommit = false;
                 continue;
             }
-            curEmail = rest.substr( 0, pipePos );
+            curEmail.assign( rest.data(), pipePos );
             for( char& c : curEmail )
             {
                 c = char( std::tolower( static_cast<unsigned char>( c ) ) );
             }
-            const std::string tsStr( rest.substr( pipePos + 1 ) );
-            char* end = nullptr;
-            curTs = std::strtoll( tsStr.c_str(), &end, 10 );
-            haveCommit = ( end != tsStr.c_str() );
+            const std::string_view tsView = rest.substr( pipePos + 1 );
+            const auto [ ptr, ec ]        = std::from_chars( tsView.data(), tsView.data() + tsView.size(), curTs );
+            haveCommit                    = ( ec == std::errc{} && ptr == tsView.data() + tsView.size() );
             continue;
         }
         if( s.empty() || !haveCommit )
@@ -2504,9 +2501,9 @@ inline std::vector<FileOwnership> gitFileAuthors(
     os::pclose( pipe );
 
     std::vector<FileOwnership> result;
-    result.reserve( perFile.size() );
-    for( auto& [ fid, authorTs ] : perFile )
+    for( std::uint32_t fid = 0; fid < fileCount; ++fid )
     {
+        auto& authorTs = perFile[ fid ];
         if( authorTs.empty() )
         {
             continue;
@@ -2554,10 +2551,6 @@ inline std::vector<FileOwnership> gitFileAuthors(
 
         result.push_back( { fid, std::move( authors ), std::uint32_t( authorTs.size() ), topOver80 } );
     }
-
-    // Sort result by fileId for deterministic output (HashMap iteration order above is not stable)
-    std::sort( result.begin(), result.end(), []( const FileOwnership& a, const FileOwnership& b )
-               { return a.fileId < b.fileId; } );
 
     return result;
 }
