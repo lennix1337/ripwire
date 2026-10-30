@@ -24,25 +24,6 @@ when to reach for each command.
 **Want every detail?** [The reference guide](#reference-guide) near the bottom covers install, commands, output
 format, exit codes and limits. You do not need it to get started.
 
-## Working toward the best code helper for agents
-
-Our goal is for ripwire to be the best tool an agent can have for understanding and changing code: complete answers, nothing stated wrongly, and as few bytes as possible. We measure every release against that goal. Each release answers the same questions with the same commands, graded the same way. These are **in-sample** questions: ripwire was developed against them, so the table shows progress between releases, not held-out performance. A held-out comparison comes with 0.7.0.
-
-| | 0.6.5 | 0.6.7 | 0.6.8 | 0.6.9 |
-|---|---|---|---|---|
-| Everyday code questions (163): complete / partial / none | 50 / 69 / 44 | 81 / 57 / 25 | 112 / 38 / 13 | **129 / 31 / 3** |
-| Questions whose answer spans several files (39) | 4 / 26 / 9 | 4 / 27 / 8 | 5 / 27 / 7 | **12 / 23 / 4** |
-| Questions on large repositories (56) | 2 / 35 / 19 | 5 / 38 / 13 | 14 / 37 / 5 | **23 / 29 / 4** |
-| Everyday answers that stated something wrong | 3 | 0 | 0 | **0** |
-| Bytes per complete answer (everyday / large repos) | 22.5 KB / 182 KB | 14.8 KB / 123 KB | 16.5 KB / 91 KB | **15.1 KB / 60 KB** |
-| Bytes per required item delivered (everyday) | 1.7 KB | 1.4 KB | 1.7 KB | **1.7 KB** |
-| Newly complete (everyday): questions, median size | 50, 4.7 KB | +31, 4.6 KB | +31, 16.8 KB | **+18, 11.9 KB** |
-| Size change, questions already complete (everyday) | — | +4 % | 0 % | **+1 %** |
-
-Harder questions take more bytes to answer. 0.6.5 already answered questions such as *Where is the `Compositor` class defined?* (one definition, 3.2 KB). The questions that first became complete in 0.6.8 and 0.6.9 include *How does Hono choose its router, and how does SmartRouter work?* (16.8 KB), *Who calls `options_get_number`?* (all 121 direct callers, 11.5 KB) and *How does a message get from `post_message` to a handler method like `on_button_pressed`?* (14.0 KB): several functions across files, or a long list. That is why the newly complete questions need more bytes while questions already complete stay about the same size.
-
-*Complete* means every required item is in the answer; *partial*, at least one but not every required item, and nothing wrong; *none*, no required item, or something wrong. A bare name printed next to its file or qualifier counts. Large repositories: envoy, nushell, terraform, cpython, vscode, cockroach and zed. There was no 0.6.6. Bytes per complete answer fell overall: from 22.5 KB to 15.1 KB on everyday questions and from 182 KB to 60 KB on large repositories. *Bytes per required item delivered* divides all answer bytes by the required items credited, partial answers included (682 items in 0.6.5, 1,142 in 0.6.9). *Newly complete* counts the questions a release answered completely for the first time (for 0.6.5, all its complete answers): the harder questions that became complete later need more bytes. *Size change* is the median per-question change on questions complete in both this and the previous release. Earlier release notes quoted a 173-question set that included 10 held-out questions, graded with the rules of that time (0.6.8: 50, 83, 98 complete under the stricter method); this table re-runs every release on the 163 in-sample questions with today's grader, so its numbers differ.
-
 <details>
 <summary><b>Field report: what ripwire contributed to a large multi-agent coding engagement</b> — written by Claude Fable 5.0, the frontier model orchestrating ~20 coding agents over two days on a ~1,500-file C++/Metal codebase. Click for the full report.</summary>
 
@@ -1661,6 +1642,25 @@ cmake --build build 2>&1 | ./build/ripwire . --from-trace=-
 ---
 
 ## Measured
+
+### Working toward the best code helper for agents
+
+Our goal is for ripwire to be the best tool an agent can have for understanding and changing code: complete answers, nothing stated wrongly, and as few bytes as possible. We measure every release against that goal. Each release answers the same questions with the same commands, graded the same way. These are **in-sample** questions: ripwire was developed against them, so the table shows progress between releases, not held-out performance. A held-out comparison comes with 0.7.0.
+
+| | 0.6.5 | 0.6.7 | 0.6.8 | 0.6.9 |
+|---|---|---|---|---|
+| Everyday code questions (163): complete / partial / none | 50 / 69 / 44 | 81 / 57 / 25 | 112 / 38 / 13 | **129 / 31 / 3** |
+| Questions whose answer spans several files (39) | 4 / 26 / 9 | 4 / 27 / 8 | 5 / 27 / 7 | **12 / 23 / 4** |
+| Questions on large repositories (56) | 2 / 35 / 19 | 5 / 38 / 13 | 14 / 37 / 5 | **23 / 29 / 4** |
+| Everyday answers that stated something wrong | 3 | 0 | 0 | **0** |
+| Bytes per complete answer (everyday / large repos) | 22.5 KB / 182 KB | 14.8 KB / 123 KB | 16.5 KB / 91 KB | **15.1 KB / 60 KB** |
+| Bytes per required item delivered (everyday) | 1.7 KB | 1.4 KB | 1.7 KB | **1.7 KB** |
+| Newly complete (everyday): questions, median size | 50, 4.7 KB | +31, 4.6 KB | +31, 16.8 KB | **+18, 11.9 KB** |
+| Size change, questions already complete (everyday) | — | +4 % | 0 % | **+1 %** |
+
+Harder questions take more bytes to answer. 0.6.5 already answered questions such as *Where is the `Compositor` class defined?* (one definition, 3.2 KB). The questions that first became complete in 0.6.8 and 0.6.9 include *How does Hono choose its router, and how does SmartRouter work?* (16.8 KB), *Who calls `options_get_number`?* (all 121 direct callers, 11.5 KB) and *How does a message get from `post_message` to a handler method like `on_button_pressed`?* (14.0 KB): several functions across files, or a long list. That is why the newly complete questions need more bytes while questions already complete stay about the same size.
+
+*Complete* means every required item is in the answer; *partial*, at least one but not every required item, and nothing wrong; *none*, no required item, or something wrong. A bare name printed next to its file or qualifier counts. Large repositories: envoy, nushell, terraform, cpython, vscode, cockroach and zed. There was no 0.6.6. Bytes per complete answer fell overall: from 22.5 KB to 15.1 KB on everyday questions and from 182 KB to 60 KB on large repositories. *Bytes per required item delivered* divides all answer bytes by the required items credited, partial answers included (682 items in 0.6.5, 1,142 in 0.6.9). *Newly complete* counts the questions a release answered completely for the first time (for 0.6.5, all its complete answers): the harder questions that became complete later need more bytes. *Size change* is the median per-question change on questions complete in both this and the previous release. Earlier release notes quoted a 173-question set that included 10 held-out questions, graded with the rules of that time (0.6.8: 50, 83, 98 complete under the stricter method); this table re-runs every release on the 163 in-sample questions with today's grader, so its numbers differ.
 
 <details>
 <summary><b>Read this first if you are here to check whether the tool is oversold</b> — every number with its instrument and corpus, plus the claims this project deliberately does <i>not</i> publish</summary>
