@@ -56,6 +56,7 @@
 #   6. determinism: two runs byte-identical.
 #   7. the oracle: the tool's numbers re-derive from its own command (trap #12).
 #   8. the git floor, and a shimmed git that rejects -z degrades honestly — no fabricated rows.
+#   9. a non-empty stream with no record marker is UNREAD (history_unread="1"), never a clean empty history.
 #
 # THE DISCLOSED COLLISION (not papered over; full fix = a format sentinel change, follow-on spec
 # material): a merge whose FIRST combined path is a file literally named `__C__` reads as pathless —
@@ -563,6 +564,46 @@ if grep -q 'git unavailable / no history' "$TMP/shim.err"; then
 else
     no "the degrade is silent: $( head -1 "$TMP/shim.err" )"
 fi
+
+# 9. A NON-EMPTY stream with no record marker is UNREAD, not "read, no history" (CodeRabbit 4419234614). A git that
+#    exits 0 yet prints bare name-only lines (a PATH shim, a git answering in its default format) leaves the walk
+#    with no record to visit; before the fix GitLogWalk::unread stayed false and --for printed a clean answer built on
+#    an empty history. The raw-stream consumer (churn=/amp=) carries the flag into history_unread="1"; the four
+#    visitor consumers still discard the walk (historyread.h NOT COVERED, a documented K51 deferral).
+BSHIM="$TMP/bshim"; mkdir -p "$BSHIM"; BTMP="$TMP/btmp"; BCTL="$TMP/bctl"; mkdir -p "$BTMP" "$BCTL"
+cat > "$BSHIM/git" <<'BSHIMEOF'
+#!/usr/bin/env bash
+want_z=0; want_name_only=0
+for a in "$@"; do
+    [ "$a" = "-z" ] && want_z=1
+    [ "$a" = "--name-only" ] && want_name_only=1
+done
+if [ "$want_z" = 1 ] && [ "$want_name_only" = 1 ]; then
+    : > "$BSHIM_DIR/bare-served"
+    printf 'Alpha.cpp\nzeta.cpp\n'      # exit 0, non-empty, no __C__ field anywhere
+    exit 0
+fi
+exec "$REAL_GIT" "$@"
+BSHIMEOF
+chmod +x "$BSHIM/git"
+export BSHIM_DIR="$BSHIM"
+TMPDIR="$BCTL" "$BIN" --for=alphaFn --no-cache "$H" > "$TMP/bare-ctl.xml" 2>/dev/null
+if grep -q ' churn="[0-9]' "$TMP/bare-ctl.xml" && ! grep -q 'history_unread' "$TMP/bare-ctl.xml"; then
+    ok "arm 9 control: with the real git --for prints churn= and no history_unread"
+else
+    no "arm 9 control: the unshimmed --for answer has no churn= or already says history_unread: $( head -c 200 "$TMP/bare-ctl.xml" )"
+fi
+TMPDIR="$BTMP" PATH="$BSHIM:$PATH" "$BIN" --for=alphaFn --no-cache "$H" > "$TMP/bare.xml" 2>/dev/null; bare_rc=$?
+[ -e "$BSHIM/bare-served" ] && ok "arm 9 premise: the shim served a bare name-only stream (exit 0, non-empty, no marker)" \
+                            || no "arm 9 premise: the shim never served a bare stream — the arm below proves nothing"
+if [ "$bare_rc" = 0 ] && grep -q ' history_unread="1"' "$TMP/bare.xml"; then
+    ok "a non-empty marker-less stream is UNREAD: --for says history_unread=\"1\""
+else
+    no "a non-empty marker-less stream read as an empty history (rc=$bare_rc): $( head -c 200 "$TMP/bare.xml" )"
+fi
+grep -q ' churn="[0-9]' "$TMP/bare.xml" \
+    && no "a marker-less stream still printed a churn= value" \
+    || ok "no churn= value is printed from a marker-less stream"
 
 # ── SUMMARY ────────────────────────────────────────────────────────────────────────────────────────
 echo

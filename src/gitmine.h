@@ -775,8 +775,11 @@ struct GitLogRecord
 };
 
 // The walk's exit status, carried so the K51 contract (a prefix is not an answer) survives the
-// migration: `unread` — git would not start, or died part-way, so the records are empty or a prefix;
-// `notRun` — git never ran at all (no popen, not on PATH, not executable), so there is no prefix either.
+// migration: `unread` — git would not start, or died part-way, so the records are empty or a prefix, or
+// it exited 0 and printed a NON-EMPTY stream that never carried a record marker (a git answering in a
+// format other than the one asked for, a PATH shim): no record could be framed, and "no records" would
+// read as a clean empty history; `notRun` — git never ran at all (no popen, not on PATH, not
+// executable), so there is no prefix either.
 // The visitor form streams: there is no records vector to keep, which is the point — one record in
 // memory at a time, the whole-history walk costs what it always cost.
 struct GitLogWalk
@@ -882,6 +885,8 @@ inline GitLogWalk forEachGitLogRecord( const std::string& root, const std::strin
     bool         inRecord  = false;   // a record is open (its opening empty field was seen)
     bool         sawMarker = false;   // ...and its marker was read: a record without one is never visited
     bool         wantMarker = false;  // the next field must be the marker
+    bool         anyMarker  = false;  // a marker field opened at least one record in this stream
+    bool         anyData    = false;  // a non-empty field arrived at all (an empty history is an empty stream)
     int          metaLeft  = 0;       // metadata fields still to read for this record
     int          empties   = 0;       // empty fields since this record's metadata (0 = none, 1 = a merge prefix)
     bool         havePath  = false;   // this record has taken its first path
@@ -908,6 +913,7 @@ inline GitLogWalk forEachGitLogRecord( const std::string& root, const std::strin
         // leaves the slot's lifetime readable to man and machine alike.
         if( haveLookahead ) { field = lookahead; haveLookahead = false; }
         else if( !fields.next( field ) ) { atEnd = true; break; }
+        if( !field.empty() ) { anyData = true; }
 
         // An empty field's meaning is decided by ONE field of lookahead, and the pending-metadata
         // state changes only the non-boundary reading: an empty followed by the MARKER (or the end
@@ -959,7 +965,7 @@ inline GitLogWalk forEachGitLogRecord( const std::string& root, const std::strin
         if( wantMarker )
         {
             wantMarker = false;
-            if( field == kGitLogMarker ) { sawMarker = true; }   // anything else: a malformed stream — skip to the next boundary
+            if( field == kGitLogMarker ) { sawMarker = true; anyMarker = true; }   // anything else: a malformed stream — skip to the next boundary
             continue;
         }
         if( metaLeft > 0 )
@@ -992,6 +998,13 @@ inline GitLogWalk forEachGitLogRecord( const std::string& root, const std::strin
     {
         walk.unread = true;
         walk.notRun = ( walk.exitCode == 127 || walk.exitCode == 126 );
+    }
+    else if( anyData && !anyMarker && !gitWalksAbandoned() )
+    {
+        // Exit 0, bytes on the pipe, yet no field ever opened a record: the stream was not framed
+        // (CodeRabbit on #469). It is NOT "read, no history" — an abandoned walk stopped on purpose and
+        // is reported by the abandon flag instead.
+        walk.unread = true;
     }
     return walk;
 }
