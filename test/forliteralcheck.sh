@@ -38,6 +38,7 @@
 #          RIPWIRE_NO_LITERAL_ANCHOR=1
 #   L9 [G] bytes= is the element's own size (open tag to </lit>)
 #   X1 [G] determinism  X2 [G] xmllint well-formed  X3 [G] no "--" inside the lit legend comment
+#   N1 [train 42b T-3] an <x> excerpt line over 200 bytes is cut on a UTF-8 boundary with cut="1" (a 48.9 KB minified body); twin: none
 #
 # Usage:  bash test/forliteralcheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/forliteralcheck.sh
 # BIN is $1, else RIPWIRE_BIN, else build/ripwire; the first output line names the binary used. Exits non-zero on any failure.
@@ -168,6 +169,17 @@ if [ "${#LC}" -le 340 ] && [ "${#LC}" -ge 250 ] && [ "${#LF}" -ge 700 ] && has "
    && has "$LC" 'k=' && has "$LC" 'comment=' && has "$LC" 'floor=' && has "$LC" 'body=above' && [ -n "$PC" ] && [ "$PC" = "$PF" ]; then
     ok "L11 compact legend ${#LC} B (the default); --legend=full keeps ${#LF} B naming docs, shell, config; same payload"
 else no "L11 legend sizes wrong: compact=${#LC} full=${#LF} samepayload=$([ "$PC" = "$PF" ] && echo y || echo n)"; fi
+# ── N1 (train 42b T-3, rv-mf1-lit-delta N1): an <x> excerpt cuts each line at 200 bytes (a minified one-line body printed 48.9 KB) ──
+MIN="$TMP/min"; mkdir -p "$MIN/web"
+python3 -I -c 'import sys;b="".join("var v%d=a+%d;"%(i,i) for i in range(3000));open(sys.argv[1],"w").write("function minFail(a){"+b+"throw new Error(\"bad things happened here minified\")}\n")' "$MIN/web/m.js"
+printf 'export function ok(){ return 1 }\n' >"$MIN/web/ok.js"
+MO="$( cd "$MIN" && "$BIN" "$MIN" --no-cache '--for=where is the "bad things happened here" error raised' </dev/null 2>/dev/null )"
+MX="$( python3 -I -c 'import sys,re;m=re.search(r"<x [^>]*>.*?</x>",sys.stdin.read(),re.S);print(m.group(0) if m else "MISSING",end="")' <<<"$MO" )"
+if [ "$MX" != "MISSING" ] && [ "${#MX}" -le 3000 ] && has "$MX" 'cut="1"' && has "$MX" 'l="1"' && has "$MX" 'function minFail(a)'; then
+    ok "N1 a minified body's excerpt is cut per line (${#MX} B), cut=\"1\" disclosed, the site line kept"
+else no "N1 excerpt not capped: ${#MX} B, cut=$(has "$MX" 'cut="1"' && echo y || echo n)"; fi
+SX="$( run --for=APPTOOL_RENDER_MODE | lit )"
+if ! has "$SX" 'cut="1"'; then ok "N1 twin: short lines are never marked cut"; else no "N1 twin: a short-line answer says cut=\"1\""; fi
 # ── X1-X3 ──
 if [ "$A" = "$( run --for=APPTOOL_RENDER_MODE )" ]; then ok "X1 deterministic"; else no "X1 two runs differ"; fi
 if command -v xmllint >/dev/null 2>&1; then

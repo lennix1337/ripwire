@@ -9,7 +9,7 @@ triple-quoted string that is the first statement of a module, class or def body;
 site), test paths and doc, shell or config files are counted (`comment=`, `test=`, `doc=`), never listed as a handler. The function
 holding a shown site is printed whole when it is ten lines or fewer (`<b>`, at most three); a longer one is an excerpt (`<x>`): its
 signature line and one window of the site line minus one to plus five per shown site (`l=` lists the ranges, an ellipsis line sits
-between windows, `of=` is the body, `next=` the whole body); a body the answer already printed is not repeated (`body="above"`).
+between windows, `of=` is the body, `next=` the whole body; each window line is cut at 200 bytes, marked `cut="1"`, so a minified one-line body is never printed whole); a body the answer already printed is not repeated (`body="above"`).
 Several sites are always listed with counts; a literal with no source site (found only in tests, docs or comments, or not at all)
 carries no block. The element carries its own legend (a 326-byte form under the default `--legend=compact`, the long text under `--legend=full`) and its size (`bytes=`, not in `est_tokens`);
 everything before it is byte-identical to the answer without it (`RIPWIRE_NO_LITERAL_ANCHOR=1`); `--json`, `--columnar`,

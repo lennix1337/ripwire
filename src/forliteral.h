@@ -86,12 +86,13 @@ inline constexpr std::string_view kForLiteralLegend =
     "(lines=a-b: with the lines after it). hits= all matches, src= source lines (shown=, capped=1), comment= comments and "
     "docstrings, test= test paths, doc= docs, shell, config: counted, never rows. b = a shown site's whole function (10 lines or "
     "fewer), x = an excerpt of a longer one (l= its line ranges: the signature line and a window around each site, an ellipsis "
-    "line between them; of= the body's lines; next= the whole body); body=above: printed above. floor=1: scan stopped early, "
+    "line between them; of= the body's lines; cut=1: a line over 200 bytes was cut; next= the whole body); body=above: printed "
+    "above. floor=1: scan stopped early, "
     "counts are floors; next= on lit lists every site. -->";
 inline constexpr std::string_view kForCompactLiteralLegend =
     "<!-- ripwire for lit: byte-exact scan for the task's literal (s=), not in est_tokens. ls: a source line with it (k=string|code|?; "
     "in=/ink= its def; lines=a-b adds the lines after). comment= test= doc= counted, not rows; floor=1: floors. b whole fn, "
-    "x excerpt (l= ranges, \xE2\x80\xA6 between; of= whole); body=above: printed above. -->";
+    "x excerpt (l= ranges, \xE2\x80\xA6 between; of= whole; cut=1: cut); body=above: printed above. -->";
 static_assert( kForLiteralLegend.find( "--", 4 ) == kForLiteralLegend.size() - 3 && kForCompactLiteralLegend.find( "--", 4 ) == kForCompactLiteralLegend.size() - 3,
                "the only double hyphen in a legend comment is its closing: one inside is not well-formed XML" );
 
@@ -381,6 +382,32 @@ inline std::string linesOfRanges( const std::string& text, const std::vector<Lin
     return out;
 }
 
+// cut every line of `lines` longer than `cap` bytes on a UTF-8 boundary (an ellipsis marks the cut); true when one was cut
+inline bool capLineBytes( std::string& lines, std::size_t cap )
+{
+    if( lines.size() <= cap )
+    {
+        return false;
+    }
+    std::string out;
+    bool        cut = false;
+    for( std::size_t at = 0; at <= lines.size(); )
+    {
+        const std::size_t end  = std::min( lines.find( '\n', at ), lines.size() );
+        std::string       line = lines.substr( at, end - at );
+        cut                    = cut || line.size() > cap;
+        truncateUtf8WithEllipsis( line, cap );
+        out += line;
+        out += end < lines.size() ? "\n" : "";
+        at = end + 1;
+    }
+    if( cut )
+    {
+        lines = std::move( out );
+    }
+    return cut;
+}
+
 inline std::string rangesAttr( const std::vector<LineRange>& ranges )
 {
     std::string out;
@@ -407,9 +434,14 @@ inline std::string excerptElement( const std::string& text, const std::string& p
     x += "\" n=\"";
     x += escapeXml( s.name, esc );
     x += "\" l=\"" + rangesAttr( ranges ) + "\" of=\"" + std::to_string( first ) + "-" + std::to_string( last ) + "\"";
+    // train 42b T-3: each window line is cut at kForLiteralLineBytes like an <ls> row (a minified one-line body printed 48.9 KB
+    // whole); cut="1" says a line was cut, next= prints the whole body
+    std::string lines = linesOfRanges( text, ranges );
+    const bool  cut   = capLineBytes( lines, kForLiteralLineBytes );
+    x += cut ? " cut=\"1\"" : "";
     x += nextAttrXml( nextFlag( "--expand=", path + ":" + std::to_string( s.line ) + ":" + s.name ) );
     x += "><![CDATA[";
-    appendCdataSafe( linesOfRanges( text, ranges ), x );
+    appendCdataSafe( lines, x );
     x += "]]></x>";
     return x;
 }
