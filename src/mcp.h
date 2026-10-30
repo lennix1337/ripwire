@@ -1706,7 +1706,9 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // HEAD tree that was only partly read) — so every error built after a stop carries the guard's sentence too
             const auto memoryStopSuffix = [ & ]( std::string_view msg ) -> std::string
             {
-                if( msg.find( "memory guard" ) != std::string_view::npos )
+                // every guard sentence ends with memguard::kOverride; the words "memory guard" can ride in echoed caller text
+                // (`symbol not found: 'memory guard'`), which is not a disclosure (CR 4419328423)
+                if( msg.find( memguard::kOverride ) != std::string_view::npos )
                 {
                     return {};
                 }

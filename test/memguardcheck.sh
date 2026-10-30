@@ -423,6 +423,17 @@ else
 fi
 # (B6e2) the error is still the not-found it was (the disclosure is appended, nothing replaced): the echo and the code survive
 case "$( mcp_field "$TMP/b6.out" 7 error )" in "symbol not found: 'd_17'"*) ok "(B6e2) the not-found keeps its own wording ahead of the disclosure";; *) no "(B6e2) id=7: $( mcp_field "$TMP/b6.out" 7 error | head -c 200 )";; esac
+# (B6e3) the words "memory guard" in ECHOED caller text are not a disclosure (CR 4419328423): a not-found for a symbol literally
+#        named "memory guard" still takes the partial-index clause (the suppression keys on the shared override sentence, which
+#        every guard sentence ends with, not on the two words)
+{ cut_req 2 grep "{\"path\":\"$FX\",\"pattern\":\"a_01\"}"
+  cut_req 3 find_symbol "{\"path\":\"$FX\",\"symbol\":\"memory guard\"}"
+} | RIPWIRE_TEST_MEMGUARD=crawl:30 mcp_call "$TMP" --max-memory=64M >"$TMP/b6e3.out"
+em="$( mcp_field "$TMP/b6e3.out" 3 error )"
+case "$em" in
+    "symbol not found: 'memory guard'"*"is partial"*"not proof of absence"*"covers "*" files"*"max-memory"*) ok "(B6e3) an echoed 'memory guard' in the not-found does not suppress the partial-index clause";;
+    *) no "(B6e3) id=3 error='${em:0:240}'";;
+esac
 # (B6f) near miss: a request for ANOTHER, whole index must not inherit the earlier index's cut. $HOMEDIR/proj has 1 file, so
 #       the same crawl:30 seam never fires there; its not-found carries no memory sentence
 { cut_req 2 grep "{\"path\":\"$FX\",\"pattern\":\"a_01\"}"
