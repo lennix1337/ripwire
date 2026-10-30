@@ -211,6 +211,41 @@ if run big "$T/z1" "new widget"; then
     if ! has "$T/z1" '<listed'; then ok "Z1 a Makefile.am above the 4 MB crawl ceiling is not read"; else no "Z1 an over-ceiling manifest was read"; fi
 fi
 
+# Y1 (CR 4419328415): a manifest line holding only "\r" (a "\r\r\n" ending: forEachLine drops one \r, trim drops the rest, indentOf keeps it)
+#    reaches the continuation test with an EMPTY trimmed view; the answer is the same listing as the file without that line, rc 0
+cp -R "$FX/am" "$FX/crlf" && printf '\r\r\n' >>"$FX/crlf/Makefile.am"
+if run crlf "$T/y1" "new widget"; then
+    if [ "$( lst "$T/y1" | sort )" = "$( lst "$T/a1" | sort )" ] && has "$T/y1" '<listed p="Makefile.am" of="widget-alpha.c" by="path"'; then
+        ok "Y1 a manifest line of only \\r (a \\r\\r\\n ending) is read as a blank line: the same listing, no crash"
+    else no "Y1 the \\r\\r\\n manifest changed the listing: $( lst "$T/y1" ) vs $( lst "$T/a1" )"; fi
+fi
+# F1 (CR 4419328407): the *.bzl cap (kListedBzlPerDir = 8) is disclosed on the surviving element; 8 files (twin) and the earlier arms are not
+mkbzl(){   # dir count: a root with a BUILD that lists both shown files and COUNT *.bzl files beside it
+    mkdir -p "$FX/$1" && cp "$FX/lbl/widget_alpha.cc" "$FX/lbl/widget_beta.cc" "$FX/$1/" \
+        && printf 'cc_library(\n    name = "w",\n    srcs = [\n        "widget_alpha.cc",\n        "widget_beta.cc",\n    ],\n)\n' >"$FX/$1/BUILD" || return 1
+    local n; for n in $( seq 1 "$2" ); do printf '# rules\nX%s = 1\n' "$n" >"$FX/$1/r$n.bzl"; done
+}
+if mkbzl bzl9 9 && mkbzl bzl8 8; then
+    if run bzl9 "$T/f1" "new widget" && run bzl8 "$T/f1t" "new widget"; then
+        if lst "$T/f1" | grep -F 'p="BUILD"' | grep -qF 'files_capped="1"' && has "$T/f1" '; listed p= of= by=' && ! lst "$T/f1t" | grep -qF 'files_capped' && lst "$T/f1t" | grep -qF 'p="BUILD"'; then
+            ok "F1 a 9th *.bzl file is not read and the <listed> says so (files_capped=1); the 8-file twin lists and does not"
+        else no "F1 bzl cap: 9 files: [$( lst "$T/f1" )] 8 files: [$( lst "$T/f1t" )]"; fi
+    fi
+else no "F1 premise: the *.bzl fixtures were not created"; fi
+if ! lst "$T/a1" | grep -qF 'files_capped' && ! lst "$T/a3" | grep -qF 'files_capped' && ! lst "$T/g1" | grep -qF 'files_capped'; then ok "F0 no cap fired on the standard fixtures: no files_capped"; else no "F0 files_capped on a fixture no cap fires on"; fi
+# F2: the shown-file cap (kListedShownFiles = 16): 20 files whose names the task matches, one registry listing them all
+mkdir -p "$FX/sf20" && printf 'dist_demo_SOURCES = \\\n' >"$FX/sf20/Makefile.am"
+for n in $( seq -w 1 20 ); do
+    printf 'int widget_%s_init( void ) { return %s; }\n' "$n" "$n" >"$FX/sf20/widget-$n.c"
+    printf '\twidget-%s.c \\\n' "$n" >>"$FX/sf20/Makefile.am"
+done
+printf '\tmain.c\n' >>"$FX/sf20/Makefile.am"; printf 'int main( void ) { return 0; }\n' >"$FX/sf20/main.c"
+if run sf20 "$T/f2" "new widget"; then
+    if lst "$T/f2" | grep -F 'p="Makefile.am"' | grep -qF 'files_capped="1"'; then ok "F2 more than 16 shown files: the <listed> says the rest were not read (files_capped=1)"
+    elif [ "$( grep -o '<sigs shown="[0-9]*"' "$T/f2" | grep -o '[0-9]*' )" -le 16 ] 2>/dev/null; then no "F2 premise: <sigs> shows 16 rows or fewer, so the cap cannot fire on this fixture ($( grep -o '<sigs shown="[0-9]*"' "$T/f2" ))"
+    else no "F2 17+ shown files and no files_capped: [$( lst "$T/f2" )]"; fi
+fi
+
 # ---- N1 / N2 / N4
 if run am "$T/n1" "widget alpha"; then
     if ! has "$T/n1" '<listed' && ! has "$T/n1" '; listed p='; then ok "N1 no creation word: no <listed>, no clause"; else no "N1 <listed> on a non-creation task"; fi
@@ -236,7 +271,7 @@ else no "N3 RIPWIRE_NO_LISTED_IN=1 run failed"; fi
 
 # ---- L1 legend coverage, compact and full
 if run pkg "$T/l1" "new middleware" --legend=full; then
-    for f in "$T/a3" "$T/l1"; do
+    for f in "$T/a3" "$T/l1" "$T/f1"; do
         if python3 - "$f" <<'EOF'
 import re, sys
 s = open(sys.argv[1], encoding="utf-8").read()

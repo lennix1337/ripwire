@@ -733,7 +733,7 @@ Discloses: `count_capped`
 
 ### `src/listedin.h`
 
-Discloses: `capped`, `manifests_capped`
+Discloses: `capped`, `files_capped`, `manifests_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |

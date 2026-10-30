@@ -60,7 +60,9 @@ namespace rw
 {
 
 // Runaway guards, not size targets (knob census ADDENDUM): every manifest, line or name past them is dropped WITH a disclosure
-// (manifests_capped="1" manifests_total= on the first element, capped="1" lines_total= on the element, also_total=).
+// (manifests_capped="1" manifests_total= on the first element, capped="1" lines_total= on the element, also_total=, files_capped="1" on the
+// first element for the two caps on what is READ: *.bzl files past kListedBzlPerDir, shown files past kListedShownFiles; when the cut leaves
+// no manifest that lists a shown file there is no element to carry it, and no clause either: an absent <listed> claims nothing).
 inline constexpr std::size_t kListedManifests   = 4;     // manifests per answer
 inline constexpr std::size_t kListedLines       = 8;     // printed lines per manifest (stanza openers included)
 inline constexpr std::size_t kListedAlsoNames   = 4;     // also= names per manifest
@@ -377,7 +379,7 @@ inline bool saysGenerated( std::string_view text ) noexcept
 }
 
 // The fixed-name manifests of one directory (and its *.bzl files, name order, at most kListedBzlPerDir).
-inline void readDirManifests( std::string_view dir, const std::filesystem::path& disk, std::vector<Manifest>& out )
+inline void readDirManifests( std::string_view dir, const std::filesystem::path& disk, std::vector<Manifest>& out, bool& filesCapped )
 {
     static constexpr std::string_view kNames[] = { "Makefile.am", "Makefile", "GNUmakefile", "CMakeLists.txt", "meson.build", "BUILD",
                                                    "BUILD.bazel", "package.json", "jsr.json", "deno.json", "Cargo.toml" };
@@ -432,6 +434,7 @@ inline void readDirManifests( std::string_view dir, const std::filesystem::path&
         }
     }
     std::ranges::sort( bzl );
+    filesCapped = filesCapped || bzl.size() > kListedBzlPerDir;   // the files past the cap are never read: files_capped on the answer
     for( std::size_t i = 0; i < bzl.size() && i < kListedBzlPerDir; ++i )
     {
         add( bzl[i] );
@@ -509,7 +512,8 @@ inline std::vector<ManifestLine> splitLines( const Manifest& man )
             {
                 depth += ( ch == '(' || ch == '[' || ch == '{' ) ? 1 : ( ( ch == ')' || ch == ']' || ch == '}' ) && depth > 0 ) ? -1 : 0;
             }
-            cont = lintdetail::trim( c ).back() == '\\';
+            const std::string_view t = lintdetail::trim( c );   // trim also drops \r \v \f, which indentOf keeps: a line of only those is empty here
+            cont = !t.empty() && t.back() == '\\';
         }
         lines[li].stanza = stanza;
     }
@@ -522,7 +526,7 @@ namespace listeddetail
 {
 
 // The manifests of every shown file's directory and ancestors, nearest first, each directory once (vendored directories never read).
-inline std::vector<Manifest> manifestsAbove( const IngestResult& ing, const std::vector<std::uint32_t>& files )
+inline std::vector<Manifest> manifestsAbove( const IngestResult& ing, const std::vector<std::uint32_t>& files, bool& filesCapped )
 {
     std::vector<std::string> seenDirs;
     std::vector<Manifest>    manifests;
@@ -539,7 +543,7 @@ inline std::vector<Manifest> manifestsAbove( const IngestResult& ing, const std:
                 seenDirs.emplace_back( dir );
                 if( !isVendoredDir( dir ) )
                 {
-                    readDirManifests( dir, disk, manifests );
+                    readDirManifests( dir, disk, manifests, filesCapped );
                 }
             }
             if( dir.empty() )
@@ -759,15 +763,23 @@ inline ListedRender renderForListedIn( const IngestResult& ing, std::span<const 
         return out;
     }
     std::vector<std::uint32_t> files;   // distinct shown files, rank order
+    bool                       filesCapped = false;   // a shown file or a *.bzl file was left unread (kListedShownFiles, kListedBzlPerDir)
     for( const NodeId id : shown )
     {
-        if( id < ing.symbols.size() && std::ranges::find( files, ing.symbols[id].fileId ) == files.end() && files.size() < kListedShownFiles
+        if( id < ing.symbols.size() && std::ranges::find( files, ing.symbols[id].fileId ) == files.end()
             && !isVendoredDir( rootRelPath( ing, ing.symbols[id].fileId ) ) )   // a vendored copy's own manifest is its upstream's, not the repo's
         {
-            files.push_back( ing.symbols[id].fileId );
+            if( files.size() < kListedShownFiles )
+            {
+                files.push_back( ing.symbols[id].fileId );
+            }
+            else
+            {
+                filesCapped = true;
+            }
         }
     }
-    const std::vector<Manifest> manifests = manifestsAbove( ing, files );
+    const std::vector<Manifest> manifests = manifestsAbove( ing, files, filesCapped );
     std::vector<Hit>            hits;
     for( std::size_t mi = 0; mi < manifests.size(); ++mi )
     {
@@ -783,8 +795,9 @@ inline ListedRender renderForListedIn( const IngestResult& ing, std::span<const 
     std::vector<char> esc;
     for( std::size_t hi = 0; hi < hits.size() && hi < kListedManifests; ++hi )
     {
-        const std::string cap = ( hi == 0 && hits.size() > kListedManifests )
+        std::string cap = ( hi == 0 && hits.size() > kListedManifests )
                                   ? std::format( " manifests_capped=\"1\" manifests_total=\"{}\"", hits.size() ) : std::string();
+        cap += hi == 0 && filesCapped ? " files_capped=\"1\"" : "";
         appendListed( out.xml, ing, files, manifests[ hits[hi].m ], hits[hi], cap, esc );
     }
     return out;
@@ -796,10 +809,10 @@ inline constexpr std::string_view kForListedInLegend =
     "jsr.json, deno.json, Cargo.toml) at the root or above a shown file that lists of=, the first shown file it names, "
     "and at least one more shown file, on a creation task; ln l=: each line naming of= byte-exact, after the less-indented line it sits under; by=path the line names "
     "the file, by=dir only its directory (2+ path segments); also=: other shown files the manifest names, also_total= all; gen=1 the "
-    "manifest says it is generated; capped=1 lines_total=, manifests_capped=1 manifests_total=: cut, the total; "
+    "manifest says it is generated; capped=1 lines_total=, manifests_capped=1 manifests_total=: cut, the total; files_capped=1 shown files or *.bzl files past a cap were not read; "
     "not exhaustive: code tables, docs, globs, variable listings and manifests above no shown file are not searched (a floor)";
 inline constexpr std::string_view kForCompactListedInLegend =
     "; listed p= of= by=path|dir: a manifest above a shown file listing of= and another shown file (a creation task); ln l=: its lines byte-exact with the "
-    "line they sit under; also=/also_total= other shown files it lists; gen=1 generated; not exhaustive (code tables, docs, globs, other manifests are not searched); capped=1 lines_total=/manifests_capped=1 if cut";
+    "line they sit under; also=/also_total= other shown files it lists; gen=1 generated; not exhaustive (code tables, docs, globs, other manifests are not searched); capped=1 lines_total=/manifests_capped=1/files_capped=1 if cut";
 
 }   // namespace rw
