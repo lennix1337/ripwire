@@ -36,6 +36,12 @@
 #   G2  `pub use super::n::SupItem;` resolves `super::` and publishes `c::m::p::SupItem`.
 #   N-3 a 300-deep `export *` chain stops at 256 spellings and says capped="1" (a short chain never does).
 #
+#   Train 42b T-2 (rv-alias-import-delta NEW-1; runtime fixture: crate c with src/inner.rs beside a workspace crate `inner`, both
+#   defining the items): a Rust import is in scope only in its OWN module and never from a function body.
+#   X1a `use crate::inner; pub mod z { pub use inner::Thing5; }`: the child mod inherits no parent `use`, so the path is the crate inner.
+#   X1b `fn helper() { use crate::inner; } pub use inner::Thing4;`: the fn-body import binds nothing at file level: the crate inner.
+#   X1c twin: `pub mod scope2 { use crate::inner; pub use inner::Thing2; }` (same module) still reads through the import: c's Thing2.
+#
 # Usage: bash test/reexportcheck.sh [BIN]     (default build/ripwire; exits non-zero on any failure)
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
@@ -141,8 +147,26 @@ for i in $( seq 1 300 ); do printf "export * from './f%d';\n" $(( i - 1 )) >"$DE
 has   "$TMP/n3deep.xml" "N-3 the 256-spelling stop is disclosed beside total="       'capped="1"'
 n=$( grep -o '<rx ' "$TMP/n3deep.xml" | wc -l | tr -d ' ' )
 if [ "$n" = 8 ]; then ok "N-3 the row cap prints 8 of the capped chain's rows"; else no "N-3 the capped chain printed $n rx rows (cap 8)"; fi
+T2="$TMP/t2"; mkdir -p "$T2/c/src/x" "$T2/inner/src"
+printf '[package]\nname = "c"\nversion = "0.1.0"\n' >"$T2/c/Cargo.toml"
+printf '[package]\nname = "inner"\nversion = "0.1.0"\n' >"$T2/inner/Cargo.toml"
+printf 'pub mod inner;\npub mod x;\npub mod scope2 { use crate::inner; pub use inner::Thing2; }\n' >"$T2/c/src/lib.rs"
+printf 'pub struct Thing2;\npub struct Thing4;\npub struct Thing5;\n' >"$T2/c/src/inner.rs"
+printf 'pub mod v;\npub mod y;\n' >"$T2/c/src/x/mod.rs"
+printf 'use crate::inner;\npub mod z { pub use inner::Thing5; }\nfn uses() { let _ = inner::Thing2; }\n' >"$T2/c/src/x/v.rs"
+printf 'fn helper() { use crate::inner; let _ = 1; }\npub use inner::Thing4;\n' >"$T2/c/src/x/y.rs"
+printf 'pub struct Thing2;\npub struct Thing4;\npub struct Thing5;\n' >"$T2/inner/src/lib.rs"
+ask3(){ ( cd "$T2" || exit 1; HOME="$TMP" "$BIN" "$T2" --no-cache "$@" </dev/null 2>/dev/null ); }
+ask3 "--for=where Thing5 is defined" >"$TMP/t2a.xml"
+has   "$TMP/t2a.xml" "X1a a child mod inherits no parent use: the workspace crate inner's Thing5"  '<def n="Thing5" p="inner/src/lib.rs"'
+hasnt "$TMP/t2a.xml" "X1a never c's own Thing5 through the parent's import"                    '<def n="Thing5" p="c/src/inner.rs"'
+ask3 "--for=where Thing4 is defined" >"$TMP/t2b.xml"
+has   "$TMP/t2b.xml" "X1b a fn-body use binds nothing at file level: the crate inner's Thing4"   '<def n="Thing4" p="inner/src/lib.rs"'
+hasnt "$TMP/t2b.xml" "X1b never c's own Thing4 through the fn-body import"                      '<def n="Thing4" p="c/src/inner.rs"'
+ask3 "--for=where Thing2 is defined" >"$TMP/t2c.xml"
+has   "$TMP/t2c.xml" "X1c twin: a same-module import is still read through: c's Thing2"         '<def n="Thing2" p="c/src/inner.rs"'
 if command -v xmllint >/dev/null 2>&1; then
-    for f in f1 f3 f4 g1 n3deep; do if xmllint --noout "$TMP/$f.xml" 2>/dev/null; then ok "xml well-formed $f"; else no "xml malformed $f"; fi; done
+    for f in f1 f3 f4 g1 n3deep t2a t2b t2c; do if xmllint --noout "$TMP/$f.xml" 2>/dev/null; then ok "xml well-formed $f"; else no "xml malformed $f"; fi; done
 fi
 if command -v xmllint >/dev/null 2>&1; then
     for f in r1 t1 t2 c1; do if xmllint --noout "$TMP/$f.xml" 2>/dev/null; then ok "xml well-formed $f"; else no "xml malformed $f"; fi; done

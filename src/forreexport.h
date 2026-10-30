@@ -275,9 +275,23 @@ inline void indexRustInlineMods( const IngestResult& ing, RustCrates& rc )
             rc.modules.try_emplace( std::to_string( rc.crateOf[ f ] ) + "#" + joinPath( path, "", "::" ), '\0' );
         }
     }
+    // a `use` inside a function body binds only inside that body (train 42b T-2): never an import of the file or of a module
+    std::vector<std::vector<std::pair<std::uint32_t, std::uint32_t>>> fnBodies( rc.crateOf.size() );
+    for( const Symbol& s : ing.symbols )
+    {
+        if( ( s.kind == SymKind::Function || s.kind == SymKind::Method ) && dependencyDialect( s.lang ) == DepDialect::Rust && s.fileId < rc.crateOf.size()
+            && rc.crateOf[ s.fileId ] != kNoFile && s.endByte > s.sigEndByte )
+        {
+            fnBodies[ s.fileId ].emplace_back( s.sigEndByte, s.endByte );
+        }
+    }
+    const auto inFnBody = [ & ]( const Binding& b )
+    {
+        return std::ranges::any_of( fnBodies[ b.fileId ], [ & ]( const auto& r ) { return r.first <= b.startByte && b.startByte < r.second; } );
+    };
     for( const Binding& b : ing.bindings )
     {
-        if( b.kind == LocalBindKind::TypeImport && b.var != "*" && b.fileId < rc.crateOf.size() && rc.crateOf[ b.fileId ] != kNoFile )
+        if( b.kind == LocalBindKind::TypeImport && b.var != "*" && b.fileId < rc.crateOf.size() && rc.crateOf[ b.fileId ] != kNoFile && !inFnBody( b ) )
         {
             rc.imported[ RustCrates::importKey( b.fileId, b.var ) ].push_back( &b );
         }
@@ -405,10 +419,9 @@ inline RustTarget resolveRustPath( const RustCrates& rc, std::uint32_t f, std::u
         {
             const Binding* only    = nullptr;
             std::size_t    visible = 0;
-            for( const Binding* b : hit->second )   // the imports in scope at `byte`: file level, or inside an enclosing inline mod
+            for( const Binding* b : hit->second )   // the imports in scope at `byte`: those of the SAME module (a child `mod` inherits none)
             {
-                const std::vector<std::string> at = rc.modsAt( f, b->startByte );
-                if( std::ranges::mismatch( at, base ).in1 == at.end() && splitColons( b->importedName ).front() != segs.front() )   // `at` is a prefix of `base`
+                if( rc.modsAt( f, b->startByte ) == base && splitColons( b->importedName ).front() != segs.front() )   // train 42b T-2: exact module
                 {
                     ++visible;
                     only = b;
