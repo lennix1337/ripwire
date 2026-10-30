@@ -48,6 +48,9 @@
 #      still declines gate="iface". S1b and L-1 also assert a POSITIVE row (a crash or empty output cannot pass them).
 #   L-1 a C member written with the name of a C++ smart alias is a C pointer: the peel is gated on the member's language (lang.c)
 #   B1e [P] class-scoped aliases of one name: each member reads its OWN class's (HoldX → iface, HoldY → the typed KyC::kick)
+#   R1 [train 42b T-1, rv-iface-delta2 R1] only a PURE-VIRTUAL declaration (`= 0`) is a contract: a concrete base whose one bodyless
+#      member is `operator= … = delete`, `operator== … = default`, a `friend` declaration or a member-template declaration (its only
+#      definition a specialization) keeps its override as a candidate, never one typed Base::act pin (runtime fixture; twin: D1d).
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
@@ -155,6 +158,51 @@ say "$( has "$o" 'DtorB::act' )" "D1c ... and DtorB::act"
 o="$( callees "$CPP" "scope3.h::UsesPure::go" )"
 say "$( isiface "$o" )" "D1d a pure-virtual interface still declines gate=iface cands=2"
 say "$( hasnt "$o" 'via="name"' )" "D1d ... with no by-name guess"
+# ---- train 42b T-1 (rv-iface-delta2 R1): a bodyless member that is not `= 0` is no contract ----
+R1="$SCR/r1"; mkdir -p "$R1"
+cat >"$R1/a.h" <<'CPPEOF'
+#include <memory>
+namespace q {
+class BDel { public: BDel& operator=( const BDel& ) = delete; virtual int act( int x ) { return x; } };
+class DelA : public BDel { public: int act( int x ) override { return x + 1; } };
+class BDef { public: bool operator==( const BDef& ) const = default; virtual int act( int x ) { return x; } };
+class DefA : public BDef { public: int act( int x ) override { return x + 1; } };
+class BFr { public: friend int peek( const BFr& ); virtual int act( int x ) { return x; } };
+class FrA : public BFr { public: int act( int x ) override { return x + 1; } };
+class BTm { public: template <typename T> int get( T t ); virtual int act( int x ) { return x; } };
+class TmA : public BTm { public: int act( int x ) override { return x + 1; } };
+class BPu { public: virtual int act( int x ) = 0; };
+class PuA : public BPu { public: int act( int x ) override { return x + 1; } };
+class PuB : public BPu { public: int act( int x ) override { return x + 2; } };
+using BDelPtr = std::shared_ptr<BDel>;
+using BDefPtr = std::shared_ptr<BDef>;
+using BFrPtr = std::shared_ptr<BFr>;
+using BTmPtr = std::shared_ptr<BTm>;
+using BPuPtr = std::shared_ptr<BPu>;
+class UDel { public: int go( int x ) { return b_->act( x ); } BDelPtr b_; };
+class UDef { public: int go( int x ) { return b_->act( x ); } BDefPtr b_; };
+class UFr { public: int go( int x ) { return b_->act( x ); } BFrPtr b_; };
+class UTm { public: int go( int x ) { return b_->act( x ); } BTmPtr b_; };
+class UPu { public: int go( int x ) { return b_->act( x ); } BPuPtr b_; };
+}
+CPPEOF
+cat >"$R1/b.cc" <<'CPPEOF'
+#include "a.h"
+namespace q {
+int peek( const BFr& ) { return 0; }
+template <> int BTm::get<int>( int t ) { return t; }
+}
+CPPEOF
+o="$( callees "$R1" "a.h::UDel::go" )"
+say "$( has "$o" 'DelA::act' )" "R1 an \`= delete\` operator is no contract: DelA::act stays a candidate (no single typed BDel::act)"
+o="$( callees "$R1" "a.h::UDef::go" )"
+say "$( has "$o" 'DefA::act' )" "R1 an \`= default\` operator is no contract: DefA::act stays"
+o="$( callees "$R1" "a.h::UFr::go" )"
+say "$( has "$o" 'FrA::act' )" "R1 a friend declaration is no contract: FrA::act stays"
+o="$( callees "$R1" "a.h::UTm::go" )"
+say "$( has "$o" 'TmA::act' )" "R1 a member-template declaration defined only by a specialization is no contract: TmA::act stays"
+o="$( callees "$R1" "a.h::UPu::go" )"
+say "$( isiface "$o" )" "R1 twin: a pure-virtual (\`= 0\`) base in the same tree still declines gate=iface"
 echo "ifacepeelcheck: $npass passed, $nfail failed"
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"

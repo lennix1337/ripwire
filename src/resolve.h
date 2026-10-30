@@ -4912,6 +4912,27 @@ struct FlatRecvType
 inline constexpr int         kAliasPeelDepth  = 4;
 inline constexpr std::size_t kAliasPeelBranch = 4;   // same-scope declarations of one name a lookup follows; more is "unknown"
 
+// A C++ member declaration starting at `from` carries a pure-specifier: its text up to the first `;` ends in `= 0`. A `{` or `}`
+// first (an inline body, a braced default argument) or an unreadable file reads as no pure-specifier — the safe direction (the
+// class stays concrete and its overrides stay hedged candidates).
+inline bool declaresPureSpecifier( std::string_view text, std::uint32_t from ) noexcept
+{
+    const std::size_t end = from < text.size() ? text.find_first_of( ";{}", from ) : std::string_view::npos;
+    if( end == std::string_view::npos || text[ end ] != ';' )
+    {
+        return false;
+    }
+    std::string_view decl = text.substr( from, end - from );
+    decl                  = decl.substr( 0, decl.find_last_not_of( " \t\r\n" ) + 1 );   // npos + 1 = 0: all blank
+    if( !decl.ends_with( '0' ) )
+    {
+        return false;
+    }
+    decl.remove_suffix( 1 );
+    decl = decl.substr( 0, decl.find_last_not_of( " \t\r\n" ) + 1 );
+    return decl.ends_with( '=' );
+}
+
 class SmartAliasPeel
 {
 public:
@@ -4926,7 +4947,7 @@ public:
             key.append( name );
         };
         bool                       anyPointer = false;
-        HashMap<std::string, char> declared;   // "owner\0member" of every bodyless member ('\1': the owner's constructor / destructor)
+        HashMap<std::string, char> declared;   // "owner\0member" of every bodyless member ('\0': a base's pure-virtual contract, '\1': no contract)
         HashMap<std::string, char> defined;    // the same key, for every member that owns a body
         for( const Reference& r : ing.references )
         {
@@ -4962,6 +4983,15 @@ public:
             byName_.clear();
             return;
         }
+        for( const Reference& r : ing.references )
+        {
+            if( r.isInherit && !r.calleeName.empty() )
+            {
+                bases_.try_emplace( r.calleeName, '\0' );
+            }
+        }
+        std::uint32_t textOf = kNoFile;   // the file `text` holds: a base's bodyless members are read for a pure-specifier
+        std::string   text;
         for( const Symbol& s : ing.symbols )
         {
             if( !langFacts( s.lang ).aliasPeelsSmartPointer )
@@ -4981,24 +5011,39 @@ public:
                 const std::string owner( scopeLastSegment( s.scope ) );
                 std::string       member = owner;
                 member.append( 1, '\0' ).append( s.name );
-                ( s.endByte <= s.sigEndByte ? declared : defined ).try_emplace( std::move( member ), s.name == owner || s.name.starts_with( '~' ) ? '\1' : '\0' );
+                if( s.endByte > s.sigEndByte )
+                {
+                    defined.try_emplace( std::move( member ), '\0' );
+                    continue;
+                }
+                // '\0' = a contract: a pure-virtual `= 0` declaration of a base class (only a base's contract is consulted: pointeeOf).
+                // `= delete` / `= default`, a friend or a member-template declaration and a constructor / destructor are none.
+                bool pure = false;
+                if( s.name != owner && !s.name.starts_with( '~' ) && bases_.contains( owner ) )
+                {
+                    if( textOf != s.fileId )
+                    {
+                        text   = readConfigBytes( diskPath( ing, s.fileId ) );   // capped at 1 MiB: a larger header reads as concrete (a hedge)
+                        textOf = s.fileId;
+                    }
+                    pure = declaresPureSpecifier( text, s.sigStartByte );
+                }
+                const auto [ at, fresh ] = declared.try_emplace( std::move( member ), pure ? '\0' : '\1' );
+                if( !fresh && pure )
+                {
+                    at->second = '\0';   // one pure overload of the name is enough
+                }
             }
         }
-        // A class declares a CONTRACT only through a bodyless member that is no constructor / destructor and has no out-of-line
-        // definition (`int Base::act() { … }` in a .cc, same owner and name): a concrete base that merely declares its methods
-        // in the header is still concrete, so its overrides stay candidates (pointeeOf).
-        for( const auto& [ key, ctorOrDtor ] : declared )
+        // A class declares a CONTRACT only through a pure-virtual member (`= 0`; train 42b T-1) that has no out-of-line definition
+        // (`int Base::act() { … }` in a .cc, same owner and name): a concrete base that merely declares its methods in the header,
+        // or whose only bodyless member is a deleted / defaulted operator, a friend or a member template, is still concrete, so its
+        // overrides stay candidates (pointeeOf).
+        for( const auto& [ key, notContract ] : declared )
         {
-            if( ctorOrDtor == '\0' && defined.find( key ) == defined.end() )
+            if( notContract == '\0' && defined.find( key ) == defined.end() )
             {
                 abstract_.try_emplace( key.substr( 0, key.find( '\0' ) ), '\0' );
-            }
-        }
-        for( const Reference& r : ing.references )
-        {
-            if( r.isInherit && !r.calleeName.empty() )
-            {
-                bases_.try_emplace( r.calleeName, '\0' );
             }
         }
     }
