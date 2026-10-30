@@ -1972,7 +1972,10 @@ inline std::string cacheDirLadder()
     os::stat_t st {};
     if( mkdirRc == 0 || ( os::lstat( d.c_str(), &st ) == 0 && S_ISDIR( st.st_mode ) && st.st_uid == os::getuid() ) )
     {
-        if( os::chmod( d.c_str(), 0700 ) == 0
+        // Win32 chmod propagates inheritable ACLs through the whole cache tree, even when unchanged.
+        // lstat already verifies a protected owner-only DACL; repair only a missing/private-mode mismatch.
+        const bool alreadyOwnerOnly = ( st.st_mode & 0777 ) == 0700;
+        if( ( alreadyOwnerOnly || os::chmod( d.c_str(), 0700 ) == 0 )
             && os::lstat( d.c_str(), &st ) == 0 && S_ISDIR( st.st_mode ) && st.st_uid == os::getuid()
             && ( st.st_mode & 0777 ) == 0700 )
         {
