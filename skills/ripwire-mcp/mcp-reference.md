@@ -16,6 +16,10 @@ printf '%s' "$BLOCK" | ripwire ROOT --insert-before-symbol=SYM --edit-payload=-
 These flags and the MCP verbs below call the same transaction-safe edit engine. MCP is useful when its
 workspace is already warm or the client has no shell.
 
+**Claude Code** enforces read-before-edit, so `ripwire wrap claude` registers the server with `--mcp-tools=no-edit`
+(every tool except these three; `--mcp-tools=full` restores them): take the symbol's line range from ripwire, Read
+only that range (`offset`/`limit`), then use the native Edit. The verbs below stay for agents without that rule.
+
 `replace_symbol_body`, `insert_before_symbol`, `insert_after_symbol` — ripwire's WRITE verbs (33
 verbs total: the 17 read verbs incl. `fetch_body`/`slice`/`rank_by` + the 13 flagship-reflex verbs (incl.
 `explore`/`from_trace`/`edit_check`/`affected`) + these 3 edit). Each locates a symbol's definition in the
@@ -77,7 +81,7 @@ signature-through-closing-brace or nothing).
 ```
 ripwire --mcp --mcp-tools=core              # 8 tools: explore batch from_trace impact uses fetch_body edit_check quality_delta
 ripwire --mcp --mcp-tools=core,grep,slice   # names and profiles union
-ripwire wrap claude --mcp-tools=core        # the printed recipe carries the flag
+ripwire wrap claude --mcp-tools=core        # the printed recipe carries the flag (default for claude: no-edit)
 ```
 
 - **Why.** An eager-loading client pays for every listed schema at session start: `tools/list` is 46,368 B for

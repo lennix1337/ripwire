@@ -5024,9 +5024,9 @@ $ ./build/ripwire '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' '{"jso
 
 ### `--mcp-tools=LIST`
 
-**Answers:** list only these MCP tools (names and/or the core/full profiles, default full).
+**Answers:** list only these MCP tools (names and/or the core/no-edit/full profiles, default full).
 
-A comma list of tool names and/or profiles, unioned. core = explore, batch, from_trace, impact, uses, fetch_body, edit_check, quality_delta (the loop the server's own instructions teach); full = all tools, the default. A client that loads every schema at session start pays only for the listed ones. initialize announces the subset; calling an unlisted tool is refused with the flag that enables it. The list is not access control: batch sub-queries still reach hidden verbs. An unknown, repeated or empty name exits 1. `ripwire wrap AGENT --mcp-tools=LIST` writes it into the server command (claude, cursor, windsurf, gemini, opencode).
+A comma list of tool names and/or profiles, unioned. core = explore, batch, from_trace, impact, uses, fetch_body, edit_check, quality_delta (the loop the server's own instructions teach); no-edit = every tool but the three edit twins (replace_symbol_body, insert_before_symbol, insert_after_symbol; `ripwire wrap claude` registers it); full = all tools, the default. A client that loads every schema at session start pays only for the listed ones. initialize announces the subset; calling an unlisted tool is refused with the flag that enables it. The list is not access control: batch sub-queries still reach hidden verbs. An unknown, repeated or empty name exits 1. `ripwire wrap AGENT --mcp-tools=LIST` writes it into the server command (claude, cursor, windsurf, gemini, opencode).
 
 **Try it**
 
