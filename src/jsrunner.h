@@ -18,12 +18,11 @@
 //
 // NEAREST MANIFEST, WALKING UP (mirrors pythonrunner::hasPytestProject exactly): monorepo/workspace layouts
 // are common (the issue's own point 1), so the search starts at the test file's own directory and climbs to
-// the crawl root, inclusive, stopping at the first package.json found. The command is still spelled ROOT-
-// RELATIVE, same as every other run= this codebase emits (testmap.h::spellUncached) — a package.json found
-// in a subdirectory is evidence of WHICH runner, not a cd target; running the emitted command may need the
-// reader's own shell to be inside that subdirectory on a workspace where the runner is not hoisted to the
-// crawl root's node_modules. That is a stated scope limit (see the fix report), not a silent one: it is the
-// SAME limit testmap.h's Python branch already carries (a nested pyproject.toml is evidence, not a `cd`).
+// the crawl root, inclusive, stopping at the first package.json found. The command is spelled ROOT-
+// RELATIVE, same as every other run= this codebase emits (testmap.h::spellUncached): a package.json found in a
+// subdirectory is evidence of WHICH runner, and its directory is where the runner runs (#335). A package below
+// root= is entered with `cd <pkg> && ` in the emitted command (testmap.h::spellJsRun), so the command still pastes
+// from root= and its path is package-relative. The walk reports the climb depth (evidenceClimbs) for that cd.
 //
 // LANGUAGE NEUTRALITY (BRIEF_COMMON, standing house rule): the mechanism — walk up from a test file to the
 // nearest project manifest and read its OWN declared scripts/dependencies as evidence, never guess — is the
@@ -591,6 +590,9 @@ struct PackageManifests
 {
     std::string evidence;   // the deciding manifest, else the nearest one (the runner evidence)
     std::string nearest;    // the nearest non-empty package.json, decisive or not
+    // #335: directories the walk climbed from the test file's own directory to the DECIDING manifest (0 = the
+    // file's own directory). npos when no manifest decided, so no package directory is known to cd into.
+    std::size_t evidenceClimbs = std::string::npos;
 };
 
 inline PackageManifests nearestPackageManifests( const std::string& file, std::string_view root )
@@ -598,8 +600,11 @@ inline PackageManifests nearestPackageManifests( const std::string& file, std::s
     namespace fs = std::filesystem;
     std::string fallback;   // the NEAREST manifest found, even if it decides nothing (F5)
     std::string decisive;
+    std::size_t climbs         = 0;   // directories visited so far; the file's own directory is visited first
+    std::size_t decisiveClimbs = std::string::npos;
     rw::dirwalk::ascendToRoot( file, root, [ & ]( const fs::path& dir )
     {
+        const std::size_t here = climbs++;
         std::error_code sec;
         const fs::path candidate = dir / "package.json";
         if( !fs::is_regular_file( fs::symlink_status( candidate, sec ) ) )   // never follow a manifest symlink out of the project
@@ -620,12 +625,14 @@ inline PackageManifests nearestPackageManifests( const std::string& file, std::s
         {
             return false;   // F5: a true marker (no script, no decisive dependency) decides nothing HERE
         }
-        decisive = std::move( bytes );   // G1: an authoritative-but-unrecognized script also ends the walk
+        decisive       = std::move( bytes );   // G1: an authoritative-but-unrecognized script also ends the walk
+        decisiveClimbs = here;
         return true;
     } );
     PackageManifests out;
-    out.nearest  = fallback;
-    out.evidence = decisive.empty() ? std::move( fallback ) : std::move( decisive );
+    out.nearest        = fallback;
+    out.evidence       = decisive.empty() ? std::move( fallback ) : std::move( decisive );
+    out.evidenceClimbs = decisiveClimbs;
     return out;
 }
 
