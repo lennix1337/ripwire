@@ -783,8 +783,10 @@ bool isOwnerClassSid( PSID sid )
 }
 
 // Owner and permission bits from the handle's security descriptor: st_uid as above; mode 0700 when the DACL is
-// PROTECTED (inherits nothing) and every allow entry names an owner-class principal, else the attribute-derived bits
-// stat reports. A descriptor that cannot be read leaves st as it was (st_uid = kOwnerNotRead: fails closed).
+// PROTECTED (inherits nothing), every allow entry names an owner-class principal, and the owner's effective entries
+// grant read, write/create and search (FILE_LIST_DIRECTORY | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_TRAVERSE),
+// else the attribute-derived bits stat reports. A descriptor that cannot be read leaves st as it was (st_uid =
+// kOwnerNotRead: fails closed).
 void readOwnerAndMode( HANDLE handle, stat_t* st )
 {
     PSID                 owner      = nullptr;
@@ -797,9 +799,13 @@ void readOwnerAndMode( HANDLE handle, stat_t* st )
     const UniqueLocal          descriptorOwner( rawDescriptor );
     const PSECURITY_DESCRIPTOR descriptor = rawDescriptor;
     st->st_uid = ownedByThisUser( owner ) ? tokenIdentity().uid : kOwnerSomeoneElse;
-    WORD  control  = 0;
-    DWORD revision = 0;
-    bool  ownerOnly = dacl != nullptr && ::GetSecurityDescriptorControl( descriptor, &control, &revision ) && ( control & SE_DACL_PROTECTED ) != 0;
+    constexpr DWORD           kOwnerRwxMask       = FILE_LIST_DIRECTORY | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_TRAVERSE;
+    constexpr GENERIC_MAPPING kFileGenericMapping { FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS };
+    WORD  control    = 0;
+    DWORD revision   = 0;
+    DWORD ownerMask  = 0;
+    DWORD deniedMask = 0;
+    bool  ownerOnly  = dacl != nullptr && ::GetSecurityDescriptorControl( descriptor, &control, &revision ) && ( control & SE_DACL_PROTECTED ) != 0;
     for( DWORD aceIndex = 0; ownerOnly && aceIndex < dacl->AceCount; ++aceIndex )
     {
         LPVOID ace = nullptr;
@@ -808,14 +814,34 @@ void readOwnerAndMode( HANDLE handle, stat_t* st )
             ownerOnly = false;
             break;
         }
-        const BYTE aceType = static_cast<ACE_HEADER*>( ace )->AceType;
-        if( aceType == ACCESS_DENIED_ACE_TYPE )
+        const auto* const header        = static_cast<ACE_HEADER*>( ace );
+        const bool        appliesToSelf = ( header->AceFlags & INHERIT_ONLY_ACE ) == 0;
+        if( header->AceType == ACCESS_DENIED_ACE_TYPE )
         {
+            auto* const denied = static_cast<ACCESS_DENIED_ACE*>( ace );
+            const PSID  sid    = reinterpret_cast<PSID>( &denied->SidStart );
+            BOOL        member = FALSE;
+            if( appliesToSelf
+                && ( ownedByThisUser( sid ) || ::IsWellKnownSid( sid, WinCreatorOwnerRightsSid )
+                     || ( ::CheckTokenMembership( nullptr, sid, &member ) && member != FALSE ) ) )
+            {
+                DWORD mask = denied->Mask;
+                ::MapGenericMask( &mask, const_cast<PGENERIC_MAPPING>( &kFileGenericMapping ) );
+                deniedMask |= mask & ~ownerMask;
+            }
             continue;
         }
-        ownerOnly = aceType == ACCESS_ALLOWED_ACE_TYPE && isOwnerClassSid( reinterpret_cast<PSID>( &static_cast<ACCESS_ALLOWED_ACE*>( ace )->SidStart ) );
+        auto* const allowed = static_cast<ACCESS_ALLOWED_ACE*>( ace );
+        const PSID  sid     = reinterpret_cast<PSID>( &allowed->SidStart );
+        ownerOnly                 = header->AceType == ACCESS_ALLOWED_ACE_TYPE && isOwnerClassSid( sid );
+        if( ownerOnly && appliesToSelf && ( ownedByThisUser( sid ) || ::IsWellKnownSid( sid, WinCreatorOwnerRightsSid ) ) )
+        {
+            DWORD mask = allowed->Mask;
+            ::MapGenericMask( &mask, const_cast<PGENERIC_MAPPING>( &kFileGenericMapping ) );
+            ownerMask |= mask & ~deniedMask;
+        }
     }
-    if( ownerOnly )
+    if( ownerOnly && ( ownerMask & kOwnerRwxMask ) == kOwnerRwxMask )
     {
         st->st_mode = ( st->st_mode & ~static_cast<mode_t>( 0777 ) ) | 0700;
     }
@@ -1576,9 +1602,14 @@ int chmod( const char* path, mode_t mode )
     {
         return fail( native.error() );
     }
-    const bool   ownerOnly = ( mode & 077 ) == 0;
-    const DWORD  access    = FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | ( ownerOnly ? READ_CONTROL | WRITE_DAC : 0 );
-    const UniqueHandle handle( ::CreateFileW( native.c_str(), access, kShareAll, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr ) );
+    constexpr DWORD kNoFollow = FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT;
+    const bool      ownerOnly = ( mode & 077 ) == 0;
+    const DWORD     access    = FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | ( ownerOnly ? READ_CONTROL | WRITE_DAC : 0 );
+    UniqueHandle    handle( ::CreateFileW( native.c_str(), access, kShareAll, nullptr, OPEN_EXISTING, kNoFollow, nullptr ) );
+    if( !handle.valid() && ownerOnly && ::GetLastError() == ERROR_ACCESS_DENIED )
+    {
+        handle.reset( ::CreateFileW( native.c_str(), FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC, kShareAll, nullptr, OPEN_EXISTING, kNoFollow, nullptr ) );
+    }
     if( !handle.valid() )
     {
         return failLastError();

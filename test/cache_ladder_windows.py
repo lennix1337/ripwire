@@ -8,6 +8,7 @@ from ctypes import wintypes
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -73,6 +74,14 @@ def dacl_sddl(path):
 
 # isOwnerClassSid in os_win32.cpp: OWNER RIGHTS, CREATOR OWNER, Administrators, SYSTEM and this user.
 OWNER_CLASS_TRUSTEES = {"OW", "CO", "BA", "SY"}
+# FILE_LIST_DIRECTORY | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_TRAVERSE
+OWNER_RWX_MASK = 0x0001 | 0x0002 | 0x0004 | 0x0020
+SDDL_RIGHTS = {
+    "GA": OWNER_RWX_MASK, "FA": OWNER_RWX_MASK,
+    "GR": 0x0001, "FR": 0x0001, "CC": 0x0001,
+    "GW": 0x0006, "FW": 0x0006, "DC": 0x0002, "LC": 0x0004,
+    "GX": 0x0020, "FX": 0x0020, "WP": 0x0020,
+}
 
 
 def current_user_sid():
@@ -81,22 +90,52 @@ def current_user_sid():
     return result.stdout.strip().split(",")[-1].strip('"')
 
 
+def sddl_mask(rights):
+    if rights.lower().startswith("0x"):
+        mask = int(rights, 16)
+        if mask & 0x10000000:
+            mask |= OWNER_RWX_MASK
+        if mask & 0x80000000:
+            mask |= 0x0001
+        if mask & 0x40000000:
+            mask |= 0x0006
+        if mask & 0x20000000:
+            mask |= 0x0020
+        return mask
+    mask = 0
+    for index in range(0, len(rights), 2):
+        mask |= SDDL_RIGHTS.get(rights[index:index + 2], 0)
+    return mask
+
+
 def owner_only(path):
     """Windows counterpart of mode 0700: protected DACL whose allow ACEs name only
-    owner-class principals, the same rule os_win32.cpp readOwnerAndMode applies
-    (deny ACEs only take access away, so they never make a DACL less private)."""
+    owner-class principals and whose effective owner ACEs grant rwx, the same rule
+    os_win32.cpp readOwnerAndMode applies."""
     sddl = dacl_sddl(path)
     dacl = sddl[sddl.index("D:"):] if "D:" in sddl else ""
     if not dacl.startswith("D:P"):
         return False, sddl
-    trustees = OWNER_CLASS_TRUSTEES | {current_user_sid()}
+    user_sid = current_user_sid()
+    trustees = OWNER_CLASS_TRUSTEES | {user_sid}
+    owner_trustees = {"OW", user_sid} | ({"BA"} if ctypes.windll.shell32.IsUserAnAdmin() else set())
+    owner_mask = 0
+    denied_mask = 0
     for ace in re.findall(r"\(([^)]*)\)", dacl):
         fields = ace.split(";")
-        if fields[0] == "D":
-            continue
-        if fields[0] != "A" or fields[-1] not in trustees:
+        if len(fields) != 6:
             return False, sddl
-    return True, sddl
+        ace_type, ace_flags, rights, _, _, trustee = fields
+        applies_to_self = "IO" not in ace_flags
+        if ace_type == "D":
+            if applies_to_self and trustee in (owner_trustees | {"WD", "AU", "BU"}):
+                denied_mask |= sddl_mask(rights) & ~owner_mask
+            continue
+        if ace_type != "A" or trustee not in trustees:
+            return False, sddl
+        if applies_to_self and trustee in owner_trustees:
+            owner_mask |= sddl_mask(rights) & ~denied_mask
+    return (owner_mask & OWNER_RWX_MASK) == OWNER_RWX_MASK, sddl
 
 
 class CacheLadderWindows(unittest.TestCase):
@@ -146,6 +185,27 @@ class CacheLadderWindows(unittest.TestCase):
         stable = change_time(self.cache)
         self.query()
         self.assertEqual(change_time(self.cache), stable)
+
+    def test_owner_only_without_add_file_is_repaired_once(self):
+        user_sid = current_user_sid()
+        for grant in ("(OI)(CI)RX", "(OI)(CI)(RX,WA,WDAC)"):
+            with self.subTest(grant=grant):
+                shutil.rmtree(self.cache, ignore_errors=True)
+                self.cache.mkdir()
+                subprocess.run(["icacls.exe", str(self.cache), "/inheritance:r",
+                                "/grant:r", f"*{user_sid}:{grant}"],
+                               capture_output=True, text=True, check=True, timeout=30)
+                self.assertFalse(owner_only(self.cache)[0], dacl_sddl(self.cache))
+                before = change_time(self.cache)
+                first = self.query()
+                self.assertNotIn("cannot write", first.stderr)
+                self.assertNotEqual(change_time(self.cache), before,
+                                    "owner-only DACL without FILE_ADD_FILE was not repaired")
+                self.assertTrue(owner_only(self.cache)[0], dacl_sddl(self.cache))
+                stable = change_time(self.cache)
+                warm = self.query()
+                self.assertIn("reparsed=0 reused=1", warm.stderr)
+                self.assertEqual(change_time(self.cache), stable)
 
     def test_junction_cache_is_refused_without_touching_target(self):
         target = self.root / "target"
