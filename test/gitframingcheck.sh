@@ -95,7 +95,7 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
 command -v git >/dev/null 2>&1 || { echo "git required"; exit 2; }
-REAL_GIT="$( command -v git )"
+REAL_GIT="$( command -v git )"; export REAL_GIT   # the shim below is a CHILD process: an unexported value would reach it empty (CodeRabbit 4419234625)
 echo "gitframingcheck: BIN=$BIN  ROOT=$ROOT  git=$( git --version )"
 
 TMP="$( mktemp -d )"; H="$( mktemp -d )"; G="$( mktemp -d )"; E="$( mktemp -d )"
@@ -535,13 +535,24 @@ cat > "$SHIM/git" <<'SHIM'
 for a in "$@"; do
     if [ "$a" = "-z" ]; then
         echo "git: the -z flag is not supported here" >&2
+        : > "$SHIM_DIR/rejected-z"   # proof the -z rejection itself ran (not some other reason git was unavailable)
         exit 129
     fi
 done
 exec "$REAL_GIT" "$@"
 SHIM
 chmod +x "$SHIM/git"
+export SHIM_DIR="$SHIM"
+# PREMISE: the shim must hand every call WITHOUT -z to the real git (repository discovery, rev-parse), or the
+# degrade below could pass because the shim broke git entirely rather than because git rejected -z.
+if PATH="$SHIM:$PATH" git -C "$H" rev-parse --git-dir >/dev/null 2>&1 && [ ! -e "$SHIM/rejected-z" ]; then
+    ok "premise: the -z-rejecting shim delegates a call without -z to the real git"
+else
+    no "premise: the -z-rejecting shim does not delegate a plain git call (REAL_GIT not exported to the shim?)"
+fi
 PATH="$SHIM:$PATH" "$BIN" --owners --detail=1 --limit=60 "$H" > "$TMP/shim.xml" 2>"$TMP/shim.err"; shim_rc=$?
+[ -e "$SHIM/rejected-z" ] && ok "the shim saw a -z call and rejected it: the degrade below is the -z rejection, not an unavailable git" \
+                          || no "the shim never saw a -z call: the degrade below proves nothing about -z"
 [ "$shim_rc" != 0 ] && ok "a git that rejects -z: --owners exits $shim_rc (non-zero)" \
                     || no "a git that rejects -z: --owners exited 0 — a silent half-answer"
 shim_rows=$( tr '>' '\n' < "$TMP/shim.xml" | grep -c '<f p="' )
