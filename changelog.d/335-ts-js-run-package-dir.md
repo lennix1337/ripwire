@@ -7,7 +7,7 @@ the runner found no package config. Run from the package, the path was root-rela
 A bracketed path, such as a Next.js route (`app/[slug]/page.test.ts`), had `--` before it. vitest reads `--` as the end
 of its options and drops the file filter, so the row ran the whole suite. vitest and jest now get one quoted path.
 
-Two paths get no `run=` now. A path that starts with `-` has no spelling that runs it. Node's test runner globs its
+Two paths get no `run=` now. A path that starts with `-` gets no `run=`, because the runner could read it as an option. To run it by hand, prefix it with `./`, for example `node --test ./-suite.test.mjs`. Node's test runner globs its
 file arguments, so a bracketed path under `node --test` matches no file and the runner exits 1. Both rows print `run_unknown="1"`.
 
 jest reads its argument as a regular expression, so a path under a package below `root=` has every regex byte escaped with a backslash, a dot included (`a.test.js` would also match `aXtest.js`).
