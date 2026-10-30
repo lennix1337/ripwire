@@ -789,8 +789,11 @@ struct GitLogWalk
     int                       exitCode = 0;
     // The degraded-epoch count — records whose author or committer epoch field was empty or
     // unparsable (parseEpochField nullopt): their epochs read 0, so a window cut on them excluded
-    // those commits and its count is a FLOOR. This field is the sink a consumer reads to disclose
-    // that; folding it away would be the silent-floor the honesty rules forbid.
+    // those commits and its count is a FLOOR. The count is KEPT rather than folded into a zero so a
+    // disclosure can read it; NO consumer reads it yet — the visitor consumers discard the walk, so
+    // that floor is not stated on any answer (a documented K51 deferral, see historyread.h NOT
+    // COVERED; CodeRabbit on #469). git itself never prints a non-numeric %at/%ct: a non-zero count
+    // means a malformed stream or the disclosed `__C__` merge collision.
     int                       epochUnparsed = 0;
 };
 
