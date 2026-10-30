@@ -1003,13 +1003,8 @@ inline std::vector<Chain> reexportChains( Walk& w, const std::vector<const Symbo
 
 // CR pre-pass 42b: a token budget is a request the block must obey, so under one the rows are NOT printed (they sit outside
 // est_tokens). A one-line marker names how many definitions carry a chain; the legend sentence holds no double dash.
-inline std::string reexportHeldMarker( const std::string& rows )
+inline std::string reexportHeldMarker( std::size_t defs )
 {
-    std::size_t defs = 0;
-    for( std::size_t at = rows.find( "<def " ); at != std::string::npos; at = rows.find( "<def ", at + 1 ) )
-    {
-        ++defs;
-    }
     return "<!-- reexports held=\"budget\": a token budget is set, so the re-export rows are not printed (they sit outside est_tokens); "
            "defs= definitions carry a chain: ask again without the token budget for the rows -->"
            "<reexports held=\"budget\" defs=\"" + std::to_string( defs ) + "\"/>";
@@ -1042,6 +1037,7 @@ inline std::string renderForReexports( const IngestResult& ing, std::string_view
     Walk             w{ ing, src, rc, files, {}, {}, {}, {}, reexportTaskFiles( ing, tokens ) };
     indexReexportRecords( ing, rust, web, w );
     ReexportXml xml{ ing, rc, src, {}, {}, {} };
+    std::size_t printedDefs = 0;   // the def rows printed (the held marker's count)
     for( const std::string& name : names )
     {
         const std::vector<Chain> chains = reexportChains( w, defs, name );
@@ -1050,14 +1046,15 @@ inline std::string renderForReexports( const IngestResult& ing, std::string_view
             if( cued || !chains[ k ].uses.empty() )
             {
                 xml.chain( chains[ k ] );
+                ++printedDefs;
             }
         }
     }
-    if( xml.out.empty() || !held )
+    if( xml.out.empty() )
     {
-        return xml.out.empty() ? xml.out : xml.out.append( "</reexports>" );
+        return xml.out;
     }
-    return reexportHeldMarker( xml.out );
+    return held ? reexportHeldMarker( printedDefs ) : xml.out.append( "</reexports>" );
 }
 
 }   // namespace rw
