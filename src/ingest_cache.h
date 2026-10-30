@@ -363,7 +363,14 @@ constexpr std::uint32_t kCacheVersion = 46;           // 46: train 40 — lane j
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 259;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 269;          // bump on any grammar/.scm/extraction change
+                                                      // 269 = 2026-10-29 (train 41b: lane fn-slot-s2 (placeholders 257/258, 259 and 260 over its fix rounds): C++ `&Cls::m`
+                                                      //   value refs (memberRoot = Cls; memberVia = written qualifier / enclosing scope / `using namespace` directives),
+                                                      //   `( o.*x.f )( … )` slot calls, C nested designated paths and macro-cast slot calls + their "()M" alias facts, a class
+                                                      //   body fact's scope path, and a C++ base that is a template parameter of the deriving class (baseBind 0xFFFFFFFE)).
+                                                      //   Strictly above train 41's 259 (rich 260) and every live lane placeholder (iface-peel 259, alias-import 261,
+                                                      //   the string/literal lanes 263/265/267; train 42 goes above 269). Rich file tag 270. kCacheVersion stays 46:
+                                                      //   no record changes shape.
                                                       // 259 = 2026-10-28 (train 41: lanes fn-slot-2 (placeholder 249/250; Rust files record the slot join's records:
                                                       //   function-path arguments of path calls, field stores, registrar parameter facts, `(x.f)( … )` slot calls) and
                                                       //   py-split-marker (255/256; a Python module-scope def/class inside an if/try/with/loop files a second VarDecl
