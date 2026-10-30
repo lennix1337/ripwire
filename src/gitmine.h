@@ -2409,10 +2409,20 @@ inline std::vector<FileOwnership> gitFileAuthors(
     // rather than a growth. Coverage 84.9%/77.2% across the two census corpora against 73.0%/59.9% at N=1;
     // marginal coverage per byte then falls 2.16 → 0.70 going 2→4, so 2 is the knee. Most (file, author)
     // pairs are one commit — 1 613/3 002 inner lists on the two corpora, nearly all of them singletons.
-    // Flat table accumulators indexed directly by fileId: eliminates HashMap hashing, probing and
-    // bucket allocations on every path row, and visits naturally in ascending fileId order.
-    std::vector<HashMap<std::string, rw::SmallVec<std::int64_t, 2>>> perFile( fileCount );
-    std::vector<std::int64_t>                                        newestTsByFile( fileCount, 0 );
+    // Per-file accumulator: email -> list of raw commit timestamps that touched that file. Filled in
+    // one pass over the log stream, then reduced to decay scores below.
+    // For single-file queries, reuse a single accumulator to avoid vector-of-maps allocation entirely.
+    // For whole-repo queries, construct per-file maps lazily on first touch to avoid allocating bucket
+    // arrays for files with no mined git history.
+    HashMap<std::string, rw::SmallVec<std::int64_t, 2>>                                singleAuthorTs;
+    std::int64_t                                                                       singleNewestTs = 0;
+    std::vector<std::unique_ptr<HashMap<std::string, rw::SmallVec<std::int64_t, 2>>>>  perFile;
+    std::vector<std::int64_t>                                                          newestTsByFile;
+    if( !singleFile )
+    {
+        perFile.resize( fileCount );
+        newestTsByFile.resize( fileCount, 0 );
+    }
 
     // F6 companion: this used to be a SIXTH hand-rolled index, and a DIVERGENT one — it keyed on the
     // root-stripped `relPath` where the shared builder keyed on the full ingested path, so the fit measure the
@@ -2464,9 +2474,10 @@ inline std::vector<FileOwnership> gitFileAuthors(
         if( s.compare( 0, 5, "__C__" ) == 0 )
         {
             const std::string_view rest( s.data() + 5, s.size() - 5 );
-            const std::size_t      pipePos = rest.find( '|' );
+            const std::size_t      pipePos = rest.rfind( '|' );
             if( pipePos == std::string_view::npos || pipePos == 0 || pipePos + 1 >= rest.size() )
             {
+                DISCLOSE( "gitmine: malformed git commit header (missing timestamp pipe)" );
                 haveCommit = false;
                 continue;
             }
@@ -2478,6 +2489,10 @@ inline std::vector<FileOwnership> gitFileAuthors(
             const std::string_view tsView = rest.substr( pipePos + 1 );
             const auto [ ptr, ec ]        = std::from_chars( tsView.data(), tsView.data() + tsView.size(), curTs );
             haveCommit                    = ( ec == std::errc{} && ptr == tsView.data() + tsView.size() );
+            if( !haveCommit )
+            {
+                DISCLOSE( "gitmine: failed to parse commit timestamp in git header" );
+            }
             continue;
         }
         if( s.empty() || !haveCommit )
@@ -2491,25 +2506,40 @@ inline std::vector<FileOwnership> gitFileAuthors(
             continue;
         }
 
-        perFile[ f ][ curEmail ].push_back( curTs );
-        std::int64_t& newest = newestTsByFile[ f ];
-        if( curTs > newest )
+        if( singleFile )
         {
-            newest = curTs;
+            singleAuthorTs[ curEmail ].push_back( curTs );
+            if( curTs > singleNewestTs )
+            {
+                singleNewestTs = curTs;
+            }
+        }
+        else
+        {
+            if( !perFile[ f ] )
+            {
+                perFile[ f ] = std::make_unique<HashMap<std::string, rw::SmallVec<std::int64_t, 2>>>();
+            }
+            ( *perFile[ f ] )[ curEmail ].push_back( curTs );
+            std::int64_t& newest = newestTsByFile[ f ];
+            if( curTs > newest )
+            {
+                newest = curTs;
+            }
         }
     }
     os::pclose( pipe );
 
     std::vector<FileOwnership> result;
-    for( std::uint32_t fid = 0; fid < fileCount; ++fid )
+
+    const auto reduceEntry = [ & ]( std::uint32_t fid,
+                                    const HashMap<std::string, rw::SmallVec<std::int64_t, 2>>& authorTs,
+                                    std::int64_t newestTs )
     {
-        auto& authorTs = perFile[ fid ];
         if( authorTs.empty() )
         {
-            continue;
+            return;
         }
-        const std::int64_t newestTs = newestTsByFile[ fid ];
-
         // Compute decay scores
         double totalScore = 0.0;
         std::vector<AuthorScore> authors;
@@ -2550,6 +2580,21 @@ inline std::vector<FileOwnership> gitFileAuthors(
                    { return x.score != y.score ? x.score > y.score : x.email < y.email; } );
 
         result.push_back( { fid, std::move( authors ), std::uint32_t( authorTs.size() ), topOver80 } );
+    };
+
+    if( singleFile )
+    {
+        reduceEntry( onlyFileId, singleAuthorTs, singleNewestTs );
+    }
+    else
+    {
+        for( std::uint32_t fid = 0; fid < fileCount; ++fid )
+        {
+            if( perFile[ fid ] )
+            {
+                reduceEntry( fid, *perFile[ fid ], newestTsByFile[ fid ] );
+            }
+        }
     }
 
     return result;
