@@ -34,6 +34,11 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-30, train 42b (lanes iface-peel, alias-import, mf1-lit, claude-edit-route merged onto main 3cb89d54): RE-DERIVED ONCE
+#   with UPDATE_GOLDEN=1 on the composed tree (main's pin and the iface-peel / alias-import branch pins conflicted). Watched text:
+#   kParserVer 269 -> 271 (rich 272; above the lane placeholders 259, 260, 261 and the live 263, 265, 267) and kCacheVersion 46 -> 48
+#   (alias-import's LocalBindKind ReExport appended; its placeholder 47), quality.h's two kIngest*Mirror constants with them.
+#   kQSnapCacheScheme stays 24: no watched quality.h function moved.
 # 2026-10-29, train 41b (lane fn-slot-s2 merged onto main 52896f51): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the composed tree
 #   (main's pin 7273ed82… and the fn-slot-s2 branch pin b9174e46… conflicted). Watched text: kParserVer 259 -> 269 (rich 270; above
 #   the lane placeholders 257/259/260 and the live placeholders 259, 261, 263, 265, 267), quality.h's kIngestParserVerMirror with it.
