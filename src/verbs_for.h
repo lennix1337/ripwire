@@ -4187,7 +4187,9 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             if( dispatchHop.xml.empty() )
             {
                 headerParts.dispatchHopPresent = false;   // its clause goes with it
-                headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, enrich.surfaceOff ? std::string_view() : kForDegradedBundleNote );
+                // the degraded note is true only when the sigs were never measured (CR 4419328428): an empty hop over measured sigs is healthy
+                headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true,
+                                            ( !sigsPreRendered && !enrich.surfaceOff ) ? kForDegradedBundleNote : std::string_view() );
             }
         }
         // ep-manifest: rides on top of the complete answer like the caller hop; none when the bodies section degraded
