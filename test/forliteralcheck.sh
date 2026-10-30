@@ -38,6 +38,7 @@
 #          RIPWIRE_NO_LITERAL_ANCHOR=1
 #   L9 [G] bytes= is the element's own size (open tag to </lit>)
 #   X1 [G] determinism  X2 [G] xmllint well-formed  X3 [G] no "--" inside the lit legend comment
+#   N2 [train 42b T-5] `x = x + 1  # note:` is no def header: the bare string after it is a row, not a docstring (twin: the same without the comment)
 #   N1 [train 42b T-3] an <x> excerpt line over 200 bytes is cut on a UTF-8 boundary with cut="1" (a 48.9 KB minified body); twin: none
 #
 # Usage:  bash test/forliteralcheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/forliteralcheck.sh
@@ -184,6 +185,12 @@ if [ "$MX" != "MISSING" ] && [ "${#MX}" -le 3000 ] && has "$MX" 'cut="1"' && has
 else no "N1 excerpt not capped: ${#MX} B, cut=$(has "$MX" 'cut="1"' && echo y || echo n)"; fi
 SX="$( run --for=APPTOOL_RENDER_MODE | lit )"
 if ! has "$SX" 'cut="1"'; then ok "N1 twin: short lines are never marked cut"; else no "N1 twin: a short-line answer says cut=\"1\""; fi
+# ── N2 (train 42b, rv-mf1-lit-delta N2): a trailing comment ending in a colon is no def header, so the next bare string is no docstring ──
+DOC="$TMP/doc"; mkdir -p "$DOC/app"
+printf 'def colon_comment(x):\n    x = x + 1\n    """bad things happened here in a bare mid-body string"""\n    return x\n\n\ndef colon_comment2(x):\n    x = x + 1  # note:\n    """bad things happened here in a bare mid-body string two"""\n    return x\n' >"$DOC/app/d.py"
+DO="$( cd "$DOC" && "$BIN" "$DOC" --no-cache '--for=where is the "bad things happened here" string' </dev/null 2>/dev/null | lit )"
+if has "$DO" '<ls p="app/d.py" l="9"' && has "$DO" '<ls p="app/d.py" l="3"'; then ok "N2 a mid-body string after a '# note:' comment is a row (l=9), like its twin (l=3)"
+else no "N2 the comment-colon string is not a row: $(grep -o '<ls p="app/d.py" l="[0-9]*"' <<<"$DO" | tr '\n' ' ')"; fi
 # ── X1-X3 ──
 if [ "$A" = "$( run --for=APPTOOL_RENDER_MODE )" ]; then ok "X1 deterministic"; else no "X1 two runs differ"; fi
 if command -v xmllint >/dev/null 2>&1; then

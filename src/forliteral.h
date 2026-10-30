@@ -283,7 +283,11 @@ inline bool opensTripleQuoteLine( const std::string& text, std::size_t start, st
 // a code line that ends a statement header: a trailing ':' (a trailing # comment aside)
 inline bool endsWithColon( std::string_view line ) noexcept
 {
-    return lintdetail::rtrim( line.substr( 0, line.rfind( '#' ) ) ).ends_with( ':' ) || lintdetail::rtrim( line ).ends_with( ':' );
+    // the whole-line form keeps `def f(x="#"):` a header (its '#' is inside a string); only a def/class header line takes it, so a
+    // trailing comment that ends in a colon (`x = x + 1  # note:`) is no header (train 42b, rv-mf1-lit-delta N2)
+    const std::string_view lead = line.substr( std::min( line.find_first_not_of( " \t" ), line.size() ) );
+    const bool header = lead.starts_with( "def " ) || lead.starts_with( "async def " ) || lead.starts_with( "class " );
+    return lintdetail::rtrim( line.substr( 0, line.rfind( '#' ) ) ).ends_with( ':' ) || ( header && lintdetail::rtrim( line ).ends_with( ':' ) );
 }
 
 // A Python DOCSTRING: a triple-quoted string statement that is the FIRST statement of a module, class or def body — the line
