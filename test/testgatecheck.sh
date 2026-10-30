@@ -622,6 +622,21 @@ fxts "$Z/z26" 'namespace N { declare const a: number; }
 export function bounded( t: string ): string { return t; }'
 zwant '(z26) R2: a namespace holding only a declare statement' "$Z/z26" src/bounded.ts run_unknown
 
+# (n1) #335: a TS/JS package BELOW root= runs from its own directory. run= starts with `cd <pkg> &&` (still
+#      pasteable from root=), and the path after it is package-relative. Before the fix it was `npx vitest run
+#      web/src/lib.test.ts` from root, which resolves no package config and cannot run from either directory.
+N1="$( runjs testgatenestedfix 'web/src/lib.ts' )"; N1EC="$( rcjs testgatenestedfix 'web/src/lib.ts' )"
+{ [ "$N1EC" = 4 ] && printf '%s' "$N1" | grep -qF 'run="cd web &amp;&amp; npx vitest run src/lib.test.ts"'; } \
+    && ok '(n1) #335: nested package -> run="cd web &amp;&amp; npx vitest run src/lib.test.ts"' \
+    || no "(n1) #335 nested package run= not package-relative (exit=$N1EC): $N1"
+# (n2) #335: a bracketed path (a Next.js dynamic route) is one quoted argument with NO `--`. vitest reads `--`
+#      as the end of its options and drops the file filter, so the row ran the whole suite.
+N2="$( runjs testgatenestedfix 'web/app/[slug]/page.ts' )"; N2EC="$( rcjs testgatenestedfix 'web/app/[slug]/page.ts' )"
+{ [ "$N2EC" = 4 ] && printf '%s' "$N2" | grep -qF "run=\"cd web &amp;&amp; npx vitest run &apos;app/[slug]/page.test.ts&apos;\"" \
+      && ! printf '%s' "$N2" | grep -qF -e ' -- '; } \
+    && ok "(n2) #335: bracketed nested path -> quoted filter, no --" \
+    || no "(n2) #335 bracketed path still uses -- or is not quoted (exit=$N2EC): $N2"
+
 # (t) xml well-formed for the fix-round fixtures
 if command -v xmllint >/dev/null 2>&1; then
     tok=1
@@ -634,5 +649,25 @@ else
     printf '  SKIP  (t) xml well-formed, fix-round fixtures (no xmllint)\n'
 fi
 
+# (n3) #335: a nested node:test package gets the same cd form, its path package-relative.
+N3="$( runjs testgatenestedfix 'node/src/d.mjs' )"; N3EC="$( rcjs testgatenestedfix 'node/src/d.mjs' )"
+{ [ "$N3EC" = 4 ] && printf '%s' "$N3" | grep -qF 'run="cd node &amp;&amp; node --test src/d.test.mjs"'; } \
+    && ok '(n3) #335: nested node:test package -> run="cd node &amp;&amp; node --test src/d.test.mjs"' \
+    || no "(n3) #335 nested node:test run= not package-relative (exit=$N3EC): $N3"
+# (n4) #335: node's runner globs its file arguments, so a bracketed path has no spelling that runs it (`c[1]`
+#      matched no file; node exits 1). The honest answer is no run=, which is run_unknown.
+N4="$( runjs testgatenestedfix 'node/src/c[1].mjs' )"; N4EC="$( rcjs testgatenestedfix 'node/src/c[1].mjs' )"
+{ [ "$N4EC" = 4 ] && printf '%s' "$N4" | grep -qF '<t p="node/src/c[1].test.mjs" partner="1" hops="1" run_unknown="1"/>'; } \
+    && ok '(n4) #335: bracketed node:test path -> run_unknown="1", never a zero-test command' \
+    || no "(n4) #335 bracketed node:test path still spelled (exit=$N4EC): $N4"
+
+# (n5) #335: jest reads its argument as a regex, so a bracketed route path is backslash-escaped. Unescaped,
+#      `app/[slug]/page.test.ts` is a character class, matches no file, and jest exits 1 ("No tests found").
+N5="$( runjs testgatenestedfix 'jest/app/[slug]/page.ts' )"; N5EC="$( rcjs testgatenestedfix 'jest/app/[slug]/page.ts' )"
+{ [ "$N5EC" = 4 ] && printf '%s' "$N5" | grep -qF 'npx jest &apos;app/\[slug\]/page\.test\.ts&apos;'; } \
+    && ok "(n5) #335: bracketed jest path -> regex-escaped filter" \
+    || no "(n5) #335 bracketed jest path not escaped (exit=$N5EC): $N5"
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail
+
