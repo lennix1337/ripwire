@@ -1620,6 +1620,25 @@ inline TypeWrap typeWrapOf( CallResultFamily f, std::string_view name ) noexcept
 }
 // Binding::resultIndex of a record about a WHOLE result (a single non-tuple result; a Rust `let t = pair()?` binding all of it).
 inline constexpr std::uint8_t kWholeResult = 0xFF;
+// lane iface-peel (LangFacts::returnTypedDispatchLet): a ReturnType whose unwrapDepth carries this bit names a TRAIT the result
+// dispatches through (Rust `-> &dyn T` / `-> Box<dyn T>` / `-> impl T`), never a class: typeName = the trait, importedName = its
+// path when qualified. No call-result reader that compares depths can match it by accident (a call's own depth never has the
+// bit); graph.h typeCallResults alone reads it, and types the local as SOME implementor of the trait (ReceiverEvidence::LocalFact
+// iface). The low bits stay the Result/Option layers (always 0 today: a layered trait object is not read).
+inline constexpr std::uint8_t kDispatchResultBit = 0x80;
+// lane iface-peel fix 1 (B1): the memberVia of a C++ MEMBER record (isCompose, a field name) whose written type is a TEMPLATE
+// PARAMETER of an enclosing `template <…>` (`template <class Handle> class S { Handle h_; }`): the name is the parameter, never
+// the smart-pointer alias of that spelling in some namespace. resolve.h SmartAliasPeel::pointeeOf alone reads it, to keep the
+// member's base reading; every other reader of a compose record ignores memberVia (a C++ member record carries none otherwise).
+inline constexpr std::string_view kTemplateParamMemberType = "<tparam>";
+// lane iface-peel fix 1 (B1): the LEXICAL SCOPE of a C++ declaration, written on its record's memberRoot (a compose record's only
+// use of that field): the enclosing namespaces and classes, outermost first, joined by "::" — a class element is prefixed "#"
+// (`Envoy::Network::#ConnectionImpl`), an anonymous namespace is kAnonScopeElement, an inline namespace is transparent (left
+// out). kLocalScope is a declaration inside a function body (its scope is a block this index does not model). Written by
+// ingest_relations.h cppScopePath on an alias record and on a member record (the member's class last); read by resolve.h
+// SmartAliasPeel alone. The C++ call-result bindings are OFF (callResultFamilyOf), so no Namespace record exists to read.
+inline constexpr std::string_view kAnonScopeElement = "(anon)";
+inline constexpr std::string_view kLocalScope       = "(local)";
 // The importedName of a Ruby class-object binding that acts on each class INCLUDING the module, not on the module
 // (LocalBindKind::RubySingletonDef, RubyClassMixin; parser version 145): written in a concern's `included do`, or a def
 // in its `class_methods do`.
