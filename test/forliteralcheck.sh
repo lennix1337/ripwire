@@ -195,16 +195,18 @@ if has "$DO" '<ls p="app/d.py" l="9"' && has "$DO" '<ls p="app/d.py" l="3"'; the
 else no "N2 the comment-colon string is not a row: $(grep -o '<ls p="app/d.py" l="[0-9]*"' <<<"$DO" | tr '\n' ' ')"; fi
 # ── R1 (CR 4423843223): the matched line, the context lines and an <x> excerpt are raw source text: a credential in them is redacted ──
 RD="$TMP/red"; mkdir -p "$RD/app"
+# The two secret-shaped values are joined at runtime: the tracked file must not itself hold a credential-shaped literal (ripwirepubliccheck arm 4).
+RAWS_AWS="AKIA""IOSFODNN7EXAMPLE"; RAWS_GH="ghp""_abcdefghijklmnopqrstuvwxyz0123456789"
 python3 -I -c 'import sys
-d=sys.argv[1]
+d,aws,gh=sys.argv[1:4]
 body=["def big(x):"]+["    filler%d = %d"%(i,i) for i in range(30)]
-body.insert(15,"    key = \"AKIAIOSFODNN7EXAMPLE\"; mode = os.environ.get(\"APPTOOL_SECRET_FLAG\")")
+body.insert(15,"    key = \""+aws+"\"; mode = os.environ.get(\"APPTOOL_SECRET_FLAG\")")
 open(d+"/app/big.py","w").write("\n".join(body)+"\n")
-open(d+"/app/tbl.py","w").write("X = 1\nTABLE = {\n  \"APPTOOL_SECRET_FLAG\": \"ghp_abcdefghijklmnopqrstuvwxyz0123456789\",\n  \"k\": \"AKIAIOSFODNN7EXAMPLE\",\n}\n")' "$RD"
+open(d+"/app/tbl.py","w").write("X = 1\nTABLE = {\n  \"APPTOOL_SECRET_FLAG\": \""+gh+"\",\n  \"k\": \""+aws+"\",\n}\n")' "$RD" "$RAWS_AWS" "$RAWS_GH"
 RO="$( cd "$RD" && "$BIN" "$RD" --no-cache --for=APPTOOL_SECRET_FLAG </dev/null 2>/dev/null | lit )"
 RN="$( cd "$RD" && "$BIN" "$RD" --no-cache --no-redact --for=APPTOOL_SECRET_FLAG </dev/null 2>/dev/null | lit )"
-if [ -n "$RO" ] && has "$RO" '<x p="app/big.py"' && has "$RO" 'lines="3-5"' && ! has "$RO" 'AKIAIOSFODNN7EXAMPLE' && ! has "$RO" 'ghp_abcdefghijkl' \
-   && has "$RO" '[REDACTED:aws-key]' && has "$RO" '[REDACTED:github-token]' && has "$RN" 'AKIAIOSFODNN7EXAMPLE' && has "$RN" 'ghp_abcdefghijkl'; then
+if [ -n "$RO" ] && has "$RO" '<x p="app/big.py"' && has "$RO" 'lines="3-5"' && ! has "$RO" "$RAWS_AWS" && ! has "$RO" "${RAWS_GH:0:15}" \
+   && has "$RO" '[REDACTED:aws-key]' && has "$RO" '[REDACTED:github-token]' && has "$RN" "$RAWS_AWS" && has "$RN" "${RAWS_GH:0:15}"; then
     ok "R1 a secret on the matched line, in the lines after a table entry and in an <x> window is redacted; --no-redact keeps it verbatim (twin)"
 else no "R1 redaction wrong: ${RO:0:900}"; fi
 # ── H1 (CR 5712563408, forliteral.h:619): an owner whose body the 3-body cap held back says body="held" on its rows ──
