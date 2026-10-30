@@ -133,8 +133,10 @@ else no "L10 caps wrong (ls=$nls bodies=$nbx): ${M:0:500}"; fi
 # ── L5 / L6 ──
 neg=0
 for t in 'apptool_render_mode' '"full" mode' 'the `APPTOOL` switch' 'ABC_D toggle' 'NOPE_NOT_HERE_ANYWHERE' 'APPTOOL_TEST_ONLY' '"detected" banner'; do
-    o="$( run "--for=$t" )"
-    if has "$o" '<lit '; then neg=1; no "L5/L6 a block rode on: $t"; fi
+    o="$( run "--for=$t" )"; nrc=$?
+    # CR 5712563408 (forliteralcheck.sh:136): an absence arm reads a run whose success was checked
+    if [ "$nrc" -ne 0 ] || [ -z "$o" ]; then neg=1; no "L5/L6 the task did not answer (rc=$nrc): $t"
+    elif has "$o" '<lit '; then neg=1; no "L5/L6 a block rode on: $t"; fi
 done
 if [ "$neg" -eq 0 ]; then
     ok "L5/L6/L6b no block: lower-case word, one-word quotes, backticked word, short CONST, CONST with no hit, test/doc-only CONST"
@@ -167,9 +169,9 @@ noLegend(){ python3 -I -c 'import sys,re;print(re.sub(r"<!-- ripwire for lit:.*?
 LC="$( run --for=APPTOOL_RENDER_MODE | legendOf )"; LF="$( run --for=APPTOOL_RENDER_MODE --legend=full | legendOf )"
 PC="$( run --for=APPTOOL_RENDER_MODE | lit | noLegend )"; PF="$( run --for=APPTOOL_RENDER_MODE --legend=full | lit | noLegend )"
 # train 42b T-4 (rv-mf1-lit-delta N3): the compact form names every attribute the element prints (hits= src= shown= capped= shape=
-# bytes= next= and T-3's cut=) and says of= is the body's line range, never "whole": the ceiling moved 340 -> 450 for those names only
-if [ "${#LC}" -le 450 ] && [ "${#LC}" -ge 250 ] && [ "${#LF}" -ge 700 ] && has "$LF" 'docs, shell, config' && [ "$LC" != "MISSING" ] \
-   && has "$LC" 'k=' && has "$LC" 'comment=' && has "$LC" 'floor=' && has "$LC" 'body=above' && [ -n "$PC" ] && [ "$PC" = "$PF" ] \
+# bytes= next= and T-3's cut=) and says of= is the body's line range, never "whole": the ceiling moved 340 -> 450 for those names only; CR harvest 42b: 450 -> 470 for body=held (the cap's disclosure)
+if [ "${#LC}" -le 470 ] && [ "${#LC}" -ge 250 ] && [ "${#LF}" -ge 700 ] && has "$LF" 'docs, shell, config' && [ "$LC" != "MISSING" ] \
+   && has "$LC" 'k=' && has "$LC" 'comment=' && has "$LC" 'floor=' && has "$LC" 'body=above' && has "$LC" 'held' && [ -n "$PC" ] && [ "$PC" = "$PF" ] \
    && has "$LC" 'hits=' && has "$LC" 'src=' && has "$LC" 'shown=' && has "$LC" 'capped=' && has "$LC" 'shape=' && has "$LC" 'bytes=' \
    && has "$LC" 'next=' && has "$LC" 'cut=' && has "$LF" 'cut=' && has "$LC" 'of= body lines' && ! has "$LC" 'of= whole'; then
     ok "L11 compact legend ${#LC} B (the default); --legend=full keeps ${#LF} B naming docs, shell, config; same payload"
@@ -191,6 +193,36 @@ printf 'def colon_comment(x):\n    x = x + 1\n    """bad things happened here in
 DO="$( cd "$DOC" && "$BIN" "$DOC" --no-cache '--for=where is the "bad things happened here" string' </dev/null 2>/dev/null | lit )"
 if has "$DO" '<ls p="app/d.py" l="9"' && has "$DO" '<ls p="app/d.py" l="3"'; then ok "N2 a mid-body string after a '# note:' comment is a row (l=9), like its twin (l=3)"
 else no "N2 the comment-colon string is not a row: $(grep -o '<ls p="app/d.py" l="[0-9]*"' <<<"$DO" | tr '\n' ' ')"; fi
+# ── R1 (CR 4423843223): the matched line, the context lines and an <x> excerpt are raw source text: a credential in them is redacted ──
+RD="$TMP/red"; mkdir -p "$RD/app"
+python3 -I -c 'import sys
+d=sys.argv[1]
+body=["def big(x):"]+["    filler%d = %d"%(i,i) for i in range(30)]
+body.insert(15,"    key = \"AKIAIOSFODNN7EXAMPLE\"; mode = os.environ.get(\"APPTOOL_SECRET_FLAG\")")
+open(d+"/app/big.py","w").write("\n".join(body)+"\n")
+open(d+"/app/tbl.py","w").write("X = 1\nTABLE = {\n  \"APPTOOL_SECRET_FLAG\": \"ghp_abcdefghijklmnopqrstuvwxyz0123456789\",\n  \"k\": \"AKIAIOSFODNN7EXAMPLE\",\n}\n")' "$RD"
+RO="$( cd "$RD" && "$BIN" "$RD" --no-cache --for=APPTOOL_SECRET_FLAG </dev/null 2>/dev/null | lit )"
+RN="$( cd "$RD" && "$BIN" "$RD" --no-cache --no-redact --for=APPTOOL_SECRET_FLAG </dev/null 2>/dev/null | lit )"
+if [ -n "$RO" ] && has "$RO" '<x p="app/big.py"' && has "$RO" 'lines="3-5"' && ! has "$RO" 'AKIAIOSFODNN7EXAMPLE' && ! has "$RO" 'ghp_abcdefghijkl' \
+   && has "$RO" '[REDACTED:aws-key]' && has "$RO" '[REDACTED:github-token]' && has "$RN" 'AKIAIOSFODNN7EXAMPLE' && has "$RN" 'ghp_abcdefghijkl'; then
+    ok "R1 a secret on the matched line, in the lines after a table entry and in an <x> window is redacted; --no-redact keeps it verbatim (twin)"
+else no "R1 redaction wrong: ${RO:0:900}"; fi
+# ── H1 (CR 5712563408, forliteral.h:619): an owner whose body the 3-body cap held back says body="held" on its rows ──
+nheld="$( grep -o 'body="held"' <<<"$M" | wc -l | tr -d ' ' )"; nabove="$( grep -o 'body="above"' <<<"$M" | wc -l | tr -d ' ' )"
+if [ "$nheld" = "5" ] && [ "$nabove" = "0" ] && [ "$nbx" = "3" ]; then ok "H1 ten readers: 3 bodies printed, the 5 other shown rows say body=\"held\""
+else no "H1 held markers wrong: held=$nheld above=$nabove bodies=$nbx"; fi
+TWH="$( run --for=APPTOOL_RENDER_MODE | lit )"
+if ! has "$TWH" 'body="held"'; then ok "H1 twin: an answer inside the cap carries no held marker"; else no "H1 twin: held marker with bodies under the cap"; fi
+# ── F1 (CR 5712563408, forliteral.h:500): 70 source files hold the literal, 64 are classified: the rest are k=? and comment= is a floor ──
+FL="$TMP/floor"; mkdir -p "$FL/app"
+python3 -I -c 'import sys
+d=sys.argv[1]
+for i in range(70):
+    open("%s/app/m%02d.py"%(d,i),"w").write("# APPTOOL_FLOOR_FLAG is described here\ndef f%d():\n    return \"APPTOOL_FLOOR_FLAG\"\n"%i)' "$FL"
+FO="$( cd "$FL" && "$BIN" "$FL" --no-cache --for=APPTOOL_FLOOR_FLAG </dev/null 2>/dev/null | lit )"
+if has "$FO" 'floor="1"'; then ok "F1 a literal in more than 64 source files: floor=\"1\" (comment= cannot see the unclassified ones)"
+else no "F1 floor flag missing with unclassified sites: ${FO:0:400}"; fi
+if ! has "$L" 'floor="1"'; then ok "F1 twin: a fully classified answer carries no floor"; else no "F1 twin: floor on a clean answer"; fi
 # ── X1-X3 ──
 if [ "$A" = "$( run --for=APPTOOL_RENDER_MODE )" ]; then ok "X1 deterministic"; else no "X1 two runs differ"; fi
 if command -v xmllint >/dev/null 2>&1; then

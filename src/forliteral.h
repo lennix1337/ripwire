@@ -26,9 +26,9 @@
 //     (at most kForLiteralBodies owners in row order), or <x> an excerpt of a longer one: its signature line plus one window
 //     [site-1, site+5] per shown site (windows merged only where they touch; l= lists the ranges, an ellipsis line sits between
 //     them; of= is the body's lines; next= names the whole body); a body this answer already printed is not repeated
-//     (body="above" on its rows).
+//     (body="above" on its rows); an owner past the cap prints no body and its rows say body="held".
 // Several sites are always listed with counts: the block never picks one. floor="1" when the scan stopped early (budget,
-// unreadable files): every count is then a floor. No source site, nothing printed (a literal met only in tests, docs or comments
+// unreadable files) or a source site was left unclassified (k="?": comment= cannot see it): every count is then a floor. No source site, nothing printed (a literal met only in tests, docs or comments
 // anchors nothing; never a "the literal is unused" claim).
 //
 // WHEN. The default regime of the XML dialect, a single root: an explicit --token-budget, --json, --columnar and --candidates
@@ -45,6 +45,7 @@
 #include "model.h"
 #include "nextverb.h"        // nextFlag / nextAttrXml
 #include "receiverevidence.h"   // ReceiverEvidence::callableKind
+#include "redact.h"          // redactInPlace — raw source text is redacted before it is emitted
 #include "sarif.h"           // rootPrefixOf / rootRelativeUri
 #include "search.h"          // grepCollect / grepEnrich / isBareWordCodePath
 #include "serialize.h"       // escapeXml / appendCdataSafe / truncateUtf8WithEllipsis
@@ -87,13 +88,13 @@ inline constexpr std::string_view kForLiteralLegend =
     "docstrings, test= test paths, doc= docs, shell, config: counted, never rows. b = a shown site's whole function (10 lines or "
     "fewer), x = an excerpt of a longer one (l= its line ranges: the signature line and a window around each site, an ellipsis "
     "line between them; of= the body's lines; cut=1: a line over 200 bytes was cut; next= the whole body); body=above: printed "
-    "above. floor=1: scan stopped early, "
-    "counts are floors; next= on lit lists every site. -->";
+    "above, held: its owner body is past the 3-body cap, not printed. floor=1: scan stopped early or a site "
+    "was not classified (k=?), counts are floors; next= on lit lists every site. -->";
 inline constexpr std::string_view kForCompactLiteralLegend =
     "<!-- ripwire for lit: byte-exact scan for the task's literal (s=, shape=), not in est_tokens (bytes=). ls: a source line with it "
     "(k=string|code|?; in=/ink= its def; lines=a-b adds the lines after). hits=/src= all/source lines (shown=; capped=1: more); "
     "comment= test= doc= counted, not rows; floor=1: floors. b whole fn, x excerpt (l= ranges, \xE2\x80\xA6 between; of= body lines; "
-    "cut=1: lines cut; next= whole); body=above: printed above. -->";
+    "cut=1: lines cut; next= whole); body=above|held: printed above|past the 3-body cap. -->";
 static_assert( kForLiteralLegend.find( "--", 4 ) == kForLiteralLegend.size() - 3 && kForCompactLiteralLegend.find( "--", 4 ) == kForCompactLiteralLegend.size() - 3,
                "the only double hyphen in a legend comment is its closing: one inside is not well-formed XML" );
 
@@ -430,7 +431,7 @@ inline std::string rangesAttr( const std::vector<LineRange>& ranges )
 // <x> for the body [first, last] of `s` in `text`: the signature line and one window per site line (l= lists the ranges, of= the body,
 // next= the whole body)
 inline std::string excerptElement( const std::string& text, const std::string& path, const Symbol& s, std::uint32_t first, std::uint32_t last,
-                                   const std::vector<std::uint32_t>& siteLines )
+                                   const std::vector<std::uint32_t>& siteLines, RedactCounts* redact )
 {
     std::vector<char>      esc;
     const std::vector<LineRange> ranges = excerptRanges( siteLines, first, last );
@@ -442,6 +443,7 @@ inline std::string excerptElement( const std::string& text, const std::string& p
     // train 42b T-3: each window line is cut at kForLiteralLineBytes like an <ls> row (a minified one-line body printed 48.9 KB
     // whole); cut="1" says a line was cut, next= prints the whole body
     std::string lines = linesOfRanges( text, ranges );
+    redactInPlace( lines, redact );   // CR 4423843223: a window of raw source is a body-emission seam; redact BEFORE the cut so a key is never half-cut
     const bool  cut   = capLineBytes( lines, kForLiteralLineBytes );
     x += cut ? " cut=\"1\"" : "";
     x += nextAttrXml( nextFlag( "--expand=", path + ":" + std::to_string( s.line ) + ":" + s.name ) );
@@ -506,6 +508,7 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
     std::uint32_t loadedFile = UINT32_MAX;
     std::string   loadedText;
     std::vector<lit_detail::Site> rows;
+    bool anyUnclassified = false;   // CR (train 42b harvest): a source site the span tier never saw is invisible to comment=, which is then a floor
     for( lit_detail::Site& s : src )
     {
         std::size_t idx = SIZE_MAX;
@@ -543,6 +546,10 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
                 }
             }
             s.k = t == SpanTier::String ? 's' : 'c';
+        }
+        else
+        {
+            anyUnclassified = true;   // past kForLiteralTierFiles, or a file the span tier did not parse: k="?"
         }
         rows.push_back( s );
     }
@@ -600,7 +607,7 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
     // ── the owner bodies: distinct callable owners of the shown rows, in row order ───────────────────────────────────────────
     std::vector<char>   esc;
     std::vector<NodeId> owners;
-    std::vector<char>   ownerAbove;   // parallel: already printed by the answer
+    std::vector<char>   ownerAbove;   // parallel: 1 = already printed by the answer, 2 = body held by the kForLiteralBodies cap, 0 = otherwise
     std::string         bodiesXml;
     for( const GrepHit& h : hits )
     {
@@ -618,7 +625,7 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
         head += "\"";
         const bool above = served.find( head ) != std::string_view::npos;
         owners.push_back( h.enclosingId );
-        ownerAbove.push_back( above ? 1 : 0 );
+        ownerAbove.push_back( above ? 1 : ( out.bodies >= kForLiteralBodies ? 2 : 0 ) );
         if( above || out.bodies >= kForLiteralBodies )
         {
             continue;
@@ -649,7 +656,7 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
                 siteLines.push_back( o.line );
             }
         }
-        bodiesXml += lit_detail::excerptElement( text, path, s, first, last, siteLines );
+        bodiesXml += lit_detail::excerptElement( text, path, s, first, last, siteLines, redact );
         ++out.bodies;
     }
 
@@ -672,14 +679,15 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
             rowsXml += symTag( ing.symbols[h.enclosingId].kind );
             rowsXml += "\"";
             const auto it = std::find( owners.begin(), owners.end(), h.enclosingId );
-            if( it != owners.end() && ownerAbove[std::size_t( it - owners.begin() )] )
+            if( it != owners.end() && ownerAbove[std::size_t( it - owners.begin() )] != 0 )
             {
-                rowsXml += " body=\"above\"";
+                rowsXml += ownerAbove[std::size_t( it - owners.begin() )] == 1 ? " body=\"above\"" : " body=\"held\"";
             }
         }
         std::string line = h.text;
         const std::size_t lead = line.find_first_not_of( " \t" );
         line = lead == std::string::npos ? std::string() : line.substr( lead );
+        redactInPlace( line, redact );   // CR 4423843223: the matched line is raw source text; redact before the cut
         truncateUtf8WithEllipsis( line, kForLiteralLineBytes );
         const bool callableOwner = h.enclosingId != kNoNode && ReceiverEvidence::callableKind( ing.symbols[h.enclosingId].kind );
         if( rows[i].k == 's' && !callableOwner && contextRows < kForLiteralContextRows )
@@ -691,6 +699,7 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
             if( !text.empty() && b > h.line )
             {
                 line = lit_detail::linesOfRanges( text, { lit_detail::LineRange{ h.line, b } } );
+                redactInPlace( line, redact );   // CR 4423843223: the lines after a table entry are raw source text too
                 truncateUtf8WithEllipsis( line, kForLiteralLineBytes * ( kForLiteralContextLines + 1 ) );
                 rowsXml += " lines=\"" + std::to_string( h.line ) + "-" + std::to_string( b ) + "\"";
                 ++contextRows;
@@ -714,7 +723,7 @@ inline ForLiteralRender renderForLiteral( const IngestResult& ing, const ForLite
         x += " capped=\"1\"";
     }
     x += " comment=\"" + std::to_string( commentHits ) + "\" test=\"" + std::to_string( testHits ) + "\" doc=\"" + std::to_string( docHits ) + "\"";
-    if( !collected.cleanScan() )
+    if( !collected.cleanScan() || anyUnclassified )
     {
         x += " floor=\"1\"";
     }
