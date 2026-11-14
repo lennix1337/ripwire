@@ -14,7 +14,7 @@
                                  // by hand with ingest.cpp's kLangTable per its own header comment)
 #include "infra/sparseCsr.h"     // first-party infra math (src/infra/)
 #include "infra/csrverify.h"     // structural gate, ASSUME'd after every production CSR build
-#include "infra/hashutil.h"      // fnv1aAbsorb — internDeclinedList buckets a declined call's candidate list by its bytes
+#include "infra/hashutil.h"      // packPair — composite integer keys
 #include "pagerank.h"            // double-precision PageRank kernel over float CSR storage
 #include "prconverge.h"          // RankDisclosure — the power iteration's own account, carried with its result
 #include "smallvec.h"            // rw::SmallVec — THE ONE ALIAS (src/smallvec.h picks the implementation)
@@ -33,6 +33,7 @@
 #include "docparse.h"            // detail::readWholeFile — resolveAtSeed reads the seed line's byte range off disk
 #include "cppscopechain.h"       // EditCheckBraceLexer / editCheckWrittenQualifier — the written-spelling tier's C/C++ full chain
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
+#include "memstats.h"      // M0 MEM-STATS: RIPWIRE_STATS footprint readings at buildGraph's tables-built, resolve-done and end
 
 #include <algorithm>
 #include <array>
@@ -214,17 +215,26 @@ struct Graph
     // unaccounted alert and copied into pinCensus when a census is armed; its external/unresolved/declined buckets
     // equal those header gauges by construction.
     CallDispositionCounts      callDispositions{};
-    std::vector<std::string>   localityKey; // per-symbol S6-C SCORING key (resolve.h::localityKeyOf): canonId when scoped,
-                                            // `path::name` when not. Read ONLY by the S6-C block; never an identity.
+    std::vector<std::string>   localityKey; // per-symbol S6-C SCORING key (resolve.h::localityKeyOf) for an UNSCOPED symbol,
+                                            // `path::name`; EMPTY for a scoped one, whose key is its canonId. Read ONLY through
+                                            // localityKeyAt, by the S6-C block; never an identity. G1b (mem-audit-fable-1111):
+                                            // storing the scoped key too was a second copy of canonId (21 MiB on envoy).
     std::vector<std::string>   canonId;     // per-symbol canonical SCIP-style id `path::scope::name` (S6-C); the
                                             // bare name when no scope is known. The resolution locality tie-break
                                             // and serialize's `id=` attribute both read this. Built in buildGraph.
+    // the S6-C scoring key of symbol `id`: canonId when it is scoped (localityKey holds no copy), else `path::name` — never
+    // empty for a built symbol, since an unscoped key always carries its "::"
+    const std::string& localityKeyAt( NodeId id ) const noexcept
+    {
+        const std::string& own = localityKey[ id ];
+        return own.empty() ? canonId[ id ] : own;
+    }
     std::vector<ComposeEdge>   composeEdges;  // S5-E HAS-A edges (sorted by ownerSym, then typeSym) — OUTSIDE the
                                               // call graph; PageRank and the default map are UNCHANGED by these.
     std::vector<RouteEdge>     routeEdges;    // B6.3 HTTP-route USE→DEF edges (sorted by fromSym, toSym, path) —
                                               // OUTSIDE the call graph, same as composeEdges; empty on any corpus
                                               // with zero detected routes (byte-identical default output).
-    std::vector<std::string>   bindLabel;      // A4-R5 per-symbol cross-language binding label — the JNI
+    SparseLabels               bindLabel;      // A4-R5 per-symbol cross-language binding label — the JNI
                                                // decoded Java name (`pkg.Cls.method`) for a `Java_*` def; ""
                                                // for every other symbol. Rendered as bind="..." by serialize
                                                // (see serialize.h's `bind` param). Empty vector ⇒ no JNI defs
@@ -268,9 +278,9 @@ struct ImplementorRow
 inline std::vector<ImplementorRow> implementorClosure( const std::vector<std::vector<NodeId>>& implementors, NodeId base )
 {
     std::vector<ImplementorRow> rows;
-    HashMap<NodeId, char>       seen;
+    HashSet<NodeId>             seen;
     seen.reserve( 32 );
-    seen.emplace( base, char( 1 ) );
+    seen.insert( base );
     const auto expand = [ & ]( NodeId parent, std::uint32_t depth )
     {
         if( parent >= implementors.size() )
@@ -279,7 +289,7 @@ inline std::vector<ImplementorRow> implementorClosure( const std::vector<std::ve
         }
         for( NodeId child : implementors[ parent ] )
         {
-            if( seen.emplace( child, char( 1 ) ).second )
+            if( seen.insert( child ).second )
             {
                 rows.push_back( ImplementorRow{ child, parent, depth } );
             }
@@ -330,9 +340,8 @@ public:
                 expand( out_.rows[ i ].id, out_.rows[ i ].depth + 1 );
             }
         }
-        for( const auto& [ id, unused ] : other_ )
+        for( const NodeId id : other_ )
         {
-            ( void )unused;
             out_.otherBase += seen_.find( id ) == seen_.end() ? 1u : 0u;
         }
         for( std::size_t i = 0; i < out_.rows.size() && out_.rows[ i ].depth == 1; ++i )   // breadth-first: the direct rows lead
@@ -377,7 +386,7 @@ private:
             const BaseBound b = boundOf( parent, k );
             if( depth >= 2 && b == BaseBound::Other )
             {
-                other_.try_emplace( ( *kids )[ k ], char( 1 ) );
+                other_.insert( ( *kids )[ k ] );
             }
             else
             {
@@ -391,7 +400,7 @@ private:
     LegoClosure                                   out_;
     std::vector<char>                             walk_;    // parallel to rows: 1 = the edge that added the row is proven, so it is walked
     HashMap<NodeId, std::uint32_t>                seen_;    // node → its row index (base → UINT32_MAX)
-    HashMap<NodeId, char>                         other_;   // types reached only through an Other edge
+    HashSet<NodeId>                               other_;   // types reached only through an Other edge
 };
 
 inline LegoClosure legoImplementorClosure( const std::vector<std::vector<NodeId>>& implementors, const std::vector<std::vector<std::uint8_t>>& bound, NodeId base )
@@ -632,7 +641,7 @@ inline const char* provLabel( std::uint8_t prov ) noexcept
     return "";
 }
 // lane L6: the attribute a provenance value is spelled under — via="impl" (how the receiver reached the target, like FE-B's
-// via="name"), prov= for every other value. kProvImpl is the value buildGraph writes for an implEdges edge.
+// via="name"), prov= for every other value. kProvImpl is the value buildGraph writes for an ImplOnly-marked edge.
 inline constexpr std::uint8_t kProvImpl = 6u;
 inline const char* provAttrName( std::uint8_t prov ) noexcept
 {
@@ -1726,15 +1735,77 @@ inline bool localDefOutOfReach( const IngestResult& ing, NodeId c, const Referen
     return s.fileId != r.fileId || r.startByte < row->start || r.startByte >= row->end;
 }
 
-// the candidates of `ids` a call at `r` can reach BY NAME, into `out`; true iff a function-local def was set aside AND
-// something reachable is left (only then does the caller have a narrower set to try first).
-inline bool reachableByName( const IngestResult& ing, const rw::SmallVec<NodeId, 2>& ids, const Reference& r, rw::SmallVec<NodeId, 2>& out )
+// One function-local definition of a name with the one span a call can name it from (REACH-SPLIT): the Symbol row's
+// fileId and the FnLocalScope row's [start, end), copied once per name so a call reads neither. A local def with no
+// recorded span is never out of reach (localDefOutOfReach) and gets no row.
+struct FnLocalReach
 {
+    NodeId        id     = kNoNode;
+    std::uint32_t fileId = 0;
+    std::uint32_t start  = 0;
+    std::uint32_t end    = 0;
+};
+
+// reachableByName's per-call mark: one generation stamp per symbol id, so "is this candidate a local this call set
+// aside" is one load from a dense u32 array, whatever order the lists come in and however many locals a name holds
+struct AsideMarks
+{
+    std::vector<std::uint32_t> stamp;        // per symbol id: the generation that last set it aside
+    std::uint32_t              generation = 0;
+
+    explicit AsideMarks( std::size_t symbolCount ) : stamp( symbolCount, 0 ) {}
+
+    void nextCall()
+    {
+        if( ++generation == 0 )   // wrapped: no stale stamp may equal a live generation
+        {
+            std::ranges::fill( stamp, 0u );
+            generation = 1;
+        }
+    }
+};
+
+// REACH-SPLIT's per-name index (buildFnLocalReachIndex): a byName entry's address -> its FnLocalReach rows; no entry = no local
+struct FnLocalReachIndex
+{
+    std::vector<FnLocalReach> rows;
+    ankerl::unordered_dense::map<const rw::SmallVec<NodeId, 2>*, std::pair<std::uint32_t, std::uint32_t>> rangeOfName;
+    std::span<const FnLocalReach> localsOf( const rw::SmallVec<NodeId, 2>& ids ) const
+    {
+        const auto at = rangeOfName.find( &ids );
+        if( at == rangeOfName.end() ) { return {}; }
+        return std::span<const FnLocalReach>( rows ).subspan( at->second.first, at->second.second - at->second.first );
+    }
+};
+
+// the candidates of `ids` a call at `r` can reach BY NAME, into `out`; true iff a function-local def was set aside AND
+// something reachable is left (only then does the caller have a narrower set to try first). `locals` are the name's
+// function-local defs with their spans; `ids` is a subset of that name's candidate list. Same answer as asking
+// localDefOutOfReach of every candidate, but the locals' spans are read from a dense per-name list instead of a Symbol
+// row and a binary search per candidate, and `out` is built only when one of them is set aside. A name can hold
+// thousands of function-local defs (`result`, `e` on vscode), so set-aside membership is a stamp, never a search.
+inline bool reachableByNameFromLocals( std::span<const FnLocalReach> locals, const rw::SmallVec<NodeId, 2>& ids, const Reference& r,
+                             AsideMarks& marks, rw::SmallVec<NodeId, 2>& out )
+{
+    marks.nextCall();
+    bool anyAside = false;
+    for( const FnLocalReach& local : locals )
+    {
+        if( local.fileId != r.fileId || r.startByte < local.start || r.startByte >= local.end )
+        {
+            marks.stamp[ local.id ] = marks.generation;
+            anyAside                = true;
+        }
+    }
+    if( !anyAside )
+    {
+        return false;   // every local is in reach: nothing to set aside, the caller keeps `ids`
+    }
     out.clear();
     bool setAside = false;
     for( NodeId c : ids )
     {
-        if( localDefOutOfReach( ing, c, r ) )
+        if( marks.stamp[ c ] == marks.generation )
         {
             setAside = true;
         }
@@ -1743,7 +1814,7 @@ inline bool reachableByName( const IngestResult& ing, const rw::SmallVec<NodeId,
             out.push_back( c );
         }
     }
-    ENSURES( out.size() <= ids.size(), "reachableByName only removes candidates" );
+    ENSURES( out.size() <= ids.size(), "reachableByNameFromLocals only removes candidates" );
     return setAside && !out.empty();
 }
 
@@ -1966,6 +2037,47 @@ inline FnPtrBindTables buildFnPtrBindTables( const IngestResult& ing )
 // Both tables empty on a field-capture-free corpus → the resolve loop's Rule 2b block never fires →
 // byte-identical output there. Deterministic: ing.references / ing.bindings are totally ordered; first
 // type wins, a later conflict tombstones, and set membership is order-independent.
+// G1a (mem-audit-fable-1111): the bindings counted by kind, once per build, so every side table keyed by one kind reserves for
+// THAT kind's records instead of the whole family. ankerl's reserve zero-fills 8 B x next-pow2( n / 0.8 ) buckets up front, so a
+// table sized for every binding while it holds one kind is touched memory: on cockroach (Go plus a small JS UI) each JS table held
+// a 23.5 MiB bucket array for a few thousand entries. Every count is an upper bound on the table's distinct keys (a repeated key
+// lands once), and a smaller reserve only moves where rehashing happens: unordered_dense iterates in insertion order, so no
+// output byte depends on it.
+struct BindKindCounts
+{
+    std::array<std::uint32_t, kLocalBindKindCount> all {};     // every record of the kind
+    std::array<std::uint32_t, kLocalBindKindCount> inDef {};   // ... of them inside a definition (fromSymbol != kNoNode)
+    std::size_t localNames = 0;   // Rule 2b's local-name set: the in-definition records but FE-B's receiver evidence (buildFieldNarrowTables' filter)
+
+    static BindKindCounts of( const IngestResult& ing ) noexcept
+    {
+        BindKindCounts counts;
+        for( const Binding& b : ing.bindings )
+        {
+            const std::size_t kind = std::size_t( b.kind );
+            ASSUME( kind < kLocalBindKindCount, "a Binding's kind is a LocalBindKind enumerator (the cache reader validates it)" );
+            const bool inDef = b.fromSymbol != kNoNode;
+            ++counts.all[ kind ];
+            counts.inDef[ kind ] += inDef ? 1u : 0u;
+            counts.localNames += inDef && !isReceiverEvidenceKind( b.kind ) ? 1u : 0u;
+        }
+        return counts;
+    }
+    std::uint32_t allOf( LocalBindKind kind ) const noexcept { return all[ std::size_t( kind ) ]; }
+    std::uint32_t inDefOf( LocalBindKind kind ) const noexcept { return inDef[ std::size_t( kind ) ]; }
+};
+
+// G1c: free a side table's storage NOW, not at the end of its scope — buildGraph's resolve-only tables, before the CSR build
+// stacks on them (mem-audit-fable-1111: the final bump was 6 / 55 / 20 MiB on envoy / cockroach / vscode with every table
+// alive). Moves into a temporary that dies here; the static_assert keeps a type whose move would be a COPY (a peak, not a
+// release) out. The moved-from object is never read again, only destroyed.
+template<class T>
+inline void releaseStorage( T& table ) noexcept
+{
+    static_assert( std::is_nothrow_move_constructible_v<T>, "releaseStorage: a throwing move is a copy — it would raise the peak it means to lower" );
+    [[maybe_unused]] const T released( std::move( table ) );
+}
+
 struct FieldNarrowTables
 {
     HashMap<std::string, FlatRecvType> fieldTypeByClass;
@@ -2099,8 +2211,9 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing, const 
         key.append( cr.fieldName() );
         recordMemberTypeFact( t.fieldTypeByClass, key, cr, aliasPeel );
     }
-    t.localNameSet.reserve( ing.bindings.size() );
-    t.localShadowSpans.reserve( ing.bindings.size() );
+    const BindKindCounts bindCounts = BindKindCounts::of( ing );   // G1a: one pass over the bindings, so each table reserves its own kind
+    t.localNameSet.reserve( bindCounts.localNames );
+    t.localShadowSpans.reserve( bindCounts.inDefOf( LocalBindKind::VarDecl ) );
     for( const Binding& b : ing.bindings )
     {
         // Every record, an assignment's included: localNameEvidence keeps an assignment out of Rule 2b's declared bit (the
@@ -2395,7 +2508,7 @@ inline std::uint32_t pythonModuleFormFile( const Binding& b, std::uint32_t resol
     EXPECTS( !b.typeName.empty(), "typeName.front() below needs a spec: both callers (recordImportBindFile, recordScopedImportBindFile) take bindings buildPythonImportVetoes already filtered for an empty typeName" );
     // ind4b fix 5 (E3): `import pkg.x` binds the ROOT `pkg` (pkg/__init__.py), not pkg.x, but `import pkg.x as pkg` binds pkg.x and the
     // record cannot tell them apart (same var, same typeName): a dotted spec whose first segment is the bound name names no ONE file.
-    if( b.typeName.starts_with( b.var ) && b.typeName.size() > b.var.size() && b.typeName[ b.var.size() ] == '.' )
+    if( b.typeName.str().starts_with( b.var ) && b.typeName.size() > b.var.size() && b.typeName[ b.var.size() ] == '.' )
     {
         return kNoFile;
     }
@@ -2563,7 +2676,7 @@ inline void addPythonLookupNames( const IngestResult& ing, HashMap<std::string, 
     }
     for( const Binding& b : ing.bindings )
     {
-        if( b.kind != LocalBindKind::Import || !b.importedName.starts_with( kPythonFromMemberMark ) )
+        if( b.kind != LocalBindKind::Import || !b.importedName.str().starts_with( kPythonFromMemberMark ) )
         {
             continue;
         }
@@ -2605,7 +2718,7 @@ inline HashMap<std::string, std::vector<PythonNameBind>> buildPythonNameBinds( c
             && wanted.contains( b.var ) && isPythonSourcePath( rootRelPath( ing, b.fileId ) ) )
         {
             key.clear();  Narrower::appendUint( key, b.fileId );  key.push_back( '#' );  key.append( b.var );
-            const bool member = b.importedName.starts_with( kPythonFromMemberMark );
+            const bool member = b.importedName.str().starts_with( kPythonFromMemberMark );
             binds[ key ].push_back( PythonNameBind{ pythonBindScope( ing, b ), b.kind == LocalBindKind::Import, b.importedName == "module",
                                                     member ? b.importedName.substr( kPythonFromMemberMark.size() ) : std::string{} } );
         }
@@ -2706,7 +2819,7 @@ inline void recordSubmoduleBind( const IngestResult& ing, const Binding& b, std:
     {
         return;
     }
-    const std::string_view member = b.importedName.starts_with( kPythonFromMemberMark ) ? std::string_view( b.importedName ).substr( kPythonFromMemberMark.size() )
+    const std::string_view member = b.importedName.str().starts_with( kPythonFromMemberMark ) ? std::string_view( b.importedName ).substr( kPythonFromMemberMark.size() )
                                                                                        : std::string_view( b.var );
     std::string dir;
     bool        ok = true;
@@ -3002,7 +3115,7 @@ inline char pythonImportVerdict( const Binding& b, std::uint32_t resolved, const
     {
         return 'i';
     }
-    const std::size_t dot = b.typeName.find( '.' );
+    const std::size_t dot = b.typeName.str().find( '.' );
     const std::string head( dot == std::string::npos ? std::string_view( b.typeName ) : std::string_view( b.typeName ).substr( 0, dot ) );
     return moduleNames.find( head ) != moduleNames.end() ? 'u' : 'x';
 }
@@ -3607,10 +3720,10 @@ struct JsExportTables
     HashMap<std::string, std::vector<VarSpan>> shadows;
 };
 
-inline JsExportTables buildJsExportTables( const IngestResult& ing )
+inline JsExportTables buildJsExportTablesSized( const IngestResult& ing, const BindKindCounts& bindCounts )
 {
     JsExportTables ex;
-    ex.shadows.reserve( ing.bindings.size() );
+    ex.shadows.reserve( bindCounts.allOf( LocalBindKind::JsShadow ) );
     ex.files.reserve( ing.files.size() );
     for( std::uint32_t fileId = 0; fileId < ing.files.size(); ++fileId )
     {
@@ -3621,8 +3734,8 @@ inline JsExportTables buildJsExportTables( const IngestResult& ing )
     // single map keyed either way would silently drop one of the two forms.
     HashMap<std::string, JsExportFact>& exported = ex.exported;
     HashMap<std::string, std::vector<std::string>> byLocal;
-    exported.reserve( ing.bindings.size() );
-    byLocal.reserve( ing.bindings.size() );
+    exported.reserve( bindCounts.allOf( LocalBindKind::JsExport ) );
+    byLocal.reserve( bindCounts.allOf( LocalBindKind::JsExport ) );
     for( const Binding& b : ing.bindings )
     {
         if( b.kind == LocalBindKind::JsExport )
@@ -3660,6 +3773,10 @@ inline JsExportTables buildJsExportTables( const IngestResult& ing )
     }
     ex.vocabulary = jsModuleVocabulary( ing );
     return ex;
+}
+inline JsExportTables buildJsExportTables( const IngestResult& ing )   // --affected's class-new rows (testmap.h ClassNewJsBinds)
+{
+    return buildJsExportTablesSized( ing, BindKindCounts::of( ing ) );
 }
 
 // The definition `moduleFile` exports under `name` — kNoNode when the export is ambiguous, matches no definition,
@@ -3701,12 +3818,13 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
         tables.rebinds[ jsImportKey( b.fileId, b.var ) ].push_back( { b.spanStart, b.spanEnd } );
         if( b.isFromAssignment ) { tables.pinnedRebinds[ jsImportKey( b.fileId, b.var ) ].push_back( { b.spanStart, b.spanEnd } ); }
     }
-    if( std::none_of( ing.bindings.begin(), ing.bindings.end(), []( const Binding& b ) { return b.kind == LocalBindKind::JsImport; } ) )
+    const BindKindCounts bindCounts = BindKindCounts::of( ing );   // the pass that used to ask only "any JsImport?" (G1a)
+    if( bindCounts.allOf( LocalBindKind::JsImport ) == 0 )
     {
         return tables;
     }
-    tables.targets.reserve( ing.bindings.size() );
-    JsExportTables ex = buildJsExportTables( ing );
+    tables.targets.reserve( bindCounts.allOf( LocalBindKind::JsImport ) );
+    JsExportTables ex = buildJsExportTablesSized( ing, bindCounts );
     for( const Binding& b : ing.bindings )
     {
         if( b.kind != LocalBindKind::JsImport || b.fileId >= ing.files.size() ) { continue; }
@@ -4814,7 +4932,7 @@ struct RubyTopSelf
     const IngestResult&   ing;
     const RubySelfReach&  reach;
     std::vector<Kind>     byFile;        // per file: what self is outside any class
-    HashMap<NodeId, char> viewMethods;   // the defs a view answers besides main's: helper modules', helper_methods'
+    HashSet<NodeId> viewMethods;   // the defs a view answers besides main's: helper modules', helper_methods'
 
     // the self a Ruby call outside any class runs against in r's file, as a key no class shares; nullptr when not known
     const std::string* selfOf( const Reference& r ) const
@@ -4894,7 +5012,7 @@ inline RubyTopSelf buildRubyTopSelf( const IngestResult& ing, const RubySelfReac
         const bool method = s.lang == Lang::Ruby && ( s.kind == SymKind::Function || s.kind == SymKind::Method ) && !s.scope.empty();
         if( method && ( rubyIsHelperFile( ing.files[ s.fileId ] ) || ( !declared.empty() && declared.find( s.scope + "#" + s.name ) != declared.end() ) ) )
         {
-            top.viewMethods.try_emplace( s.id, 1 );
+            top.viewMethods.insert( s.id );
         }
     }
     return top;
@@ -6097,13 +6215,13 @@ inline void rubyFqnNames( const HashMap<std::string, std::vector<RubyAncestorEdg
 // directive sits at the class's own start byte (ingest_relations.h), which is the class symbol's.
 inline void rubyInstanceForwarders( const IngestResult& ing, HashMap<std::string, char>& out )
 {
-    HashMap<std::uint64_t, char> sites;   // (fileId << 32) | the class's start byte
+    HashSet<std::uint64_t> sites;   // (fileId << 32) | the class's start byte
     for( const Include& inc : ing.includes )
     {
         const std::string_view written = std::string_view( inc.target ).substr( rubyConstIsAbsolute( inc.target ) ? 2 : 0 );
         if( inc.isSymbolic && !inc.isValueUse && std::ranges::find( kRubyInstanceForwardingBases, written ) != std::end( kRubyInstanceForwardingBases ) )
         {
-            sites.try_emplace( ( std::uint64_t( inc.fileId ) << 32 ) | inc.byte, 1 );
+            sites.insert( hashutil::packPair( inc.fileId, inc.byte ) );
         }
     }
     if( sites.empty() )
@@ -6112,7 +6230,7 @@ inline void rubyInstanceForwarders( const IngestResult& ing, HashMap<std::string
     }
     for( const Symbol& s : ing.symbols )
     {
-        if( s.lang == Lang::Ruby && s.kind == SymKind::Class && sites.find( ( std::uint64_t( s.fileId ) << 32 ) | s.sigStartByte ) != sites.end() )
+        if( s.lang == Lang::Ruby && s.kind == SymKind::Class && sites.find( hashutil::packPair( s.fileId, s.sigStartByte ) ) != sites.end() )
         {
             out.try_emplace( s.name, 1 );
         }
@@ -8443,7 +8561,7 @@ inline HashMap<std::string, char> pythonRootPackageImports( const IngestResult& 
         if( b.kind == LocalBindKind::Import && b.fileId < ing.files.size()
             && langFacts( langOfPath( ing.files[ b.fileId ] ) ).baseImportEvidence == BaseImportEvidence::PythonImport
             && !b.var.empty() && !b.typeName.empty() && b.typeName.front() != '.'
-            && names.contains( std::string( std::string_view( b.typeName ).substr( 0, b.typeName.find( '.' ) ) ) ) )
+            && names.contains( std::string( std::string_view( b.typeName ).substr( 0, b.typeName.str().find( '.' ) ) ) ) )
         {
             out.try_emplace( jsImportKey( b.fileId, b.var ), char( 1 ) );
         }
@@ -8817,7 +8935,7 @@ inline PythonRenamedImports buildPythonRenamedImports( const IngestResult& ing )
         {
             continue;
         }
-        const bool renamed = b.importedName.starts_with( kPythonFromMemberMark ) && pythonBindScope( ing, b ) == kNoNode;
+        const bool renamed = b.importedName.str().starts_with( kPythonFromMemberMark ) && pythonBindScope( ing, b ) == kNoNode;
         const std::string member = renamed ? b.importedName.substr( kPythonFromMemberMark.size() ) : std::string{};
         const auto [ it, fresh ] = out.renamed.try_emplace( fileNameKey( key, b.fileId, b.var ), member );
         if( !fresh && it->second != member )
@@ -9177,7 +9295,7 @@ inline bool baseBoundOutsideTree( const BaseEvidenceTables& t, const Reference& 
                 {
                     return;
                 }
-                const std::size_t dot = b.importedName.rfind( '.' );
+                const std::size_t dot = b.importedName.str().rfind( '.' );
                 const bool        out = dot != std::string::npos && jvmPackageOutsideTree( *t.recvEv, std::string_view( b.importedName ).substr( 0, dot ) );
                 ( out ? outside : inside ) = true;
             } );
@@ -9254,31 +9372,9 @@ inline bool isMarkdownLinkRef( const Reference& r ) noexcept
 
 // Link-ness is where the reference came from: lang Markdown and not a doc mention. isMarkdownLinkRef also requires a
 // path, which an in-file anchor and a wikilink do not have. A markdown doc mention is neither.
-inline void noteMarkdownLinkSite( HashMap<std::uint64_t, char>& linkEdges, std::uint64_t ekey, const Reference& r )
+inline bool isMarkdownLinkSite( const Reference& r ) noexcept
 {
-    if( langFacts( r.lang ).linkSections && !r.isDocLink )
-    {
-        linkEdges[ ekey ] = 1;
-    }
-}
-
-template <class Edge>
-inline bool graphHasMarkdownLink( const std::vector<Edge>& edges, const HashMap<std::uint64_t, char>& linkEdges )
-{
-    for( const Edge& e : edges )
-    {
-        const std::uint64_t key = ( std::uint64_t( e.from ) << 32 ) | e.to;
-        if( linkEdges.find( key ) != linkEdges.end() )
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-inline std::uint8_t markdownLinkBit( const HashMap<std::uint64_t, char>& linkEdges, std::uint64_t key ) noexcept
-{
-    return linkEdges.find( key ) != linkEdges.end() ? 1u : 0u;
+    return langFacts( r.lang ).linkSections && !r.isDocLink;
 }
 
 // The file node is the Section extractMarkdown builds with bodyByte 0 over [0, size). assignSymbols then
@@ -9581,6 +9677,26 @@ isBuiltinLiteralCall( const rw::IngestResult& ing, const rw::Reference& r,
     return true;
 }
 
+// REACH-SPLIT: one row per function-local def with a recorded span (a def without one is never out of reach), per byName entry
+inline FnLocalReachIndex buildFnLocalReachIndex( const IngestResult& ing, const HashMap<std::string, rw::SmallVec<NodeId, 2>>& byName )
+{
+    FnLocalReachIndex index;
+    if( ing.fnLocalScopes.empty() ) { return index; }
+    for( const auto& [ name, ids ] : byName )
+    {
+        const auto first = std::uint32_t( index.rows.size() );
+        for( NodeId c : ids )
+        {
+            const Symbol& s = ing.symbols[ c ];
+            if( s.fnLocal == 0 ) { continue; }
+            const auto row = std::lower_bound( ing.fnLocalScopes.begin(), ing.fnLocalScopes.end(), c, []( const FnLocalScope& f, NodeId id ) noexcept { return f.id < id; } );
+            if( row != ing.fnLocalScopes.end() && row->id == c ) { index.rows.push_back( { c, s.fileId, row->start, row->end } ); }
+        }
+        if( index.rows.size() > first ) { index.rangeOfName.emplace( &ids, std::pair{ first, std::uint32_t( index.rows.size() ) } ); }
+    }
+    return index;
+}
+
 inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = nullptr, bool census = false )
 {
     PROFILE_SCOPE_DESCRIBE( "buildGraph: resolve refs + build CSR" );
@@ -9606,8 +9722,11 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         PROFILE_SCOPE_DESCRIBE( "buildGraph/1a: canonId + localityKey (per symbol)" );
         for( const Symbol& s : ing.symbols )
         {
-            g.canonId[ s.id ]     = canonicalId( ing.files[ s.fileId ], s.scope, s.name );
-            g.localityKey[ s.id ] = localityKeyOf( ing.files[ s.fileId ], s.scope, s.name );   // == canonId when scoped
+            g.canonId[ s.id ] = canonicalId( ing.files[ s.fileId ], s.scope, s.name );
+            if( s.scope.empty() )   // scoped: localityKeyOf is canonicalId verbatim, so Graph::localityKeyAt reads canonId (G1b)
+            {
+                g.localityKey[ s.id ] = localityKeyOf( ing.files[ s.fileId ], s.scope, s.name );
+            }
         }
     }
 
@@ -9627,11 +9746,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 continue;
             }
-            if( g.bindLabel.empty() )
-            {
-                g.bindLabel.assign( N, std::string() );
-            }
-            g.bindLabel[ s.id ] = std::move( readable );
+            g.bindLabel.add( s.id, std::move( readable ) );   // G1d: sparse, one row per JNI export
         }
     }
 
@@ -9742,7 +9857,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // and is skipped (resolve.h assignmentNamesNoClass, arms 44-46).
     // Deterministic: ing.bindings is in (file, byte, var) order; first binding wins, a later conflict tombstones.
     HashMap<std::string, FlatRecvType> varType;
-    varType.reserve( ing.bindings.size() );
+    varType.reserve( BindKindCounts::of( ing ).inDefOf( LocalBindKind::Type ) );   // G1a: the Type records in a definition, not every binding
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/1h: varType binding table" );
         std::string key;   // reused key buffer — same "<fromSymbol>#var" bytes as before, one alloc amortized
@@ -9763,15 +9878,15 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
 
     // P2-D Rule 2b field-narrow tables (class#field → declared type, plus the local-shadow veto set) —
     // built by buildFieldNarrowTables above; consumed via Narrower::rule2bFieldRecvType in the resolve loop.
-    const FieldNarrowTables fieldNarrow = buildFieldNarrowTables( ing, classNames );
+    FieldNarrowTables fieldNarrow = buildFieldNarrowTables( ing, classNames );
 
     // Phase 5 external-name veto evidence (docs/EVALS.md "Phase 5") — built by buildExternalVetoTables above;
     // consumed by the veto step in the resolve loop, after every receiver rule has missed.
-    const ExternalVetoTables extVeto = buildExternalVetoTables( ing );
+    ExternalVetoTables extVeto = buildExternalVetoTables( ing );
 
     // ── L3 fn-pointer/callback binding tables (var→FUNCTION, Rule 2's exact discipline) — built by
     // buildFnPtrBindTables above; consumed via Narrower::fnPtrBindingTarget in the resolve loop below.
-    const FnPtrBindTables fnBinds  = buildFnPtrBindTables( ing );
+    FnPtrBindTables fnBinds  = buildFnPtrBindTables( ing );
     const bool fnBindActive        = !fnBinds.varFn.empty() || !fnBinds.varFnFile.empty();
 
     // SameInclude table: caller fileId → the sorted, deduped set of fileIds it TRANSITIVELY #includes,
@@ -9795,11 +9910,11 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     auto [ includeAdj, includeContext ] = buildPreciseIncludeAdjWithContext( ing, /*dedup=*/true, /*lazyPairsOut=*/nullptr, /*forCallNarrow=*/true,
                                                                              /*importsUnresolvedOut=*/nullptr, /*extrasOut=*/nullptr,
                                                                              kCallNarrowReadsCIncludeRoots ? &rule3Adj : nullptr );
-    const rw::FileSetStore fileIncludes  = transitiveIncludeSet( includeAdj );
-    const rw::FileSetStore rule3Closure  = rule3Adj.empty() ? rw::FileSetStore {} : transitiveIncludeSet( rule3Adj );
+    rw::FileSetStore fileIncludes  = transitiveIncludeSet( includeAdj );
+    rw::FileSetStore rule3Closure  = rule3Adj.empty() ? rw::FileSetStore {} : transitiveIncludeSet( rule3Adj );
     const rw::FileSetStore& rule3Includes = rule3Adj.empty() ? fileIncludes : rule3Closure;
-    const CppQualifierScopes cppQualScopes = buildCppQualifierScopes( ing );   // CPP-EXTQUAL-VETO (a), read at Rule 3 below
-    const JsImportTables jsImports = buildJsImportTables( ing, includeContext.fileRoot ? &includeContext : nullptr );
+    CppQualifierScopes cppQualScopes = buildCppQualifierScopes( ing );   // CPP-EXTQUAL-VETO (a), read at Rule 3 below
+    JsImportTables jsImports = buildJsImportTables( ing, includeContext.fileRoot ? &includeContext : nullptr );
     // per-symbol fileId view for Rule 3 (group a candidate def by its file without passing the whole IngestResult).
     std::vector<std::uint32_t> symFileId( N );
     {
@@ -9885,13 +10000,13 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     ScopedRecvDecls scopedRecvDecls = buildScopedRecvDecls( ing );   // not const: (L) call-result typing fills an `auto` declaration's type
     const HashMap<std::string, std::vector<std::string>> usingReexports = buildUsingReexports( ing );
     const Narrower narrower( canonByName, varType, scopedRecvDecls, fileIncludes, symFileId, usingReexports, &rule3Includes );
-    const HashMap<std::string, char> memberFields = Narrower::memberFieldNames( ing );   // Rule 2c's member-field veto and Rule 2b's declared-member set, "<Owner>#<field>" (C/C++)
+    HashMap<std::string, char> memberFields = Narrower::memberFieldNames( ing );   // Rule 2c's member-field veto and Rule 2b's declared-member set, "<Owner>#<field>" (C/C++)
     // Issue #74: the same Narrower over Java's containment-derived `Class::method` map, so a proven
     // `Type::method` receiver resolves through the ONE type-side probe (methodOnTypeOrBases) instead of a
     // second copy of its base walk. A separate instance rather than extra keys in canonByName: merging
     // Java members into the shared map would put them in reach of the Kotlin↔Java bridge's Rule-1 lookups,
     // which is a resolution change #74 does not ask for. Empty map on a Java-free corpus ⇒ never hits.
-    const HashMap<std::string, rw::SmallVec<NodeId, 2>> javaTypeMembers = buildJavaTypeMembers( ing );
+    HashMap<std::string, rw::SmallVec<NodeId, 2>> javaTypeMembers = buildJavaTypeMembers( ing );
     const Narrower javaNarrower( javaTypeMembers, varType, scopedRecvDecls, fileIncludes, symFileId, usingReexports );
     const ElixirResolver elixirResolver( ing );
     // ONE apply step for every receiver rule (1 / 2 / 2c / 2b): keep the rule's definition ids that are
@@ -9920,8 +10035,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // The builtin-method name gate (BuiltinMethodGate above): decides, in Rule 3's place, the calls whose name is a
     // method of the caller language's builtin map/list/set/string type. Inert (active=false) on a corpus with no
     // symbol in a gated language.
-    const BuiltinMethodGate builtinGate = buildBuiltinMethodGate( ing, externalVeto, extVeto, includeAdj, jsImports );
-    const FalseEdgeRules    falseEdges  = buildFalseEdgeRules( ing, classNames, externalVeto, extVeto, includeAdj );   // FE-A (test/falseedgecheck.sh)
+    BuiltinMethodGate builtinGate = buildBuiltinMethodGate( ing, externalVeto, extVeto, includeAdj, jsImports );
+    FalseEdgeRules    falseEdges  = buildFalseEdgeRules( ing, classNames, externalVeto, extVeto, includeAdj );   // FE-A (test/falseedgecheck.sh)
     rw::SmallVec<NodeId, 2> feKept;                                                                        // its narrowed candidates, reused
     std::vector<NodeId>     gateRefused;   // reused: a gated call's targets refused for want of evidence (the list a decline records)
     const auto vetoExternal = [ & ]( const Reference& ref ) -> CallDisposition
@@ -9936,9 +10051,12 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
 
     // accumulate per (from,to): summed per-ref confidence + an integer ref count (key = from<<32|to).
     // weight = (confSum/nref)·√nref = confidence·√num_refs — diminishing returns on repeat refs.
-    struct EdgeAcc { float confSum = 0.f; std::uint32_t nref = 0; };
+    struct EdgeAcc { float confSum = 0.f; std::uint32_t nref = 0; std::uint8_t marks = 0; };   // marks: resolve.h EdgeMark (EDGE-FLAGS)
     HashMap<std::uint64_t, EdgeAcc> acc;
-    acc.reserve( ing.references.size() );        // start past the 4-bucket / 0.8-load rehash cascade
+    acc.reserve( std::min<std::size_t>( N, ing.references.size() ) );   // past the 4-bucket / 0.8-load rehash cascade. G1a: one edge per SYMBOL,
+                        // not per reference — the table ends at 1.5-8 edges a symbol, and reserve( references ) zero-filled 16-32 MiB of buckets on
+                        // envoy and vscode that no edge reached. Capped by the references too (CodeRabbit 4544551960): many symbols and few
+                        // references (generated headers, data tables) resolve few edges, and a reserve is only a hint the table grows past
     std::vector<NodeId>      cand, tier;
     std::vector<NodeId>      modAttrNamesakes;   // PY-MOD-CALL-SITES: an unproven module attribute's candidates, reused
     HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>> declinedListsByHash;   // tier-3 declines: list hash → list numbers (internDeclinedList)
@@ -9961,37 +10079,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     };
     std::vector<NodeId>      bindingTier;   // A4-R5 reused FFI-alias fallback candidate buffer
     std::string              bindKey;       // A4-R5 reused "<fileId>#var" key buffer for the ctypes-handle gate
-    HashMap<std::uint64_t, char> bindingEdges;   // A4-R5 (from<<32|to) keys of edges resolved via an FFI alias —
-                                                 // consumed below to stamp prov (outProv=2) + the amb honesty mark
-    HashMap<std::uint64_t, char> importEdges;    // (from<<32|to) keys of edges an ES named-import binding pinned,
-                                                 // consumed below to stamp prov (outProv=4). Same argument as
-                                                 // bindingEdges: an ABSENT prov= is defined by the map legend as
-                                                 // "uniquely-resolved-name-based", and these edges are neither —
-                                                 // the target was read out of a module's export table. Leaving them
-                                                 // unmarked would let a NEW resolution mechanism inherit the
-                                                 // confidence label of the old one, silently. Not reserved, for the
-                                                 // reason spelled out for splitEdges below.
-    HashMap<std::uint64_t, char> finalSegmentEdges;   // (from<<32|to) keys of edges a receiver's QUALIFIED written type chose by
-                                                      // its last name alone (Rule 2, or CHA-lite pruning by that type) —
-                                                      // consumed below to stamp prov (outProv=5). The qualifier was never
-                                                      // checked against the class's namespace, so such an edge can be a
-                                                      // precise-looking WRONG one (test/narrowcheck.sh arm 24); an absent
-                                                      // prov= would call it uniquely resolved. Not reserved, like splitEdges.
-    HashMap<std::uint64_t, char> splitEdges;     // C1: (from<<32|to) keys of edges that are an ARM of a k-way split the
-                                                 // resolver could not choose between — the per-EDGE half of the per-SYMBOL
-                                                 // ambOut counter, consumed below to stamp prov (outProv=3). ambOut says K
-                                                 // of this symbol's CALLS were guesses; this says WHICH EDGES they were,
-                                                 // which the aggregate cannot express and a consumer deciding what to
-                                                 // re-read from source is exactly asking. Filled from the SAME predicate
-                                                 // that increments ambOut, so the two can never disagree.
-                                                 // NOT reserved, deliberately, and the same call bindingEdges above makes:
-                                                 // there is no cheap prior for the split count at declaration time (it is
-                                                 // an OUTPUT of the resolve loop), the map is find-only and never iterated
-                                                 // so its bucket layout cannot reach output, and it is filled inside a loop
-                                                 // whose per-reference tier work dominates the growth cascade by orders of
-                                                 // magnitude. A guessed reserve would be a made-up number in a hot struct.
-    HashMap<std::uint64_t, char> linkEdges;      // (from<<32|to) a markdown link bound. The section that holds the link is the edge's from.
-    HashMap<std::uint64_t, char> anchorMissEdges; // (from<<32|to) a link whose slug named no heading, so the target is the file node.
+    bool                     anyImplSite = false;   // lane L6: some site committed an edge by one-implementor dispatch — outProv is
+                                                    // allocated then even when a site of another kind later took every such edge
     std::vector<NodeId>      rule3Out;   // reused Rule-3 output buffer (candidates from the single included file)
     Rule3FileMemo            rule3Memo;  // Rule 3's answer per (caller file, byName entry): one walk per name per file, not per call
     Rule3FileMemo            rule3MemoMember;   // the same for a member call, which reads the includer-directory closure (EXTQUAL-FIX1)
@@ -10066,9 +10155,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     const RubyTopSelf              rubyTop   = buildRubyTopSelf( ing, rubyReach );   // a task file's or a template's self outside any class
     const std::vector<std::string> specializationsWithBases = sortedSpecializationNames( chaUp );   // resolve.h: what a C++ specialization inherits
     ChaConeMemo              chaCones( chaUp, chaDown );   // one cone per receiver type, computed on first use (see the type)
-    const ClassIdentity      classIds = buildClassIdentity( ing, chaUp );   // Rule 2's class identity: nesting, owners, real inheritance (resolve.h)
+    ClassIdentity      classIds = buildClassIdentity( ing, chaUp );   // Rule 2's class identity: nesting, owners, real inheritance (resolve.h)
     std::vector<NodeId>      filtScratch;  // reused per-call survivor buffer for CHA-lite / arity filtering
     rw::SmallVec<NodeId, 2>  reachScratch; // reused per-call buffer: the candidates a call can reach by name (reachableByName)
+    AsideMarks               reachAside( ing.fnLocalScopes.empty() ? 0 : ing.symbols.size() );   // the name's locals out of this call's reach (reachableByName); unused, and empty, with no function-local def
     // FE-B (receiverevidence.h): the receiver-evidence tables, the per-edge hedge sets and the reused per-call buffers.
     // (L) fix round 1: "<fileId>#<local>" → the in-tree CLASS a TS named import pins (buildJsImportTables), for resultClassOf
     HashMap<std::string, NodeId> jsPinnedClasses;
@@ -10085,7 +10175,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         }
     }
     ReceiverEvidence         recvEv( ing, chaUp, classNames );
-    const HashMap<std::string, char> qualifierVerdicts = buildQualifierVerdicts( ing, extVeto, falseEdges );   // h1-annot
+    HashMap<std::string, char> qualifierVerdicts = buildQualifierVerdicts( ing, extVeto, falseEdges );   // h1-annot
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/2i: receiver-evidence tables" );
         recvEv.localNames = &fieldNarrow.localNameSet;
@@ -10270,8 +10360,6 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
         }
     };
-    HashMap<std::uint64_t, char> nameOnlyEdges;   // (from<<32|to) of an edge some call bound by NAME ALONE (no receiver evidence)
-    HashMap<std::uint64_t, char> provenEdges;     // … and of an edge some call bound WITH evidence: a proven site wins the merged row
     std::vector<NodeId>      provedScratch;   // reused: the name-ladder candidates the language's own lookup proves
     std::vector<NodeId>      memberRule3;     // reused: Rule 3's included-file candidates for a MEMBER call — a hedge tier, never a proof
     // FE-B: which of a call's name-ladder candidates the language's own lookup PROVES (receiverevidence.h, point 2). A
@@ -10825,33 +10913,23 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // call got an owner (24bb6e5d), the test scripts' top-level `ok "…"` / `no "…"` calls (~650 same-named shell
     // definitions each, ~28k calls on this repository) reached those walks, and the loop went 22 -> 79 ms on that commit
     // alone. symLang/symKind are copies of the two Symbol fields those walks read (symFileId, above, is the third), so
-    // each walk reads a dense array in id order instead: same values, same order, same answer. `nameHasFnLocalDef` is
-    // the one precomputed fact reachableByName needs to say "nothing to set aside": a name none of whose definitions is
-    // function-local cannot yield (localDefOutOfReach is false for every candidate, and every list the loop hands
-    // reachableByName is a subset of the name's byName list), so its walk — a Symbol load plus a binary search per
-    // candidate — is skipped with the answer it would have returned. Keyed by the byName entry's address: nothing
-    // inserts into or erases from byName past its construction, so the address is stable for the loop.
+    // each walk reads a dense array in id order instead: same values, same order, same answer. `fnLocalReach`
+    // (FnLocalReachIndex, buildFnLocalReachIndex) is the one precomputed fact reachableByName needs: a name none of whose
+    // definitions is function-local with a recorded span cannot yield (localDefOutOfReach is false for every candidate,
+    // and every list the loop hands reachableByName is a subset of the name's byName list), so it has no entry and the
+    // call is skipped with the answer the walk would have returned; a name that has one maps to its locals' rows
+    // (REACH-SPLIT), so a call tests those and never loads a Symbol or searches fnLocalScopes.
     std::vector<Lang>    symLang( N );
     std::vector<SymKind> symKind( N );
-    ankerl::unordered_dense::set<const rw::SmallVec<NodeId, 2>*> nameHasFnLocalDef;
     {
-        PROFILE_SCOPE_DESCRIBE( "buildGraph/2l: dense candidate views + function-local name set" );
+        PROFILE_SCOPE_DESCRIBE( "buildGraph/2l: dense candidate views" );
         for( std::size_t symIndex = 0; symIndex < N; ++symIndex )
         {
             symLang[ symIndex ] = ing.symbols[ symIndex ].lang;
             symKind[ symIndex ] = ing.symbols[ symIndex ].kind;
         }
-        if( !ing.fnLocalScopes.empty() )
-        {
-            for( const auto& [ name, ids ] : byName )
-            {
-                if( std::any_of( ids.begin(), ids.end(), [ & ]( NodeId c ) { return ing.symbols[ c ].fnLocal != 0; } ) )
-                {
-                    nameHasFnLocalDef.insert( &ids );
-                }
-            }
-        }
     }
+    const FnLocalReachIndex fnLocalReach = buildFnLocalReachIndex( ing, byName );   // the function-local name set (REACH-SPLIT)
     ENSURES( symLang.size() == N && symKind.size() == N && symFileId.size() == N, "the dense views cover every symbol id the loop can hold" );
 
     // ---- the per-(name, language) candidate memo: work that is invariant across the calls to one name ---------------
@@ -11200,7 +11278,6 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // lane L6: the interface-typed dispatch tier (ifacedispatch.h) over the map just built, and the edges its one-implementor
     // answer committed (outProv=6, rendered via="impl"); the arity rule it shares with the name tiers' B2.2 filter below.
     const IfaceDispatch          ifaceTier( ing, recvEv, g.implementors, g.implementorBound, implementorsOpen );   // reads ing.bindings' ImplBlock spans too
-    HashMap<std::uint64_t, char> implEdges;
     std::vector<NodeId>          ifaceCand;   // reused: one call's dispatch candidates
     const auto arityCannotTake = [ & ]( const Reference& ref, NodeId c ) noexcept
     {
@@ -11208,6 +11285,16 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         return ref.argCountKnown && ( ( cs.arityExact != 0 && ref.argCount > cs.params ) || ref.argCount < paramsMinOf[ c ] );
     };
 
+    // M0 MEM-STATS: the side-table plateau (the headline peak's base), and how full the tables sized at declaration are —
+    // size / bucket count, where a bucket is 8 zero-filled bytes the reserve touched whether or not an entry ever lands in it
+    memstats::mark( "graph-tables" );
+    if( memstats::enabled() )
+    {
+        rw::emitTo( stderr, "[mem] tables varType={}/{} localNameSet={}/{} localShadowSpans={}/{} jsImportTargets={}/{} jsShadows={}/{} acc=0/{}\n",
+                    varType.size(), varType.bucket_count(), fieldNarrow.localNameSet.size(), fieldNarrow.localNameSet.bucket_count(),
+                    fieldNarrow.localShadowSpans.size(), fieldNarrow.localShadowSpans.bucket_count(), jsImports.targets.size(),
+                    jsImports.targets.bucket_count(), jsImports.shadows.size(), jsImports.shadows.bucket_count(), acc.bucket_count() );
+    }
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/3: resolve loop (per reference)" );
     const MdLinkPins                mdLinks    = bindMarkdownLinks( ing );   // empty unless the tree holds a cross-file markdown link
@@ -11280,12 +11367,15 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // a name the tree never defines is not counted as a refused in-tree candidate).
         // A Rust `macro_rules!` without #[macro_export] (internalLinkage) is textual: it binds a site in its own file, a child module of it
         // or, through `#[macro_use] mod`, its parent's (rustMacroScopeOf), or one a `use` names (a `pub(crate) use m;` re-export).
+        // RUST-MACRO-PATH (pathMacro): `crate::m!`, `$crate::m!`, `axum_core::m!` or a `use … as` alias (ingest_model.h retargetRustMacroAliases) binds
+        // only a macro its written path proves (rustRule3Proves), whatever its export or scope: `serde_json::json!` never reaches an in-tree `json`.
+        const bool pathMacro = r.role == RefRole::Macro && langFacts( r.lang ).rule3NameProof == Rule3NameProof::RustUse && !std::string_view( r.qualifier ).empty();
         const auto macroDef = [ & ]( NodeId c )
         {
             return symKind[ c ] == SymKind::Macro && langCompatible( symLang[ c ], r.lang )
-                && ( ing.symbols[ c ].internalLinkage == 0 || macroRefLang( symLang[ c ] ) || symFileId[ c ] == r.fileId
+                && ( pathMacro ? recvEv.types.rustRule3Proves( r, c, {} ) : ( ing.symbols[ c ].internalLinkage == 0 || macroRefLang( symLang[ c ] ) || symFileId[ c ] == r.fileId
                      || rustMacroScopeOf( ing, symFileId[ c ], macroScopes ).holds( ing.files[ r.fileId ] )
-                     || ( langFacts( r.lang ).rule3NameProof == Rule3NameProof::RustUse && recvEv.types.rustRule3Proves( r, c, ownerIsClass( c ) ) ) );
+                     || ( langFacts( r.lang ).rule3NameProof == Rule3NameProof::RustUse && recvEv.types.rustRule3Proves( r, c, ownerIsClass( c ) ) ) ) );
         };
         // A procedural macro is a function that carries #[proc_macro] (a nested `fn assert` a glob `use` reaches is no macro: zed +110 before
         // this test), read once per candidate (procMacroMemo).
@@ -12025,7 +12115,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // whichever same-named def competes, and yielding would move them from external= into declined=, so such a call
         // resolves exactly as it did before local defs had bodies.
         const bool localsYield = !scipPinned && !canonical && !narrowed && !builtinGated && it != byName.end() && !ing.fnLocalScopes.empty()
-                                 && nameHasFnLocalDef.contains( &it->second ) && reachableByName( ing, *baseIds, r, reachScratch )
+                                 && reachableByNameFromLocals( fnLocalReach.localsOf( it->second ), *baseIds, r, reachAside, reachScratch )
                                  && !( r.role == RefRole::Call && r.qualifier.empty() && bindingTier.empty() && externalVeto.isExternalBound( r ) );
         const rw::SmallVec<NodeId, 2>* nameIds = localsYield ? &reachScratch : baseIds;
         // FE-B: for a MEMBER call the include graph says which file the caller imports, never what its receiver is — the
@@ -12755,7 +12845,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
          && r.recv != RecvKind::FieldOfThis && r.recv != RecvKind::FieldOfVar && r.recv != RecvKind::SuperObj && !identityClaim
          && !isJsTsLitRecv( r.recv ) && r.recv != RecvKind::JavaTypeCandidate && !nameOnly )   // FE-B: a name-only call keeps every candidate
         {
-            const std::string& callerCanon = g.localityKey[ r.fromSymbol ];   // == canonId here (the caller is scoped)
+            const std::string& callerCanon = g.localityKeyAt( r.fromSymbol );   // == canonId here (the caller is scoped)
             const std::size_t localityCap = receiverLocalityCap( r, receiverTypeNarrowed, ing.files[ ing.symbols[ r.fromSymbol ].fileId ] );
             // memoize each survivor's shared-locality ONCE (was computed twice: once for bestShare, once inside the
             // stable_partition predicate). locShare[i] parallels tier[i]; the compaction below reads the memo.
@@ -12787,7 +12877,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 // FE-B narrows that floor to calls WITH receiver evidence: a NAME-ONLY call never reaches this
                 // block (its tier keeps every same-file and same-directory candidate, receiverevidence.h), so
                 // there the cross-file candidate IS listed — hedged via="name", never as a confident edge.
-                const std::size_t sh = ( c == r.fromSymbol ) ? 0 : localityRank( callerCanon, g.localityKey[c], ( r.recv == RecvKind::None && r.qualifier.empty() ) || r.recv == RecvKind::ThisObj, localityCap );   // path-scoped even for a free function
+                const std::size_t sh = ( c == r.fromSymbol ) ? 0 : localityRank( callerCanon, g.localityKeyAt( c ), ( r.recv == RecvKind::None && r.qualifier.empty() ) || r.recv == RecvKind::ThisObj, localityCap );   // path-scoped even for a free function
                 locShare.push_back( sh );
                 if( sh > bestShare )
                 {
@@ -12966,7 +13056,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // source". This is where canonical resolution SUPPRESSES amb that the old pre-tier count raised.
         //
         // C1 (Round C lane B): `splitPick` is set by the SAME predicate, and is read by the edge-emission loop
-        // below to key `splitEdges`. One predicate, two granularities — the per-symbol count and the per-edge
+        // below to set the edge's kEdgeMarkSplit. One predicate, two granularities — the per-symbol count and the per-edge
         // marks are derived from one decision, so the biconditional the gate asserts (a symbol carries amb= iff
         // at least one of its edges carries prov="split") holds by construction rather than by agreement.
         bool splitPick = false;
@@ -13083,48 +13173,28 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 continue;
             }
-            const std::uint64_t ekey = ( std::uint64_t( r.fromSymbol ) << 32 ) | to;
-            EdgeAcc& e = acc[ ekey ];
+            EdgeAcc&   e     = acc[ hashutil::packPair( r.fromSymbol, to ) ];
+            const bool fresh = e.nref == 0;
             e.confSum += classic( to ) ? base : 0.f;
             e.nref    += 1;
-            if( splitPick )
-            {
-                splitEdges[ekey] = 1;   // C1: remember (from,to) for prov="split" — every arm of the split, never a subset
-            }
-            if( bindingPinned )
-            {
-                bindingEdges[ekey] = 1; // A4-R5: remember (from,to) for prov="binding"
-            }
-            if( importPinned )
-            {
-                importEdges[ekey] = 1;  // remember (from,to) for prov="import"
-            }
-            if( finalSegmentType )
-            {
-                finalSegmentEdges[ekey] = 1;   // remember (from,to) for prov="final-segment"
-            }
-            if( ifaceImpl )
-            {
-                // lane L6: remember (from,to) for via="impl" (outProv=6); 2 once a site of another kind committed it too (here, earlier)
-                const auto [ it, fresh ] = implEdges.try_emplace( ekey, char( 1 ) );
-                it->second = ( fresh && e.nref > 1 ) ? char( 2 ) : it->second;
-            }
-            else if( !implEdges.empty() )
-            {
-                if( const auto it = implEdges.find( ekey ); it != implEdges.end() )
-                {
-                    it->second = char( 2 );   // … or later: a site that proved the edge another way wins its label
-                }
-            }
-            ( nameOnly ? nameOnlyEdges : provenEdges )[ ekey ] = 1;   // FE-B: a proven site wins the merged row (Graph::outNameOnly)
+            // EDGE-FLAGS: what this site says about the edge, ORed into the row (resolve.h EdgeMark). split: C1, every arm of the split,
+            // never a subset; binding: A4-R5; import: an ES named import; final-segment; proven: FE-B, a proven site wins the merged
+            // row (Graph::outNameOnly); link / anchor-miss: a markdown link and its missed slug.
+            std::uint8_t marks = ( splitPick ? kEdgeMarkSplit : 0u ) | ( bindingPinned ? kEdgeMarkBinding : 0u ) | ( importPinned ? kEdgeMarkImport : 0u )
+                               | ( finalSegmentType ? kEdgeMarkFinalSegment : 0u ) | ( nameOnly ? 0u : kEdgeMarkProven );
             if( anyMarkdownLink )
             {
-                noteMarkdownLinkSite( linkEdges, ekey, r );
+                marks |= isMarkdownLinkSite( r ) ? kEdgeMarkLink : 0u;
                 if( siteIndex < mdSlugMiss.size() && mdSlugMiss[ siteIndex ] != 0 && siteIndex < mdLinkPin.size() && to == mdLinkPin[ siteIndex ] )
                 {
-                    anchorMissEdges[ ekey ] = 1;
+                    marks |= kEdgeMarkAnchorMiss;
                 }
             }
+            // lane L6 via="impl": the first site sets ImplOnly when it is a one-implementor dispatch; a site of any other kind, before
+            // or after, leaves it clear for good
+            anyImplSite = anyImplSite || ifaceImpl;
+            const std::uint8_t implOnly = ( fresh && ifaceImpl ) ? kEdgeMarkImplOnly : 0u;
+            e.marks = std::uint8_t( ( ( e.marks | marks ) & ( ifaceImpl ? 0xFFu : std::uint8_t( ~kEdgeMarkImplOnly ) ) ) | implOnly );
         }
         // (L) the call committed exactly ONE unsplit target WITH evidence — a receiver rule, a resolved qualifier, the language's
         // own lookup, an import or SCIP pin, or the ladder's unhedged pick of the one definition a hedge-eligible call reaches by
@@ -13163,10 +13233,49 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     }
     }
 
+    memstats::mark( "graph-resolved" );   // M0: the resolve loop done, every side table still alive (card G1c)
+    if( memstats::enabled() )
+    {
+        rw::emitTo( stderr, "[mem] edges acc={}/{}\n", acc.size(), acc.bucket_count() );
+    }
+    // G1c: the resolve loop was the last reader of every table below — what is still read past here is byName (the priors),
+    // includeAdj (Graph::importAdj), acc and the per-edge key sets (the flatten), and the graph itself. Objects that hold
+    // references into these tables (the Narrowers, ExternalVeto, BaseEvidenceTables, ChaConeMemo) are not called again.
+    {
+        PROFILE_SCOPE_DESCRIBE( "buildGraph/3z: release the resolve-only tables" );
+        releaseStorage( varType );
+        releaseStorage( fieldNarrow );
+        releaseStorage( extVeto );
+        releaseStorage( fnBinds );
+        releaseStorage( jsImports );
+        releaseStorage( recvEv );
+        releaseStorage( classIds );
+        releaseStorage( scopedRecvDecls );
+        releaseStorage( canonByName );
+        releaseStorage( canonFamilyByName );
+        releaseStorage( classNames );
+        releaseStorage( memberFields );
+        releaseStorage( javaTypeMembers );
+        releaseStorage( chaUp );
+        releaseStorage( chaDown );
+        releaseStorage( chaUpDeclared );
+        releaseStorage( chaCones );
+        releaseStorage( fileIncludes );
+        releaseStorage( rule3Closure );
+        releaseStorage( cppQualScopes );
+        releaseStorage( qualifierVerdicts );
+        releaseStorage( falseEdges );
+        releaseStorage( builtinGate );
+        releaseStorage( langCandMemo );
+        releaseStorage( declinedListsByHash );
+        releaseStorage( rule3Memo );
+        releaseStorage( rule3MemoMember );
+        releaseStorage( symFileId );
+    }
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/4: flatten edges + out/in CSR" );
     // flatten + cap + sort by (from, to) — deterministic regardless of map order
-    struct E { NodeId from, to; float w; };
+    struct E { NodeId from, to; float w; std::uint8_t marks; };   // marks: the accumulator's EdgeMark bits, carried through the sort
     std::vector<E> edges;
     edges.reserve( acc.size() );
     for( const auto& [ k, e ] : acc )
@@ -13176,8 +13285,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         {
             w = 8.f;
         }
-        edges.push_back( { NodeId( k >> 32 ), NodeId( k & 0xffffffffu ), w } );
+        edges.push_back( { NodeId( k >> 32 ), NodeId( k & 0xffffffffu ), w, e.marks } );
     }
+    releaseStorage( acc );   // G1c: flattened; the sort and the CSR arrays below stack on the edge list alone
     std::vector<E> edgeScratch;
     sortutil::radixSortByFromTo( edges, edgeScratch );
 
@@ -13203,26 +13313,42 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     //   5 = a receiver's QUALIFIED written type chose this edge by its last name alone → prov="final-segment".
     //   6 = lane L6: the ONE implementor in the tree of the receiver's interface owns the callee → via="impl".
     // The value per edge comes from resolve.h edgeProvenance, which owns the precedence between them.
-    if( scip || !bindingEdges.empty() || !splitEdges.empty() || !importEdges.empty() || !finalSegmentEdges.empty() || !implEdges.empty() )
+    std::uint8_t anyMarks = 0;   // EDGE-FLAGS: the OR of every edge's marks — which per-edge arrays this graph needs
+    for( const E& e : edges )
+    {
+        anyMarks |= e.marks;
+    }
+    if( memstats::enabled() )   // M0 + EDGE-FLAGS: how many flattened edges carry each mark (test/edgemarkcheck.sh counts them)
+    {
+        std::array<std::size_t, 8> perBit{};
+        std::size_t                nameOnlyRows = 0;   // the kEdgeName rows: no proven site, not a link
+        for( const E& e : edges )
+        {
+            for( std::size_t b = 0; b < perBit.size(); ++b )
+            {
+                perBit[ b ] += ( e.marks >> b ) & 1u;
+            }
+            nameOnlyRows += ( e.marks & ( kEdgeMarkProven | kEdgeMarkLink ) ) == 0 ? 1u : 0u;
+        }
+        rw::emitTo( stderr, "[mem] edge marks edges={} split={} binding={} import={} final-segment={} impl-only={} proven={} link={} anchor-miss={} name-only={}\n",
+                    edges.size(), perBit[ 0 ], perBit[ 1 ], perBit[ 2 ], perBit[ 3 ], perBit[ 4 ], perBit[ 5 ], perBit[ 6 ], perBit[ 7 ], nameOnlyRows );
+    }
+    if( scip || ( anyMarks & kEdgeMarksProv ) != 0 || anyImplSite )
     {
         g.outProv.assign( edges.size(), 0u );
     }
-    const auto anchorMissed = [ & ]( std::uint64_t k )
+    const auto anchorMissed = []( const E& e ) noexcept
     {
-        return markdownLinkBit( linkEdges, k ) != 0 && anchorMissEdges.contains( k );
+        return ( e.marks & ( kEdgeMarkLink | kEdgeMarkAnchorMiss ) ) == ( kEdgeMarkLink | kEdgeMarkAnchorMiss );
     };
-    if( std::any_of( edges.begin(), edges.end(), [ & ]( const E& e ) { return anchorMissed( ( std::uint64_t( e.from ) << 32 ) | e.to ); } ) )
+    if( std::any_of( edges.begin(), edges.end(), anchorMissed ) )
     {
         g.outAnchorMiss.assign( edges.size(), 0u );
     }
-    const EdgeProvenanceSets provSets{ bindingEdges, importEdges, splitEdges, finalSegmentEdges, implEdges };   // lane L6: + implEdges
-    // Kind byte, allocated when some edge is name-only or a markdown link. Empty ⇒ every edge is a plain call.
-    const auto hedged = [ & ]( std::uint64_t k ) { return nameOnlyEdges.contains( k ) && !provenEdges.contains( k ); };
-    const auto marked = [ & ]( const E& e )
-    {
-        const std::uint64_t k = ( std::uint64_t( e.from ) << 32 ) | e.to;
-        return hedged( k ) || markdownLinkBit( linkEdges, k ) != 0;
-    };
+    // Kind byte, allocated when some edge is name-only or a markdown link. Empty ⇒ every edge is a plain call. Every edge has a
+    // committing site and every site is name-only or proven, so an edge no proven site committed is name-only.
+    const auto hedged = []( const E& e ) noexcept { return ( e.marks & kEdgeMarkProven ) == 0; };
+    const auto marked = [ & ]( const E& e ) noexcept { return hedged( e ) || ( e.marks & kEdgeMarkLink ) != 0; };
     if( std::any_of( edges.begin(), edges.end(), marked ) )
     {
         g.outNameOnly.assign( edges.size(), 0u );
@@ -13241,18 +13367,17 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             // the symbol's amb= counts it either way, so nothing is lost by the ordering.
             if( !g.outProv.empty() )
             {
-                g.outProv[ pos ] = edgeProvenance( scip && scip->isPrecise( e.from, e.to ), provSets, ( std::uint64_t( e.from ) << 32 ) | e.to );
+                g.outProv[ pos ] = edgeProvenance( scip && scip->isPrecise( e.from, e.to ), e.marks );
             }
             if( !g.outNameOnly.empty() )
             {
                 ASSUME( pos < g.outNameOnly.size(), "outNameOnly is allocated one slot per flattened edge" );
-                const std::uint64_t key = ( std::uint64_t( e.from ) << 32 ) | e.to;
-                std::uint8_t        kind = 0;
-                if( markdownLinkBit( linkEdges, key ) != 0 )
+                std::uint8_t kind = 0;
+                if( ( e.marks & kEdgeMarkLink ) != 0 )
                 {
-                    kind = anchorMissed( key ) ? std::uint8_t( kEdgeLink | 0x80 ) : kEdgeLink;
+                    kind = anchorMissed( e ) ? std::uint8_t( kEdgeLink | 0x80 ) : kEdgeLink;
                 }
-                else if( hedged( key ) )
+                else if( hedged( e ) )
                 {
                     kind = kEdgeName;
                 }
@@ -13260,7 +13385,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
             if( !g.outAnchorMiss.empty() )
             {
-                g.outAnchorMiss[ pos ] = anchorMissed( ( std::uint64_t( e.from ) << 32 ) | e.to ) ? 1u : 0u;
+                g.outAnchorMiss[ pos ] = anchorMissed( e ) ? 1u : 0u;
             }
         }
     }
@@ -13524,6 +13649,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     }
 
     g.importAdj = std::move( includeAdj );   // last use: the by-name hedge's rule 2b reads it from here (pathgaps.h NamesakeRule)
+    memstats::mark( "graph-end" );   // M0: the graph built, the side tables not yet freed (they die at this return)
     return g;
 }
 
@@ -14285,8 +14411,8 @@ inline std::vector<float> anchoredLexicalRank( const Graph& g, const std::vector
                        [ & ]( NodeId a, NodeId b )
                        {
                            if( lex[a] != lex[b] ) { return lex[a] > lex[b]; }
-                           const std::string& ka = g.localityKey[a];
-                           const std::string& kb = g.localityKey[b];
+                           const std::string& ka = g.localityKeyAt( a );
+                           const std::string& kb = g.localityKeyAt( b );
                            return ka != kb ? ka < kb : a < b;   // id only disambiguates true duplicate identities
                        } );
     anchorIds.resize( anchorCount );
@@ -15899,8 +16025,9 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
     // An assignment's callee-read type that no class is called is skipped, as Rule 2's table skips it (test/narrowcheck.sh
     // arm 49: `t = llvm::cast<Target>( y )` tombstoned `Target* t`, and `t->count` lost its owner).
     const HashMap<std::string, char> classNames = classNameSet( ing );
+    const BindKindCounts bindCounts = BindKindCounts::of( ing );
     HashMap<std::string, FlatRecvType> localType;
-    localType.reserve( ing.bindings.size() );
+    localType.reserve( std::size_t( bindCounts.inDefOf( LocalBindKind::Type ) ) + bindCounts.inDefOf( LocalBindKind::ParamType ) );
     std::string key;
     for( const Binding& b : ing.bindings )
     {
@@ -16116,6 +16243,23 @@ inline std::string memberOwnerRefusal( const IngestResult& ing, std::span<const 
 // A member selector whose OWNER resolves to a type in a language that extracts no fields refuses BY LANGUAGE
 // NAME — an empty answer there would read as "no uses", which is the zero-means-none-exists lie. "" when the
 // spec is not a member selector or the owner is not an indexed unserved type.
+// An owner whose members the index never extracts: a class-like definition in a language with no field capture.
+inline bool fieldsUnservedOwner( const Symbol& s ) noexcept
+{
+    const bool classLike  = s.kind == SymKind::Class || isStructOrNamedType( s.kind ) || s.kind == SymKind::Interface;
+    const bool fieldsLang = s.lang == Lang::Cpp || s.lang == Lang::C || s.lang == Lang::Python;   // queries/{c,cpp,python}/tags.scm carry @definition.field
+    return classLike && !fieldsLang;
+}
+
+// THE sentence for a member of an unserved owner — the qualified selector's refusal, and (B31 USES-FIELD-EXTERNAL) the bare
+// name's when its only definition is a lexical member declaration (fielduses.h unservedMemberDeclRefusal).
+inline std::string memberUnservedSentence( const IngestResult& ing, std::string_view spec, const Symbol& owner )
+{
+    return "member selector '" + std::string( spec ) + "': field symbols are extracted for C, C++ and Python only — '"
+         + owner.name + "' is a lang=" + langTag( owner.lang ) + " type (" + ing.files[ owner.fileId ]
+         + "), so its members are not indexed and their use-sites cannot be resolved";
+}
+
 inline std::string memberSelectorUnservedRefusal( const IngestResult& ing, std::string_view spec )
 {
     if( !looksLikeMemberSelector( spec ) )
@@ -16126,13 +16270,9 @@ inline std::string memberSelectorUnservedRefusal( const IngestResult& ing, std::
     const std::string_view owner = spec.substr( 0, dot );
     for( const Symbol& s : ing.symbols )
     {
-        const bool classLike   = s.kind == SymKind::Class || isStructOrNamedType( s.kind ) || s.kind == SymKind::Interface;
-        const bool fieldsLang  = s.lang == Lang::Cpp || s.lang == Lang::C || s.lang == Lang::Python;   // queries/{c,cpp,python}/tags.scm carry @definition.field
-        if( classLike && s.name == owner && !fieldsLang )
+        if( s.name == owner && fieldsUnservedOwner( s ) )
         {
-            return "member selector '" + std::string( spec ) + "': field symbols are extracted for C, C++ and Python only — '"
-                 + std::string( owner ) + "' is a lang=" + langTag( s.lang ) + " type (" + ing.files[ s.fileId ]
-                 + "), so its members are not indexed and their use-sites cannot be resolved";
+            return memberUnservedSentence( ing, spec, s );
         }
     }
     return {};
@@ -18208,10 +18348,15 @@ struct ConnectResult
     std::vector<ConnectGroup>  groups;        // ordered by lowest terminal id (first-seen over the ascending terminal list)
     std::uint32_t              radius    = connectcfg::kDefaultRadius;   // the CLAMPED radius actually searched
     bool                       truncated = false;   // a size cap dropped ≥1 MST path (emitter stamps truncated="paths")
+    // CONNECT-SOURCE-JOINT (connectSourceJoint below): the test-class intermediary that joins terminals this source-only search
+    // left apart (emitter: source_joint="none" test_joint= test_joint_p=); kNoNode when nothing was left apart that a test joins
+    NodeId                     testJoint = kNoNode;
 };
 
+// `notThrough` (empty = none): nodes the search never walks THROUGH — reached, but never expanded, so never an intermediary
+// of any leg. A terminal is always expanded (it is the source of its own search).
 inline ConnectResult connectSubgraph( const Graph& g, const std::vector<NodeId>& terminalSpecs,
-                                      std::uint32_t radius = connectcfg::kDefaultRadius )
+                                      std::uint32_t radius = connectcfg::kDefaultRadius, std::span<const char> notThrough = {} )
 {
     const std::size_t N = g.wOutDeg.size();
     ConnectResult res;
@@ -18308,6 +18453,10 @@ inline ConnectResult connectSubgraph( const Graph& g, const std::vector<NodeId>&
                 if( du >= res.radius )
                 {
                     continue; // radius bound: never expand past R undirected hops
+                }
+                if( u != src && u < notThrough.size() && notThrough[ u ] != 0 )
+                {
+                    continue; // CONNECT-SOURCE-JOINT: reached, never walked through (never a joint)
                 }
 
                 // out-edges first (ascending by construction — buildGraph stores targets ascending per source)
@@ -18589,7 +18738,9 @@ inline ConnectResult connectSubgraph( const Graph& g, const std::vector<NodeId>&
 // another terminal keeps resolveFocus's pick (so <unconnected> there is true of EVERY definition). tiedOut[i] > 1 says
 // that many definitions joined exactly as well as the pick: the answer is about one of them, disclosed by the emitter
 // (ambiguous_terminal=), never a silent choice.
-inline std::vector<std::uint16_t> connectUndirectedDistances( const Graph& g, std::span<const NodeId> sources, std::uint32_t radius )
+// `notThrough` (empty = none): as connectSubgraph's, nodes reached but never expanded (a source is always expanded).
+inline std::vector<std::uint16_t> connectUndirectedDistances( const Graph& g, std::span<const NodeId> sources, std::uint32_t radius,
+                                                             std::span<const char> notThrough = {} )
 {
     const std::size_t N = g.wOutDeg.size();
     std::vector<std::uint16_t> dist( N, connectcfg::kUnreachable );
@@ -18618,7 +18769,7 @@ inline std::vector<std::uint16_t> connectUndirectedDistances( const Graph& g, st
     {
         const NodeId        u  = q[ head ];
         const std::uint16_t du = dist[ u ];
-        if( du >= radius )
+        if( du >= radius || ( du > 0 && u < notThrough.size() && notThrough[ u ] != 0 ) )
         {
             continue;
         }
@@ -18688,8 +18839,39 @@ inline TerminalChoice scoreTerminalCandidates( std::span<const NodeId> candidate
     return best;
 }
 
+// One pass's choice for every many-definition terminal, on `distFrom`; with `fallback`, a terminal none of whose definitions
+// joins on that view is scored on the unrestricted one, which `anyFrom()` computes once, on first need.
+template<class AnyFrom>
+inline void choosePassPicks( const std::vector<std::vector<NodeId>>& defsPerTerminal, const std::vector<NodeId>& firstPicks,
+                             const std::vector<std::vector<std::uint16_t>>& distFrom, bool fallback, AnyFrom anyFrom,
+                             std::vector<NodeId>& next, std::vector<std::uint32_t>& tiedOut )
+{
+    std::vector<std::vector<std::uint16_t>> unrestricted;
+    for( std::size_t i = 0; i < defsPerTerminal.size(); ++i )
+    {
+        if( defsPerTerminal[ i ].size() <= 1 )
+        {
+            continue;
+        }
+        TerminalChoice choice = scoreTerminalCandidates( defsPerTerminal[ i ], firstPicks[ i ], i, distFrom );
+        if( choice.reached == 0 && fallback )
+        {
+            if( unrestricted.empty() )
+            {
+                unrestricted = anyFrom();
+            }
+            choice = scoreTerminalCandidates( defsPerTerminal[ i ], firstPicks[ i ], i, unrestricted );
+        }
+        next[ i ]    = choice.chosen;
+        tiedOut[ i ] = choice.tied;
+    }
+}
+
+// `notThrough` (CONNECT-SOURCE-JOINT; empty = none): the test-class nodes connectSourceJoint's search never walks through. A
+// candidate is scored on that same view first, so a definition joined only through a test never outranks one joined through
+// source; a terminal none of whose definitions joins on it is scored on the unrestricted view, as before (CodeRabbit #636).
 inline void chooseJoiningTerminals( const Graph& g, const std::vector<std::vector<NodeId>>& defsPerTerminal, std::vector<NodeId>& picks,
-                                    std::vector<std::uint32_t>& tiedOut, std::uint32_t radius )
+                                    std::vector<std::uint32_t>& tiedOut, std::uint32_t radius, std::span<const char> notThrough = {} )
 {
     EXPECTS( defsPerTerminal.size() == picks.size() );
     const std::size_t T = picks.size();
@@ -18701,24 +18883,21 @@ inline void chooseJoiningTerminals( const Graph& g, const std::vector<std::vecto
     }
     const std::uint32_t r = std::clamp( radius, connectcfg::kMinRadius, connectcfg::kMaxRadius );
     const std::vector<NodeId> firstPicks = picks;
-    for( int pass = 0; pass < 2; ++pass )
+    const auto distancesFrom = [ & ]( int pass, std::span<const char> mask )
     {
         std::vector<std::vector<std::uint16_t>> distFrom( T );
         for( std::size_t j = 0; j < T; ++j )
         {
-            distFrom[ j ] = pass == 0 ? connectUndirectedDistances( g, defsPerTerminal[ j ], r )
-                                      : connectUndirectedDistances( g, std::span<const NodeId>( &picks[ j ], 1 ), r );
+            distFrom[ j ] = pass == 0 ? connectUndirectedDistances( g, defsPerTerminal[ j ], r, mask )
+                                      : connectUndirectedDistances( g, std::span<const NodeId>( &picks[ j ], 1 ), r, mask );
         }
+        return distFrom;
+    };
+    for( int pass = 0; pass < 2; ++pass )
+    {
         std::vector<NodeId> next = picks;
-        for( std::size_t i = 0; i < T; ++i )
-        {
-            if( defsPerTerminal[ i ].size() > 1 )
-            {
-                const TerminalChoice choice = scoreTerminalCandidates( defsPerTerminal[ i ], firstPicks[ i ], i, distFrom );
-                next[ i ]    = choice.chosen;
-                tiedOut[ i ] = choice.tied;
-            }
-        }
+        choosePassPicks( defsPerTerminal, firstPicks, distancesFrom( pass, notThrough ), !notThrough.empty(),
+                         [ & ] { return distancesFrom( pass, {} ); }, next, tiedOut );
         picks = std::move( next );
     }
     ENSURES( picks.size() == T && tiedOut.size() == T );
@@ -18738,6 +18917,33 @@ inline bool selectorIsBareName( std::string_view spec ) noexcept
 {
     return !spec.empty() && spec.front() != '@' && spec.find_first_of( ":/" ) == std::string_view::npos
         && spec.find_first_of( ".#", 1 ) == std::string_view::npos;
+}
+
+// CONNECT-SOURCE-JOINT: pathDefInTests per node, the nodes the source-only search never walks through. Its path half is read
+// once per file: a symbol with no testScope of its own answers exactly that file's half, so the first such symbol of each file
+// is asked and the answer reused (kFileUnread until then).
+inline std::vector<char> connectTestMask( const IngestResult& ing, const Graph& g )
+{
+    const std::size_t         N           = g.wOutDeg.size();
+    constexpr std::uint8_t    kFileUnread = 2;
+    std::vector<std::uint8_t> fileInTests( ing.files.size(), kFileUnread );
+    std::vector<char>         inTests( N, 0 );
+    for( std::size_t n = 0; n < N && n < ing.symbols.size(); ++n )
+    {
+        const Symbol& s = ing.symbols[ n ];
+        if( s.testScope != 0 || s.fileId >= fileInTests.size() )
+        {
+            inTests[ n ] = pathDefInTests( ing, NodeId( n ) ) ? 1 : 0;
+            continue;
+        }
+        std::uint8_t& fileHalf = fileInTests[ s.fileId ];
+        if( fileHalf == kFileUnread )
+        {
+            fileHalf = pathDefInTests( ing, NodeId( n ) ) ? 1 : 0;
+        }
+        inTests[ n ] = char( fileHalf );
+    }
+    return inTests;
 }
 
 // What joinTerminalPicks hands packConnect: the tied names (ambiguous_terminal=, "" when none) and, per terminal whose spec is
@@ -18762,7 +18968,12 @@ inline ConnectPicks joinTerminalPicks( const IngestResult& ing, const Graph& g, 
         defsPerTerminal.push_back( resolveAllByNameQualified( ing, std::string_view( spec ), nullptr ) );
     }
     std::vector<std::uint32_t> tied;
-    chooseJoiningTerminals( g, defsPerTerminal, picks, tied, radius );
+    // CONNECT-SOURCE-JOINT: when no terminal is test code, connectSourceJoint never walks through a test, so the choice of
+    // definition reads the same source-only view (CodeRabbit #636)
+    const bool anyMany   = std::any_of( defsPerTerminal.begin(), defsPerTerminal.end(), []( const std::vector<NodeId>& d ) { return d.size() > 1; } );
+    const bool allSource = std::none_of( picks.begin(), picks.end(), [ & ]( NodeId t ) { return t < ing.symbols.size() && pathDefInTests( ing, t ); } );
+    const std::vector<char> notThrough = ( anyMany && allSource && picks.size() >= 2 ) ? connectTestMask( ing, g ) : std::vector<char>{};
+    chooseJoiningTerminals( g, defsPerTerminal, picks, tied, radius, notThrough );
     ConnectPicks out;
     for( std::size_t i = 0; i < picks.size(); ++i )
     {
@@ -18788,6 +18999,115 @@ inline ConnectPicks joinTerminalPicks( const IngestResult& ing, const Graph& g, 
         }
     }
     return out;
+}
+
+// The lowest-id test-class intermediary on a shortest path, inside the group's own edges, between the two ends of a leg that
+// `crosses` (kNoNode when none): the leg's own intermediaries, which the group's flat steiner list does not record. Each leg is
+// two BFS over the group's nodes (terminals and steiner, a few dozen), never over the graph.
+template<class Crosses>
+inline NodeId lowestTestOnCrossingLegs( const ConnectGroup& grp, std::span<const char> inTests, Crosses crosses )
+{
+    std::vector<NodeId> nodes( grp.terminals );
+    nodes.insert( nodes.end(), grp.steiner.begin(), grp.steiner.end() );
+    std::sort( nodes.begin(), nodes.end() );
+    const auto at = [ & ]( NodeId v ) { return std::size_t( std::lower_bound( nodes.begin(), nodes.end(), v ) - nodes.begin() ); };
+    std::vector<std::vector<std::uint32_t>> adj( nodes.size() );
+    for( const ConnectEdge& e : grp.edges )
+    {
+        const std::size_t a = at( e.from ), b = at( e.to );
+        if( a < nodes.size() && b < nodes.size() && nodes[ a ] == e.from && nodes[ b ] == e.to )
+        {
+            adj[ a ].push_back( std::uint32_t( b ) );
+            adj[ b ].push_back( std::uint32_t( a ) );
+        }
+    }
+    const auto bfs = [ & ]( std::size_t from )
+    {
+        std::vector<std::uint32_t> d( nodes.size(), UINT32_MAX );
+        std::vector<std::uint32_t> q{ std::uint32_t( from ) };
+        d[ from ] = 0;
+        for( std::size_t h = 0; h < q.size(); ++h )
+        {
+            for( const std::uint32_t v : adj[ q[ h ] ] )
+            {
+                if( d[ v ] == UINT32_MAX )
+                {
+                    d[ v ] = d[ q[ h ] ] + 1;
+                    q.push_back( v );
+                }
+            }
+        }
+        return d;
+    };
+    NodeId best = kNoNode;
+    for( const ConnectPath& leg : grp.paths )
+    {
+        const std::size_t a = at( leg.termA ), b = at( leg.termB );
+        if( !crosses( leg.termA, leg.termB ) || a >= nodes.size() || b >= nodes.size() || nodes[ a ] != leg.termA || nodes[ b ] != leg.termB )
+        {
+            continue;
+        }
+        const std::vector<std::uint32_t> da = bfs( a ), db = bfs( b );
+        if( da[ b ] == UINT32_MAX )
+        {
+            continue;
+        }
+        for( std::size_t k = 0; k < nodes.size(); ++k )
+        {
+            const NodeId v = nodes[ k ];
+            if( v < inTests.size() && inTests[ v ] != 0 && da[ k ] != UINT32_MAX && db[ k ] != UINT32_MAX && da[ k ] + db[ k ] == da[ b ]
+                && v != leg.termA && v != leg.termB && ( best == kNoNode || v < best ) )
+            {
+                best = v;
+            }
+        }
+    }
+    return best;
+}
+
+// CONNECT-SOURCE-JOINT (a): a test function is never the joint of terminals that are all source. terraform's
+// `--connect=Context.Plan,Context.Apply` joined the two through TestContext2Apply_nullableVariables and printed it as the
+// common caller, unhedged; and §2.4a's tie-break (fewer connects wins) hands an equal-distance join to a test, which usually
+// connects few. So when no terminal is test-class (filter.h pathDefInTests), the search never walks through a test-class
+// node. When that leaves apart terminals the unrestricted search joins, the result names the first test-class intermediary
+// (id order) of an unrestricted group that joins terminals the source search left apart as testJoint: test-only evidence,
+// disclosed by the emitter, never printed as a joint. A test
+// terminal keeps today's search unchanged (a test's own helpers are its honest joints).
+inline ConnectResult connectSourceJoint( const IngestResult& ing, const Graph& g, const std::vector<NodeId>& terminals, std::uint32_t radius )
+{
+    if( terminals.size() < 2 || std::any_of( terminals.begin(), terminals.end(), [ & ]( NodeId t ) { return pathDefInTests( ing, t ); } ) )
+    {
+        return connectSubgraph( g, terminals, radius );
+    }
+    const std::vector<char> inTests = connectTestMask( ing, g );
+    ConnectResult res = connectSubgraph( g, terminals, radius, inTests );
+    if( res.groups.size() <= 1 )
+    {
+        return res;   // every terminal joined through source (or nothing to join): no test was needed
+    }
+    const ConnectResult any = connectSubgraph( g, terminals, radius );
+    if( any.groups.size() >= res.groups.size() )
+    {
+        return res;   // the tests join nothing the source search left apart
+    }
+    // Only a group of the unrestricted search that joins terminals the source search left APART is evidence for them: a test
+    // beside a source-joined pair (a shorter test path) says nothing about the <unconnected> ones (CodeRabbit #625).
+    const auto sourceComponentOf = [ & ]( NodeId t )
+    {
+        const auto it = std::lower_bound( res.terminals.begin(), res.terminals.end(), t );
+        return ( it != res.terminals.end() && *it == t ) ? res.componentOf[ std::size_t( it - res.terminals.begin() ) ] : UINT32_MAX;
+    };
+    // Per LEG, not per group: one group can hold a source-joined pair with a shorter test path beside it AND a test that joins
+    // a third terminal, so only the tests on a leg whose two ends lie in different source components count (CodeRabbit #636).
+    for( const ConnectGroup& grp : any.groups )
+    {
+        const NodeId hit = lowestTestOnCrossingLegs( grp, inTests, [ & ]( NodeId a, NodeId b ) { return sourceComponentOf( a ) != sourceComponentOf( b ); } );
+        if( hit != kNoNode && ( res.testJoint == kNoNode || hit < res.testJoint ) )
+        {
+            res.testJoint = hit;
+        }
+    }
+    return res;
 }
 
 // ---- community detection (--communities): one level of Louvain local-moving on the UNDIRECTED projection
@@ -19072,7 +19392,7 @@ inline GaugeClauses graphGaugeClauses( const Graph& g ) noexcept
 // alone — symbol-id order, each id once — and the decl/def collapse and every later filter (the namespace gate,
 // keepOwnJvmLanguageCandidates, keepRustQualifiedCandidates, keepStdQualifiedCandidates) keep a subset in order.
 //
-// The FNV-1a hash over the candidate bytes only picks a bucket; a hit is confirmed by length and memcmp against each list in
+// The hash over the candidate bytes (ankerl's wyhash, a word at a time) only picks a bucket; a hit is confirmed by length and memcmp against each list in
 // it, so a collision costs a compare, never a wrong share. List numbers are first-seen in the sequential resolve loop, and the
 // map is only probed and inserted into — neither reaches output.
 //
@@ -19086,12 +19406,7 @@ inline GaugeClauses graphGaugeClauses( const Graph& g ) noexcept
 inline std::uint32_t internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand )
 {
     EXPECTS( !cand.empty(), "tier 3 declines a set it could not narrow to one; the builtin-method gate a non-empty set it admitted none of" );
-    std::uint64_t     hash  = 14695981039346656037ull;   // the FNV-1a 64-bit offset basis
-    const char* const bytes = reinterpret_cast<const char*>( cand.data() );
-    for( std::size_t byteIndex = 0; byteIndex < cand.size_bytes(); ++byteIndex )
-    {
-        hash = hashutil::fnv1aAbsorb( hash, bytes[ byteIndex ] );
-    }
+    const std::uint64_t hash = ankerl::unordered_dense::detail::wyhash::hash( cand.data(), cand.size_bytes() );   // the flat containers' own byte hash, a word at a time
     rw::SmallVec<std::uint32_t, 1>& bucket = listsByHash[ hash ];
     for( const std::uint32_t listIndex : bucket )
     {

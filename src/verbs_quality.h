@@ -526,6 +526,10 @@ struct DeltaBasis
     // and never looks at it, which keeps the two runs' reported findings identical.
     std::vector<rw::quality::CloneIdiomFact> cloneIdioms;
     rw::quality::HistoryUnread               historyUnread;   // hwh-fix4 (N1): history a gating kind could not read (unread_history=, exit 6)
+    // QD-IDENTITY-ONCE: the working-tree form's pure passes over d.ing — the identity-basis snapshot, the delta and the
+    // --show-stale snapshot all read the same ingest, so the clone and construct passes run once between them. Unbound
+    // (never read) in the ref-pair form, whose two trees are other ingests.
+    rw::quality::TreePasses                  passes;
 };
 
 // The REF-PAIR floor's comparison, once loadRefPairDelta has both sides: the base snapshot is the floor, tree B the judged
@@ -610,7 +614,7 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
         // #228 part 1 — the IDENTITY BASIS (quality.h): when the tracked tree already IS HEAD, the baseline is
         // this tree's own snapshot, so a no-op diff is empty by construction instead of by luck. Falls back to
         // the archived HEAD snapshot on any modified tree, unchanged.
-        quality::HeadBasis basis = quality::computeHeadBasis( root, d.ing, d.g, cfg.rootPath, cfg.maxFileBytes, cfg.excludes );
+        quality::HeadBasis basis = quality::computeHeadBasis( root, d.ing, d.g, cfg.rootPath, cfg.maxFileBytes, cfg.excludes, &out.passes );
         if( !basis.ok )
         {
             // w1 MED: this used to say "no <file>" in BOTH cases — factually false when the file is a STALE
@@ -657,7 +661,7 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
     out.healing = quality::healIdentity( out.baseSel.snapshot, out.acks, d.ing, d.g,
                                          std::string( cfg.rootPath ), root, cfg.qualityAck );
     out.regs = quality::computeDelta( d.ing, d.g, out.baseSel.snapshot, cfg.rootPath, cfg.excludes, cfg.maxFileBytes, &out.registerMacroExcluded, &out.apiNewSurface,
-                                      &out.cloneIdioms, &out.declinedCallExcluded, &out.valueRefExcluded, quality::KindScope{}, &out.historyUnread );
+                                      &out.cloneIdioms, &out.declinedCallExcluded, &out.valueRefExcluded, quality::KindScope{}, &out.historyUnread, &out.passes );
     // hwh-fix4 (N1): against a pinned sidecar the rename record re-files baseline rows; refused on a partial clone, it is unread history
     out.historyUnread.renames = out.healing.renames.refusedPartial && out.baseSel.marker == std::string_view( "sidecar" );
     return std::nullopt;
@@ -893,8 +897,8 @@ inline constexpr const char* kQdLegendCore =
     "order: (1) acked findings are suppressed entirely (acked= counts them); (2) ORIGIN — a finding on a "
     "symbol that EXISTED at the baseline is preexisting-worse (no origin attribute), one that exists only "
     "because the code is NEW carries origin=\"new-symbol\"; (3) MATERIALITY — a small numeric delta is "
-    "sev=\"minor\", and minor= counts them. EXIT 2 fires only on preexisting-worse AND major, or on "
-    "format-arity, the gating= count; new-symbol rows never gate, except defect-shape format-arity, so exit 0 "
+    "sev=\"minor\", and minor= counts them. EXIT 2 fires only on preexisting-worse AND major, the gating= count; "
+    "new-symbol rows never gate, except defect-shape format-arity and a new function at the ceiling, so exit 0 "
     "is NOT a verdict on them — nothing that existed got worse, but the new debt is yours: read them. Clone kinds are new-symbol only when EVERY member is new; short-horizon-churn is "
     "preexisting by construction. preexisting-worse= and new-symbol= partition regressions=. stale= is a "
     "FOURTH axis, never gating and never counted in regressions=: rows in the .ripwire_quality_acks ledger "
@@ -902,8 +906,7 @@ inline constexpr const char* kQdLegendCore =
     "api-new-surface= COUNTS the new PUBLIC symbols (never gates, not in regressions=, printed even at zero). "
     "register-macro-excluded= is a FLOOR, not a finding: symbols this run excluded from the dead-code kind "
     "because their own definition is a registered self-registering test/benchmark macro call. Never gates, "
-    "never counted in regressions=, printed even at zero (zero means none excluded, not that the check did "
-    "not run). "
+    "never counted in regressions=, printed even at zero (zero: none excluded, not a skipped check). "
     // P3 (L7): next= on gating rows, defined where the reader meets it
     "A gating row's next= is the one pasteable follow-up: expand on FILE:NAME, the body to fix (a duplication row names a SET and carries none). "
     // P8 (L7): the threshold beside the number
@@ -1019,8 +1022,8 @@ inline constexpr const char* kQdIdentityLegend =
     "regression carried in with a rename is judged preexisting-worse and GATES instead of slipping through "
     "as new-symbol. FLOORS, stated because silence here would read as a guarantee: the two clone kinds key "
     "on a member-SET hash and are NOT re-filed, so a clone ack still dies on a rename; ORIGIN follows the "
-    "rename record but never content, because the baseline stores no content id at all; and a move git "
-    "recorded no rename for still reads as new-symbol. ";
+    "rename record, not content: a move git recorded no rename for reads as new-symbol, or as moved (never "
+    "gating) when its body, unchanged or nearly so, is over a bar. ";
 
 // How the two mechanisms decide, in full — printed only when an ack was actually SUPPRESSED by one of
 // them (acked= is non-zero), which is the only state in which a reader has a suppression to audit. The
@@ -1106,19 +1109,34 @@ inline constexpr const char* kQdMaskReportOnlyLegend =
     "gate in that language yet: log-only (a broad handler whose body only logs and never names the error) "
     "or rethrow-only (the sole handler re-throws the error unchanged). ";
 
+// QD-MONSTER-GROWTH — emitted only when a monster="1" row is in the document.
+inline constexpr const char* kQdMonsterLegend =
+    "monster=\"1\" marks a complexity row on a function over 5x the ccx bar (was= 75 or more) that grew by now= minus was= "
+    "(10 or more) in this change: major whatever the percentage, since tangle in a giant function is a small share of it "
+    "forever. Put the new branch in a helper. ";
+
 // Emitted only when a clone-family row (duplication / new-clone-of-reused-helper) is in the document,
 // which is what puts members=, tokens= and idiom= on a first screen. A clean tree has none.
 inline constexpr const char* kQdCloneLegend =
     "CLONE ROWS name the whole group rather than one symbol: members= is the member list and tokens= its "
     "shared normalized-token count (the same per-group pair the clones verb reports). idiom= names a "
-    "RECOGNIZED BODY SHAPE every member spells, out of a closed set of three (threshold-ladder, "
-    "switch-name-table, builder-chain). idiom= alone changes nothing; a group that ALSO shares no "
+    "RECOGNIZED BODY SHAPE every member spells, out of a closed set of four (threshold-ladder, "
+    "switch-name-table, builder-chain, one-statement). idiom= alone changes nothing; a group that ALSO shares no "
     "non-keyword identifier between any two members, sits in pairwise-distinct enclosing contexts, and "
     "stays under 80 normalized tokens is an idiom COLLISION rather than a copy, and is reported minor "
     "instead of gating. Break any one of those and it gates as before, idiom= and all: two bucketing "
     "ladders over the SAME enum are a copy. The shape is read off the body's token stream and not a parse "
     "tree, so a macro-assembled body classifies as whatever its raw tokens spell — the name is printed so "
     "the call can be overruled by reading. ";
+
+// The one-statement half of the clone paragraph, printed only when a row carries idiom="one-statement": its
+// narrowed shared-identifier test is the one rule a reader of THAT row needs, and a ladder-only document
+// should not pay for it (the same G4 rule as every conditional section here).
+inline constexpr const char* kQdOneStatementLegend =
+    "one-statement is a body of one return statement (leading EXPECTS/ASSUME/DASSERT/VALIDATE asserts aside); "
+    "its shared-identifier test leaves out each member's own parameter names, every std:: chain and standard "
+    "container/string words (size, find, npos, first, second and the like), and a pair identical once its "
+    "parameters are renamed always gates. ";
 
 // P1 — the SCOPE half of the quality-delta legend, printed ONLY when the report actually contains a
 // scope partition or a foreign-ack row. That is a G4 (token density) decision, not a hedge: the
@@ -1243,6 +1261,10 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p, std::FILE*
         }
         return false;
     };
+    const auto anyOneStatementRow = [] ( const std::vector<rw::quality::Regression>& v )
+    {
+        return std::any_of( v.begin(), v.end(), []( const rw::quality::Regression& r ) { return r.facet == rw::cloneIdiomName( rw::CloneIdiom::OneStatement ); } );
+    };
     const auto anyMinorMaskRow = [] ( const std::vector<rw::quality::Regression>& v )
     {
         return std::any_of( v.begin(), v.end(), []( const rw::quality::Regression& r ) { return r.kind == "error-masking" && r.isMinor; } );
@@ -1254,6 +1276,10 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p, std::FILE*
     const auto anyDefectShapeRow = [] ( const std::vector<rw::quality::Regression>& v )
     {
         return std::any_of( v.begin(), v.end(), []( const rw::quality::Regression& r ) { return r.kind == "defect-shape"; } );
+    };
+    const auto anyMonsterRow = [] ( const std::vector<rw::quality::Regression>& v )
+    {
+        return std::any_of( v.begin(), v.end(), []( const rw::quality::Regression& r ) { return r.kind == "complexity" && !r.facet.empty(); } );
     };
 
     std::fputs( kQdLegendCore, out );
@@ -1333,9 +1359,24 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p, std::FILE*
     if( !p.rows.empty() || !p.disclosedRows.empty() )
     {
         std::fputs( kQdRowLegend, out );
+        // QD-ENTRY-CEILING: the two NEW-code readings are defined only on an answer that carries them (present-only), so every
+        // other answer keeps its legend bytes.
+        if( std::any_of( p.rows.begin(), p.rows.end(), []( const rw::quality::Regression& r ) { return r.isNewSymbol && r.isMoved; } ) )
+        {
+            rw::emitRaw( out, "origin=\"moved\": the same or a nearly identical body (a clone-sketch match) left another name or file in this diff; it never gates. " );
+        }
+        if( std::any_of( p.rows.begin(), p.rows.end(), []( const rw::quality::Regression& r ) { return r.ceiling != 0; } ) )
+        {
+            rw::emitRaw( out, "ceiling= on a NEW complexity or verbosity row: it reached 4x the bar (ccx 60 or 240 lines; not a moved body, not test "
+                              "code), so it gates. " );
+        }
         if( anyCloneRow( p.rows ) || anyCloneRow( p.disclosedRows ) )
         {
             std::fputs( kQdCloneLegend, out );
+            if( anyOneStatementRow( p.rows ) || anyOneStatementRow( p.disclosedRows ) )
+            {
+                std::fputs( kQdOneStatementLegend, out );
+            }
         }
         if( anyMinorMaskRow( p.rows ) || anyMinorMaskRow( p.disclosedRows ) )
         {
@@ -1348,6 +1389,10 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p, std::FILE*
         if( anyDefectShapeRow( p.rows ) || anyDefectShapeRow( p.disclosedRows ) )
         {
             rw::emitRaw( out, kQdDefectShapeLegend );
+        }
+        if( anyMonsterRow( p.rows ) || anyMonsterRow( p.disclosedRows ) )
+        {
+            rw::emitRaw( out, kQdMonsterLegend );
         }
     }
 
@@ -1496,7 +1541,8 @@ DirtyPinVerdict inspectDirtyBaselinePin( const MainDispatch& d, const std::strin
     // statement about the delta, so computing it another way is how the two would come to disagree. #228: on a
     // tree whose tracked files are HEAD this now absorbs nothing, which is what unblocks --quality-baseline on
     // exactly the repositories that needed the escape hatch.
-    quality::HeadBasis basis = quality::computeHeadBasis( root, d.ing, d.g, cfg.rootPath, cfg.maxFileBytes, cfg.excludes );
+    quality::TreePasses passes;   // QD-IDENTITY-ONCE: one clone/construct pass for the identity snapshot and the delta below
+    quality::HeadBasis  basis = quality::computeHeadBasis( root, d.ing, d.g, cfg.rootPath, cfg.maxFileBytes, cfg.excludes, &passes );
     if( !basis.ok )
     {
         return verdict;   // no HEAD tree to compare against — nothing can be absorbed, so nothing is claimed
@@ -1505,7 +1551,7 @@ DirtyPinVerdict inspectDirtyBaselinePin( const MainDispatch& d, const std::strin
     quality::healIdentity( basis.snapshot, acks, d.ing, d.g, std::string( cfg.rootPath ), root, /*wantContentIds=*/false );
     std::vector<quality::Regression> regs =
         quality::computeDelta( d.ing, d.g, basis.snapshot, cfg.rootPath, cfg.excludes, cfg.maxFileBytes, nullptr, nullptr, nullptr, nullptr, nullptr,
-                               quality::KindScope{}, &verdict.historyUnread );
+                               quality::KindScope{}, &verdict.historyUnread, &passes );
     quality::applyAckRatchet( regs, acks );
 
     for( const quality::Regression& r : regs )
@@ -1749,6 +1795,46 @@ int qualityDeltaExit( std::size_t gatingCount, bool partial ) noexcept
     return gatingCount > 0 ? 2 : partial ? 6 : 0;
 }
 
+// P2.5 — the stderr line NAMING the first gating finding of a --quality-delta answer (the sorted list's first row that
+// gates), so a caller that only checks `$?` has a subject on the channel a human reads. Nothing when no row gates.
+inline void emitQdGatingLine( const std::vector<rw::quality::Regression>& regs, std::size_t gatingCount, const std::string& deltaRoot )
+{
+    using namespace rw;
+    const auto firstGating = std::find_if( regs.begin(), regs.end(), []( const quality::Regression& r ) { return quality::rowGates( r ); } );
+    if( gatingCount == 0 || firstGating == regs.end() )
+    {
+        return;
+    }
+    const quality::Regression* const first = &*firstGating;
+    const std::string at = first->path.empty() ? std::string{}
+                                               : " at " + first->path + ":" + std::to_string( first->line );
+    // M12: displaySym, not first->sym raw — the XML/JSON rows both normalize sym's path segment
+    // for display (quality::displaySym); this stderr line was the one caller that skipped it,
+    // so it named "./src/…::rw::…" beside a row that named the same finding "src/…::rw::…".
+    // a gating row on NEW code is defect-shape format-arity or a new function at the ceiling (rowGates); the line names
+    // either part only when there is one, so every run without them keeps its bytes.
+    const std::size_t newGating = static_cast<std::size_t>( std::count_if( regs.begin(), regs.end(), []( const quality::Regression& r )
+                                                                           { return r.isNewSymbol && quality::rowGates( r ); } ) );
+    const std::size_t ceilingGating = static_cast<std::size_t>( std::count_if( regs.begin(), regs.end(), []( const quality::Regression& r )
+                                                                               { return r.ceiling != 0 && quality::rowGates( r ); } ) );
+    if( ceilingGating != 0 )
+    {
+        rw::emitTo( stderr, "ripwire: --quality-delta gating: {} gating finding(s), {} of them a new function at the ceiling (ccx {} / {} lines); first: {} {}{} (was={} now={})\n",
+                      gatingCount, ceilingGating, quality::newSymbolCeiling( quality::kCcxBar ), quality::newSymbolCeiling( quality::kLocBar ),
+                      first->kind.c_str(), quality::displaySym( first->sym, deltaRoot ).c_str(), at.c_str(), first->was, first->now );
+    }
+    else if( newGating == 0 )
+    {
+        rw::emitTo( stderr, "ripwire: --quality-delta gating: {} preexisting-worse major finding(s); first: {} {}{} (was={} now={})\n",
+                      gatingCount, first->kind.c_str(), quality::displaySym( first->sym, deltaRoot ).c_str(), at.c_str(), first->was, first->now );
+    }
+    else
+    {
+        rw::emitTo( stderr, "ripwire: --quality-delta gating: {} gating finding(s), {} of them defect-shape format-arity on new code; first: {} {}{} (was={} now={})\n",
+                      gatingCount, newGating, first->kind.c_str(), quality::displaySym( first->sym, deltaRoot ).c_str(), at.c_str(), first->was, first->now );
+    }
+}
+
 std::optional<int> runQualityDelta( const MainDispatch& d )
 {
     using namespace rw;
@@ -1976,9 +2062,9 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
                 // tolerant token parsing, splitAckLocator, the takeAckNamedToken family) at all — that half of
                 // the contract is what qackconcurrencycheck.sh's grammar arm (2) and byte-identity arm (7) pin
                 // instead, over the actual file. What THIS catches: rescoreNumericMajor's kMaterialityBars
-                // lookup (by kind name) silently drifting from the bar/minorDelta/growthTiered literals
-                // perSymbolKind was called with (computeDelta, above) — two spellings of the same three
-                // constants that a future edit could change in only one place. A drift there means the live
+                // lookup (by kind name) silently drifting from the kMaterialityBars row perSymbolKind is handed
+                // by index (computeDelta, above; the static_assert beside the table pins the order) — two ways
+                // to reach the same constants that a future edit could break in only one place. A drift there means the live
                 // formula (numericRegressionIsMajor, via perSymbolKind) and the re-score formula
                 // (rescoreNumericMajor) have silently diverged — see quality.h's MaterialityBar table, the one
                 // place both are meant to agree. ENSURES, not ASSUME: this is this function's OWN postcondition
@@ -2063,7 +2149,12 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         // kind selection judges its own kinds' acks only).
         const std::vector<quality::StaleAck> staleAcks = acks.empty() ? std::vector<quality::StaleAck>{}
                                                          : refPair ? refPairStaleAcks( acks, refs )
-                                                         : quality::computeStaleAcks( acks, quality::computeSnapshot( ing, g, cfg.rootPath ) );
+                                                         : quality::computeStaleAcks( acks, quality::computeSnapshot( ing, g, cfg.rootPath, nullptr, {}, &basis.passes ) );
+        if( std::getenv( "RIPWIRE_STATS" ) )   // QD-ENVOY-TIME cost bound: Type-3 passes this call ran (test/qdtype3oncecheck.sh)
+        {
+            rw::emitTo( stderr, "ripwire: quality-passes type3_runs={} type3_pairs={}\n", gType3PassRuns.load( std::memory_order_relaxed ),
+                        gType3PassPairs.load( std::memory_order_relaxed ) );
+        }
 
         // P1.4 — the <sa> family now carries THREE whys, and the third is counted SEPARATELY: stale= means
         // "this ack no longer applies", and a foreign ack applies fine — it is the SESSION that was wrong,
@@ -2149,36 +2240,7 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         // §A4 (minor): emitted BEFORE the format fork, not after the XML tail — under --json the fork returned
         // first, so exactly the caller most likely to be a script reading `$?` got the bare exit=2 with no
         // subject. The line is about the EXIT CODE, which both formats share, so it belongs to neither.
-        if( gatingCount > 0 )
-        {
-            const quality::Regression* first = nullptr;
-            for( const quality::Regression& r : regs )
-            {
-                if( quality::rowGates( r ) ) { first = &r; break; }
-            }
-            if( first )
-            {
-                const std::string at = first->path.empty() ? std::string{}
-                                                           : " at " + first->path + ":" + std::to_string( first->line );
-                // M12: displaySym, not first->sym raw — the XML/JSON rows both normalize sym's path segment
-                // for display (quality::displaySym); this stderr line was the one caller that skipped it,
-                // so it named "./src/…::rw::…" beside a row that named the same finding "src/…::rw::…".
-                // a gating row on NEW code is only ever defect-shape format-arity (rowGates); the line names that
-                // part only when there is one, so every run without it keeps its bytes.
-                const std::size_t newGating = static_cast<std::size_t>( std::count_if( regs.begin(), regs.end(), []( const quality::Regression& r )
-                                                                                       { return r.isNewSymbol && quality::rowGates( r ); } ) );
-                if( newGating == 0 )
-                {
-                    rw::emitTo( stderr, "ripwire: --quality-delta gating: {} preexisting-worse major finding(s); first: {} {}{} (was={} now={})\n",
-                                  gatingCount, first->kind.c_str(), quality::displaySym( first->sym, deltaRoot ).c_str(), at.c_str(), first->was, first->now );
-                }
-                else
-                {
-                    rw::emitTo( stderr, "ripwire: --quality-delta gating: {} gating finding(s), {} of them defect-shape format-arity on new code; first: {} {}{} (was={} now={})\n",
-                                  gatingCount, newGating, first->kind.c_str(), quality::displaySym( first->sym, deltaRoot ).c_str(), at.c_str(), first->was, first->now );
-                }
-            }
-        }
+        emitQdGatingLine( regs, gatingCount, deltaRoot );
 
         // L2: --json — same regressions, keys mirror the XML attr names (kind/sym/members/tokens/was/now/
         // sev/churn/surface). jsonUnsupportedVerb already refused --quality-baseline/--quality-ack, so
@@ -2254,9 +2316,13 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
                         rw::emitTo( stdout, ",\"{}\":\"{}\"", facetName, jsonStr( r.facet ).c_str() );
                     }
                 }
-                if( r.isNewSymbol )
+                if( const char* origin = quality::originValue( r ) )
                 {
-                    rw::emitRaw( stdout, ",\"origin\":\"new-symbol\"" ); // absent = preexisting-worse (mirrors the XML)
+                    rw::emitTo( stdout, ",\"origin\":\"{}\"", origin ); // absent = preexisting-worse (mirrors the XML)
+                }
+                if( r.ceiling != 0 )
+                {
+                    rw::emitTo( stdout, ",\"ceiling\":{}", r.ceiling ); // QD-ENTRY-CEILING (mirrors the XML)
                 }
                 rw::emitRaw( stdout, "}" );
             };
@@ -2356,7 +2422,7 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
             // on new-symbol rows (absent = preexisting-worse), the same "mark the exception" convention sev=
             // uses. api-surface's own surface="new-symbol" facet is the same fact narrowed to that kind; it
             // stays for shape compatibility, and origin= is what the exit gate reads.
-            const char* origin = r.isNewSymbol ? " origin=\"new-symbol\"" : "";
+            const char* origin = !r.isNewSymbol ? "" : r.isMoved ? " origin=\"moved\"" : " origin=\"new-symbol\"";   // quality::originValue
             // P2.5 — the two attributes that make a row ACTIONABLE, appended last so every pre-r27 attribute
             // keeps its position:
             //   p="path:line" — sym= is a canonical id whose display tail is often a bare one-letter local
@@ -2370,6 +2436,8 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
                 locAttr = " p=\"" + ex( r.path ) + ":" + std::to_string( r.line ) + "\"";
             }
             const char* gatingAttr = ( gatingAllowed && quality::rowGates( r ) ) ? " gating=\"1\"" : "";
+            // QD-ENTRY-CEILING: the ceiling a NEW function reached, beside the gating= it causes (present-only)
+            const std::string ceilingAttr = r.ceiling != 0 ? " ceiling=\"" + std::to_string( r.ceiling ) + "\"" : std::string();
             // P8 (L7): the threshold beside the number it judges — bar= on the four numeric kinds (quality.h's
             // kCcxBar/kLocBar/kNestBar/kParamBar), so was=/now= read without the legend.
             const char* barAttr = r.kind == "complexity" ? " bar=\"15\"" : r.kind == "verbosity" ? " bar=\"60\""
@@ -2403,7 +2471,7 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
             }
             else
             {
-                rw::emitTo( out, "<r kind=\"{}\" sym=\"{}\" was=\"{}\" now=\"{}\"{}{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), r.was, r.now, barAttr, sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
+                rw::emitTo( out, "<r kind=\"{}\" sym=\"{}\" was=\"{}\" now=\"{}\"{}{}{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), r.was, r.now, barAttr, sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, ceilingAttr.c_str(), nextAttr.c_str() );
             }
         };
         // Fix round 1 (rv-lean-trio item 5, owner ruling 5): a fold ships only when it PAYS (compactlegend.h foldPays: shorter

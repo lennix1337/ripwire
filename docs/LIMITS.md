@@ -29,16 +29,16 @@ a small explicit bound" is safe only when nothing inside the group repeats; it i
 `(a|aa){1,100}b$`, tracked with the multi-quantifier family above.
 
 **Totals are a dated snapshot.** Every total on this page (the table below, the class counts, the
-file count) is the counts snapshot taken 2026-11-11 (`docs/counts.tsv`), so two open changes that each add a
+file count) is the counts snapshot taken 2026-11-13 (`docs/counts.tsv`), so two open changes that each add a
 cap do not both rewrite the same line; the per-file tables are re-read from `src/` on every run.
 `python3 docs/counts_snapshot.py show` prints today's numbers beside these.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 415 | 142 | 274 | **141** |
+| 423 | 144 | 277 | **146** |
 
-Plus 9 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 415 + 9 is the 424 constants this generator parses out of `src/`.
+Plus 10 ranking and apportionment parameters, in their own table below: they are not caps, they
+are not counted as caps, and 423 + 10 is the 433 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -56,8 +56,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **142 of 415 caps are classified
-(50 INDEXING, 46 OUTPUT, 46 BOUNDARY); the remaining 273 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **142 of 423 caps are classified
+(50 INDEXING, 46 OUTPUT, 46 BOUNDARY); the remaining 281 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -89,7 +89,7 @@ measurement that chose it; listing them beside truncation caps invites tuning th
 
 The **anchor** column is read from each constant's own trailing comment. **unsourced** means the
 comment cites no measurement — the value came from somewhere, but not from anything a reader can
-check. All 9 read unsourced today, which is the finding, not an omission: `kSpecificMinLen` has
+check. All 10 read unsourced today, which is the finding, not an omission: `kSpecificMinLen` has
 the widest measured blast radius of any constant in this tree (14 invocations across 9 verbs, per
 `docs/TUNING.md`) and its entire stated provenance is the parenthetical `(aider's)`. Sourcing them
 means editing `src/`; a cited anchor that `docs/EVALS.md` does not contain makes this generator
@@ -104,6 +104,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 | `kExemplarCcxCeilFactor` | `4` | `src/exemplar.h` | **unsourced** | — |
 | `kForDocTopShareTenths` | `6` | `src/fordocbody.h` | **unsourced** | a file's top-ranked section that does not fit is an excerpt of up to this many tenths of the file's share |
 | `kGeneratedMaxProseShare` | `0.15` | `src/docparse.h` | **unsourced** | of the document's bytes that are its own prose |
+| `kNewSymbolCeilingMul` | `4` | `src/quality.h` | **unsourced** | — |
 | `kSpecificMinLen` | `8` | `src/graph.h` | **unsourced** | ≥8 chars …  (aider's) |
 | `kZoneDistanceThreshold` | `0.5` | `src/arch.h` | **unsourced** | \|A+I-1\| past this → classify into pain/useless |
 
@@ -283,6 +284,7 @@ Discloses: **none**
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kDegradedScanFiles` | `32` | — | — |
+| `kLexicalDefScanFiles` | `4096` | — | — |
 
 ### `src/didyoumean.h`
 
@@ -470,6 +472,7 @@ Discloses: `capped`
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kForDispatchCtorRows` | `4` | — | constructor-caller rows per call |
+| `kForDispatchHeldRows` | `2` | — | held-as declaration rows per call (DISPATCH-HELD-AS) |
 | `kForDispatchHopRows` | `8` | — | candidate rows per call |
 
 ### `src/fordocbody.h`
@@ -515,6 +518,7 @@ Discloses: **none**
 | --- | --- | --- | --- |
 | `kForFileSymsFiles` | `6` | — | shown files whose symbols are candidates (files_total= when more were shown) |
 | `kForFileSymsHeadRows` | `8` | — | head <d> rows whose callees by="callee" reads (head= when fewer) |
+| `kForFileSymsInitHeadRows` | `5` | — | head <d> rows (plus the re-export walk's <def> rows) by="init" reads |
 | `kForFileSymsRowsPerRule` | `3` | — | rows per rule (name_total= / callee_total= when cut) |
 
 ### `src/forfold.h`
@@ -535,12 +539,22 @@ Discloses: `path_from_capped`
 | `kPathFromReachMaxNodes` | `4096` | — | runaway guard on A's forward walk; past it every caller of A stays where it ranked |
 | `kPathGapSideRows` | `10` | — | rows per side of a <path_gap>; the rest is count= and next= |
 
+### `src/forimportspec.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kImportSpecDepth` | `12` | — | statements one walk follows from the entry |
+| `kImportSpecMaxStates` | `256` | — | (file, name) states one walk visits; past it the walk says capped="1" |
+
 ### `src/forliteral.h`
 
 Discloses: `capped`, `lit_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
+| `kForBareFlagMaxSites` | `8` | — | WHOLE-TOKEN: a bare kebab token with more source sites is prose, not one option |
 | `kForFlagDefaultMaxBytes` | `80` | — | def= text |
 | `kForFlagOwnerMaxLines` | `8` | — | a constant write outside any function names the owner type within this many lines above it |
 | `kForFlagWriteHits` | `4096` | — | the field's sites read for a constant write (past it: floor=1) |
@@ -561,6 +575,7 @@ Discloses: `capped`, `lit_capped`
 | `kForTableReaderFiles` | `16` | — | REG-READER: caller files read for them, by path (past it: readers= is a floor) |
 | `kForTableReaderRows` | `2` | — | REG-READER: <lr> reads of a subscript row's table listed (readers= counts all) |
 | `kForTableRows` | `32` | — | shape=table: <ls> rows per anchor (next= lists all) |
+| `kForVerbatimMaxSites` | `3` | — | MSG-VERBATIM: a cue-less whole text with more source sites is no single message |
 
 ### `src/formembers.h`
 
@@ -597,6 +612,14 @@ Discloses: `capped`
 | `kForPageRowsDefault` | `40` | OUTPUT | `--for --limit=N` with no N is never accepted (the flag refuses 0); |
 | `kForPageUnionSymbolCap` | `8` | INDEXING | symbols per file whose term masks join that file's union |
 | `kForThinMinFiles` | `3` | — | a ranked head over fewer files than this ⇒ thin |
+
+### `src/forreadercallers.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kReaderCallerRows` | `12` | — | <lc> rows per <lit> |
 
 ### `src/forreexport.h`
 
@@ -825,7 +848,7 @@ Discloses: **none**
 
 ### `src/ingest.h`
 
-Discloses: `ellipsis_capped`, `hits_capped`
+Discloses: `ellipsis_capped`, `hits_capped`, `unmatched_member_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
@@ -1181,7 +1204,7 @@ Discloses: `route_cands_capped`
 
 ### `src/pattern.h`
 
-Discloses: `hits_capped`
+Discloses: `ellipsis_capped`, `hits_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
@@ -1497,7 +1520,7 @@ Discloses: `capped`, `hits_capped`, `importers_capped`, `unindexed_candidates_ca
 
 ### `src/verbs_lint.h`
 
-Discloses: `capped`, `count_capped`, `ellipsis_capped`, `findings_capped`, `hits_capped`, `rows_capped`
+Discloses: `capped`, `count_capped`, `ellipsis_capped`, `findings_capped`, `hits_capped`, `rows_capped`, `unmatched_member_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |

@@ -15,7 +15,7 @@
 #include "infra/nodekind.h"    // rw::kindIs - the inline node-kind compare the per-AST-node dispatch chains run on (OPTREMARKS F3)
 #include "infra/tsparent.h"    // rw::parentOf - ts_node_parent answered from one cached root-descent path per file (parent-carry lane)
 #include "infra/fieldid.h"     // rw::fieldChild - the same defect one layer down: the field NAME resolved once per grammar, not per node
-#include "infra/hashutil.h"    // sanitizer-clean modulo-2^64 FNV multiplication
+#include "infra/hashutil.h"    // sanitizer-clean modulo-2^64 FNV multiplication; packPair — orderBindings' sort key
 #include "externalnames.h"     // FE-A: the JS/TS global tables the shadow walk keys on (ingest_jsimports.h jsNoteGlobalSpellings)
 #include "infra/namesplit.h"   // H4: stripTemplateArgs for the C++ qualified-call re-split (shared with tracelocus.h)
 #include "infra/jsonesc.h"     // rw::shSingleQuote - the git ignore probe quotes its root the same way every other git popen does
@@ -27,6 +27,7 @@
 #include "langfacts.h"        // langFacts(l): the per-language facts the ingest sections read instead of a Lang:: compare
 #include "didyoumean.h"        // octocode F3: boundedEditDistance/nearestNameByEditDistance — the ONE near-miss
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "memstats.h" // M0 MEM-STATS: the RIPWIRE_STATS footprint reading at the model at rest
 
                                 // primitive, reused for a --match query's node-kind tokens (see nearestNodeKindHint)
 #include "pattern.h"           // R2: the pattern surface's compiler + matcher — AstWalk::Pattern rides the shared file walk
@@ -502,6 +503,7 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
     // order, span-attributed families over the same DefSpanIndex (ingest_model.h).
     emitBindings( result, raw.binds, spanIndex );
     std::vector<RawBind>().swap( raw.binds );
+    retargetRustMacroAliases( result );   // RUST-MACRO-PATH: `define_rejection!` through `use … as define_rejection;` names the macro
 
     result.includes = std::move( raw.incs );   // physical dependencies (#include / import), for --deps
     result.constOpens = std::move( raw.constOpens );   // parser version 82: Ruby class/module opens → resolve.h's constant index
@@ -535,6 +537,7 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
         suppressShadowedReferences( result );
     }
 
+    memstats::mark( "model" );   // M0 MEM-STATS: the model at rest, what buildGraph's side tables stack on (src/memstats.h)
     if( result.memoryStop.isSet() )
     {
         memguard::recordStop();   // #350: the caller must answer for this partial ingest (memguard.h, the backstop)

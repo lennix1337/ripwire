@@ -140,6 +140,7 @@ ALLOW = {
     "key_is_finite":          "dynamic_map's finiteness test on a key copy; no state",
     "keyIsSortable":          "radix key classification of a value; no state",
     "std::is_sorted":         "read-only walk of the given range",
+    "std::adjacent_find":     "read-only walk of the given range (clones.h Type3PairSearch::run: a bucket lists each candidate once, in order; lane qd-envoy-time)",
     "std::has_single_bit":    "bit arithmetic on an integer",
     "std::isfinite":          "classification of a floating-point value",
     "std::fabs":              "arithmetic on a value",
@@ -148,7 +149,7 @@ ALLOW = {
     "std::max":               "comparison of two values",
     "std::string_view":       "a non-owning view over storage the caller already holds",
     "rfind":                  "read-only search of a string the caller owns",
-    "ends_with":              "read-only suffix comparison of a string the caller owns (mcpCachePath's .cache postcondition)",
+    "ends_with":              "read-only suffix comparison of a string the caller owns (mcpCachePath's .bin postcondition)",
     "starts_with":            "read-only prefix comparison of a string the caller owns (serialize.h writeSigHeadWithEnd / spliceJsonEndLine: the row head opens with its l= field)",
     "std::all_of":            "read-only walk of the given range (#150 keepStdQualifiedCandidates postcondition)",
     "isDefinitionNotDeclaration": "read-only span comparison (model.h); no state — the predicate std::all_of walks above",
@@ -160,6 +161,7 @@ ALLOW = {
     "has_value":              "read-only std::optional state test (verbs_grep.h: grepReadsIngest named its stop; lane grep-carrier)",
     "active":                 "read-only member predicate (pathpairs.h PathPairs::active: pairs.size() >= 2); no state — pathHopFacts' precondition that only a single-chain answer ends on a declined hop (lane path-fewest-unproven)",
     "inCheckout":             "read-only member predicate (crossref.h WhereHit::inCheckout: fromWorktree || ref == \"HEAD\"); no state — labelJobRows' precondition that a parse job holds no checkout row",
+    "offset":                 "read-only member sum (ingest_cache.h ByteW::offset: streamed + b.size()); no state — finishCacheBlob's blob-length postcondition over the windowed writer (lane ref-step3)",
 }
 # (T) ASSUMED-THEN-TESTED allowlist: "site -> reason", one line each. A site lands here only when the equality
 # really is a true invariant (the re-test below is dead defensive code that should eventually be deleted, not

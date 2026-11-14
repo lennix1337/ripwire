@@ -1,4 +1,5 @@
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "memstats.h" // M0 MEM-STATS: rw::memstats::mib — the RIPWIRE_STATS family table's capacity in MiB
 #include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 #include <exception>         // std::uncaught_exceptions: the stopped fold's unwind abandons the history walks
@@ -187,7 +188,7 @@ using rw::quality::deadCodeEligibleKind;
 // DIFFERENT versions (parserVerFor), so a single shared file forced a full re-parse + full rewrite on
 // every class switch (measured: plain-map-after --for 0.81 s vs 0.16 s warm). Suffixing the filename
 // with the class gives each class its OWN warm cache, so alternating verb classes never thrashes.
-// (MCP has its own separate file, mcpCachePath in mcp.h — unaffected.)
+// (The MCP server shares the rich file: mcpindex.h mcpCachePath, ONE-PARSE.)
 //
 // Y4: resolved through resolveCacheBlobPath (quality.h) — the shard-aware, backward-compatible
 // choke point every ripwire-*.bin blob path now routes through. See its comment for the full rationale.
@@ -3559,7 +3560,10 @@ std::string renderHelpTask( const rw::Config& cfg, const rw::taskroute::TaskRout
     // place any of them was explained. One line, every attribute, no flag spelled (a literal double hyphen
     // is ill-formed inside an XML comment — G4).
     std::string out = "<!-- ripwire help-task: one task in, ONE safe command out, or an honest abstention. "
-                      "status=recommend|ambiguous|abstain and confidence=high|low|none track each other; "
+                      "status=recommend|ambiguous|abstain and confidence=high|low|none track each other, except that a "
+                      "recommend standing on a plain word the task names only after of reads confidence=low; an abstain "
+                      "names its next step: next= the ranked search over the same task text, or reason=system-event "
+                      "when the text is a harness report rather than a task; "
                       "score= is the winning card's evidence total and margin= its lead over the runner-up "
                       "(100/100 on a structural route, one the shipped parser itself accepts). <facts> is the "
                       "repository evidence the decision read: git= dirty= a git repo and an uncommitted diff, "
@@ -3574,9 +3578,18 @@ std::string renderHelpTask( const rw::Config& cfg, const rw::taskroute::TaskRout
     out += "<task-route status=\"";
     out += rw::taskroute::statusName( route.status );
     out += "\" confidence=\"";
-    out += route.status == rw::taskroute::RouteStatus::Recommend ? "high" :
+    out += route.status == rw::taskroute::RouteStatus::Recommend ? ( route.weakOfSlot ? "low" : "high" ) :
            route.status == rw::taskroute::RouteStatus::Ambiguous ? "low" : "none";
-    out += "\" score=\"" + std::to_string( route.score ) + "\" margin=\"" + std::to_string( route.margin ) + "\">";
+    out += "\" score=\"" + std::to_string( route.score ) + "\" margin=\"" + std::to_string( route.margin ) + "\"";
+    // HELP-TASK-ROUTE (a), audit-verify 2026-11-11: an abstain used to end the document with nothing to do next (hono `how
+    // does hono route a request to a handler`: status="abstain", no next step). The ranked --for search answers ANY task
+    // text, so it is always an honest next step; a harness event is not a task, and says so instead.
+    if( route.status == rw::taskroute::RouteStatus::Abstain )
+    {
+        out += rw::taskroute::looksLikeSystemEvent( cfg.helpTask ) ? std::string( " reason=\"system-event\"" )
+                                                                  : rw::nextAttrXml( rw::nextFlag( "--for=", cfg.helpTask ) );
+    }
+    out += ">";
     out += "<facts git=\"" + std::to_string( int( route.facts.git ) ) + "\" dirty=\"" + std::to_string( int( route.facts.dirty ) );
     out += "\" trace=\"" + std::to_string( int( route.facts.trace ) ) + "\" resolved_symbols=\"";
     out += std::to_string( route.facts.resolvedSymbols.size() ) + "\"/>";
@@ -5465,6 +5478,53 @@ static int dispatchMainBody( const rw::Config& cfg, char** argv )
             "        references/callees = {} ({} B)\n"
             "        includes/targets   = {} ({} B)\n",
             total, bytes, ing.files.size(), pathB, ing.symbols.size(), nameB, ing.references.size(), calleeB, ing.includes.size(), incB );
+        // M0 MEM-STATS (mem-audit-fable-1111): every model family's size, capacity and row bytes (capacity x sizeof — the
+        // reserved row storage, not the strings it points at), then the bindings by LocalBindKind (model.h, by enumerator
+        // value) with how many of each sit inside a definition — what buildGraph's per-kind side tables are sized by
+        const auto family = [ & ]( std::string_view name, const auto& v )
+        {
+            using Row = typename std::decay_t<decltype( v )>::value_type;
+            rw::emitTo( stderr, "[mem] family {} size={} cap={} row_b={} cap_mib={:.1f}\n", name, v.size(), v.capacity(), sizeof( Row ),
+                        rw::memstats::mib( v.capacity() * sizeof( Row ) ) );
+        };
+        family( "files", ing.files );
+        family( "fileHealth", ing.fileHealth );
+        family( "symbols", ing.symbols );
+        family( "fields", ing.fields );
+        family( "aliasTargets", ing.aliasTargets );
+        family( "fnLocalScopes", ing.fnLocalScopes );
+        family( "cloneKeys", ing.cloneKeys );
+        family( "references", ing.references );
+        family( "includes", ing.includes );
+        family( "constOpens", ing.constOpens );
+        family( "bindings", ing.bindings );
+        family( "bindingAliases", ing.bindingAliases );
+        family( "routeDefs", ing.routeDefs );
+        family( "routeUses", ing.routeUses );
+        family( "lexTokenHashes", ing.lexTokenHashes );
+        family( "lexTokenTfs", ing.lexTokenTfs );
+        std::array<std::size_t, kLocalBindKindCount> kindAll {};
+        std::array<std::size_t, kLocalBindKindCount> kindScoped {};
+        for( const Binding& b : ing.bindings )
+        {
+            const std::size_t kind = std::size_t( b.kind );
+            if( kind < kLocalBindKindCount )
+            {
+                ++kindAll[ kind ];
+                kindScoped[ kind ] += b.fromSymbol != kNoNode ? 1u : 0u;
+            }
+        }
+        std::string kinds;
+        for( std::size_t kind = 0; kind < kLocalBindKindCount; ++kind )
+        {
+            if( kindAll[ kind ] != 0 )
+            {
+                kinds += std::format( " {}={}/{}", kind, kindAll[ kind ], kindScoped[ kind ] );
+            }
+        }
+        rw::emitTo( stderr, "[mem] bindings by kind (kind=all/in-a-def):{}\n", kinds );
+        const std::size_t coldBlocks = std::size_t( std::count_if( ing.references.begin(), ing.references.end(), []( const Reference& r ) { return r.hasColdBlock(); } ) );
+        rw::emitTo( stderr, "[mem] textpool ids={} reference cold blocks={} ({} B each)\n", RefNames::pool().idCount(), coldBlocks, sizeof( RefColdText ) );
     }
     // SCIP precision overlay: parse the index (if --scip given) → map to ripwire ids → hand to buildGraph as an optional
     // parameter. An unreadable/corrupt/mismatched index yields an EMPTY overlay (one DISCLOSE + stderr note) and
@@ -5638,7 +5698,7 @@ static int dispatchMainBody( const rw::Config& cfg, char** argv )
             if( !commits.empty() )
             {
                 // co-change degree per file = # of OTHER files that share ≥1 commit with it (file-level).
-                std::vector<HashMap<std::uint32_t, char>> partners( ing.files.size() );
+                std::vector<HashSet<std::uint32_t>> partners( ing.files.size() );
                 for( const std::vector<std::uint32_t>& c : commits )
                 {
                     for( std::size_t i = 0; i < c.size(); ++i )
@@ -5646,7 +5706,7 @@ static int dispatchMainBody( const rw::Config& cfg, char** argv )
                         for( std::size_t j = i + 1; j < c.size(); ++j )
                         {
                             const std::uint32_t a = c[i], b = c[j];
-                            if( a < ing.files.size() && b < ing.files.size() ) { partners[a][b] = 1; partners[b][a] = 1; }
+                            if( a < ing.files.size() && b < ing.files.size() ) { partners[a].insert( b ); partners[b].insert( a ); }
                         }
                     }
                 }

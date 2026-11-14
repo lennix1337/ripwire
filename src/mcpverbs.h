@@ -51,6 +51,7 @@
 #include "forfilesyms.h"    // K-WRONGSYM: the `for` verb's <syms> (the CLI twin's renderer)
 #include "foronesidereach.h" // ONE-SIDE-REACH: the CLI twin's answer edit, one renderer
 #include "forsiblingdemote.h" // SIBLING-DEMOTE: the CLI twin's answer edit, one renderer
+#include "fordemoteall.h" // DEMOTE-ALL-DIALECTS: the demote rules under budget_tokens, before the rows settle
 #include "fordecltwin.h" // demoteAndPointRowsInto: SIBLING-DEMOTE then DECL-TWIN, the CLI twin's answer edits, one renderer
 #include "forgraphverb.h"   // FOR-ROUTE-DECLINED: the `for` verb's subject-read graph-verb block (the CLI twin's wrapper)
 #include "pathgaps.h"      // PATH-GAP: the shared gap analysis + clause of --path / path_between
@@ -2142,12 +2143,67 @@ struct McpForAssemblyInputs   // forTaskText's locals the assembly reads, by ref
 // served from the rows at the target cut, and the rows past the cut fill what the sections served before the tail (<hdr> rows,
 // <lego>, <compose>, <routes>: `sectionsBytes`) leave of T — never below the cut. The tail rides on top on this twin, as it always
 // did. Re-rendered only when that narrows the rows; the first render's redaction count is replaced, never added to.
-template< class Render >
-inline void mcpForSoftRefill( const McpForAssemblyInputs& in, const Render& renderSigs, std::string& sigsStr, rw::SigsCutReport& cut,
-                              const rw::SigsCutContinuation* next, std::size_t sectionsBytes,
-                              const std::optional<RedactCounts>& before, const std::optional<RedactCounts>& after )
+// The rows rendered again at row budget `rowDrop` (round C's refill and DEMOTE-ALL-DIALECTS'): the latest render's redaction count
+// (`redactBefore`..`redactAfter`) comes back out first, and the pair then spans this render. A failed render (no bytes) keeps the
+// render before it whole — the block, its cut report, the rows it showed, its dropped/capped readings and the redaction tally — as
+// the CLI and --json twins' renders do (CodeRabbit 4543325946). false: it failed.
+struct McpRowsState   // what one <sigs> render writes: the block and the readings renderSigs leaves beside it (assembleMcpFor's locals)
 {
-    if( in.budgetTokens == 0 || cut.pastTarget == 0 )
+    std::string&                 sigs;
+    rw::SigsCutReport&           cut;
+    std::size_t&                 droppedPositive;
+    bool&                        capped;
+    std::vector<rw::NodeId>&     shown;
+    std::optional<RedactCounts>& redactBefore;
+    std::optional<RedactCounts>& redactAfter;
+};
+template< class Render >
+inline bool mcpForRowsAt( const McpForAssemblyInputs& in, const Render& renderSigs, const McpRowsState& st, const rw::SigsCutContinuation* next,
+                          std::size_t rowDrop )
+{
+    const rw::SigsCutReport                 firstCut     = st.cut;
+    const std::size_t                       firstDropped = st.droppedPositive;
+    const bool                              firstCapped  = st.capped;
+    const std::vector<rw::NodeId>           firstShown   = st.shown;
+    const std::optional<RedactCounts>       firstBefore  = st.redactBefore;
+    const std::optional<RedactCounts>       firstAfter   = st.redactAfter;
+    const std::optional<RedactCounts>       redactNow    = in.redact != nullptr ? std::optional<RedactCounts>( *in.redact ) : std::nullopt;
+    redactTakeBack( in.redact, st.redactBefore, st.redactAfter );
+    st.redactBefore             = in.redact != nullptr ? std::optional<RedactCounts>( *in.redact ) : std::nullopt;
+    st.cut                      = rw::SigsCutReport {};
+    st.cut.continuationRequest  = next;
+    st.cut.rowDropBudgetBytes   = rowDrop;
+    std::string refill          = captureXml( renderSigs );   // assembleMcpFor's own render seam (its renderToString)
+    // RIPWIRE_TEST_MCP_ROWS_RENDER_FAIL=1 (gates only: fordemoteallcheck (xf)): every render made here fails the way a lost memstream
+    // write fails it, after the renderer ran, so its readings are the failed render's
+    const char* const failSeam  = std::getenv( "RIPWIRE_TEST_MCP_ROWS_RENDER_FAIL" );
+    if( failSeam != nullptr && std::string_view( failSeam ) == "1" )
+    {
+        refill.clear();
+    }
+    if( !refill.empty() )
+    {
+        st.sigs        = std::move( refill );
+        st.redactAfter = in.redact != nullptr ? std::optional<RedactCounts>( *in.redact ) : std::nullopt;
+        return true;
+    }
+    st.cut             = firstCut;
+    st.droppedPositive = firstDropped;
+    st.capped          = firstCapped;
+    st.shown           = firstShown;
+    st.redactBefore    = firstBefore;
+    st.redactAfter     = firstAfter;
+    if( redactNow )
+    {
+        *in.redact = *redactNow;
+    }
+    return false;
+}
+template< class Render >
+inline void mcpForSoftRefill( const McpForAssemblyInputs& in, const Render& renderSigs, const McpRowsState& st, const rw::SigsCutContinuation* next,
+                              std::size_t sectionsBytes )
+{
+    if( in.budgetTokens == 0 || st.cut.pastTarget == 0 )
     {
         return;
     }
@@ -2156,11 +2212,7 @@ inline void mcpForSoftRefill( const McpForAssemblyInputs& in, const Render& rend
     {
         return;
     }
-    redactTakeBack( in.redact, before, after );
-    cut                     = rw::SigsCutReport {};
-    cut.continuationRequest = next;
-    cut.rowDropBudgetBytes  = rowDrop;
-    sigsStr                 = captureXml( renderSigs );   // assembleMcpFor's own render seam (its renderToString)
+    (void)mcpForRowsAt( in, renderSigs, st, next, rowDrop );   // a failed render keeps the first one whole
 }
 
 // round C (RESERVE SECTIONS FIRST, the CLI twin's rule): the --sections= posture the stub plan reads — under budget_tokens the two
@@ -2225,7 +2277,7 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::strin
     std::vector<rw::NodeId> mcpShownIds;   // lane 2: the sigs rows actually emitted — the tail's rank rows exclude these files
     // round C: the render is named so a soft target can narrow its rows past the cut once the sections are served (below); the
     // redaction tally around it is snapshotted so a second render replaces this one's count instead of adding to it
-    const std::optional<RedactCounts> redactBeforeSigs = redact != nullptr ? std::optional<RedactCounts>( *redact ) : std::nullopt;
+    std::optional<RedactCounts> redactBeforeSigs = redact != nullptr ? std::optional<RedactCounts>( *redact ) : std::nullopt;
     const auto renderSigs = [ & ]( std::FILE* m2 )
     {
         packSignatures( m2, ing, lensRank, forTopN, 0 /* no byte budget in MCP (0 = unlimited) */, true, &fanIn, &impure, redact,
@@ -2245,7 +2297,7 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::strin
                                                               //   spelling; SIZE-3a: repeated text folded to same_as= (mcpattrparitycheck)
     };
     std::string sigsStr = renderToString( renderSigs );
-    const std::optional<RedactCounts> redactAfterSigs = redact != nullptr ? std::optional<RedactCounts>( *redact ) : std::nullopt;
+    std::optional<RedactCounts> redactAfterSigs = redact != nullptr ? std::optional<RedactCounts>( *redact ) : std::nullopt;
     // §P3 × §P4 (parity with the CLI --for): narrow the lego block to the files the budget-trimmed sigs
     // actually kept and re-render (a byte-subset of what the budget already charged for) — reads sigsStr
     // directly now rather than re-slicing it back out of the flushed memstream buffer.
@@ -2331,9 +2383,24 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::strin
                                                      /*viaLegendInHead=*/false, /*compress=*/false, &in.g.outProv, /*splitLegendInHead=*/false, &in.g.outAnchorMiss },
                                      in.slotOwner, share );
     }
-    mcpForSoftRefill( in, renderSigs, sigsStr, mcpSigsCut, &mcpSigsNext,
-                      mcpHdrXml.size() + legoStr.size() + composeStr.size() + routeStr.size() + mcpSlot.xml.size(),
-                      redactBeforeSigs, redactAfterSigs );
+    const McpRowsState mcpRows { sigsStr, mcpSigsCut, mcpDroppedPositive, mcpSigsCapped, mcpShownIds, redactBeforeSigs, redactAfterSigs };
+    mcpForSoftRefill( in, renderSigs, mcpRows, &mcpSigsNext,
+                      mcpHdrXml.size() + legoStr.size() + composeStr.size() + routeStr.size() + mcpSlot.xml.size() );
+    // DEMOTE-ALL-DIALECTS (fordemoteall.h, the CLI twin's rule): under budget_tokens SIBLING-DEMOTE and DECL-TWIN run on <sigs>, read
+    // with the <hdr> rows before it and the body slot after it, before the rows are settled: the bytes they free buy rows past the
+    // cut. The no-budget answer is shaped after <syms> (insertFileSyms).
+    if( budgetTokens > 0 && demoteRulesOn() )
+    {
+        const std::string after = mcpSlot.xml;
+        const auto        point = [ & ] { return demoteAndPointBlock( ing, in.g, task, mcpHdrXml, sigsStr, after ); };
+        const auto        renderAt = [ & ]( std::size_t rowDrop ) { return mcpForRowsAt( in, renderSigs, mcpRows, &mcpSigsNext, rowDrop ); };
+        std::string pointed = refillRowsForDemote( mcpSigsCut.rowDropBudgetBytes, [ & ]() -> const std::string& { return sigsStr; },
+                                                   [ & ] { return mcpSigsCut.rowDropCut; }, [ & ] { return mcpShownIds.size(); }, renderAt, point );
+        if( !pointed.empty() )
+        {
+            sigsStr = std::move( pointed );
+        }
+    }
     // A2: same insert-before-"-->" splice as the CLI twin (verbs_for.h) — absent entirely on the (overwhelming)
     // no-drop path, so headerStr's bytes are unchanged there (byte-identical to the pre-A2 output). Bare
     // spelling (no bracket note), same economy and same reasoning as the CLI twin — byte-consistent between
@@ -2485,7 +2552,8 @@ inline std::string batchCdata( const std::string& s );   // the callers twin's J
 // ONE-SIDE-REACH (src/foronesidereach.h): then the CLI twin's demote pass over the answer and the block, re-priced on `price` (the root's
 // inputs, null: no re-price); held under budget_tokens. R-DEDUP's <syms> cut (forfilesyms.h tailRowsWithoutPicks) lands first, the
 // demote pass reads the cut answer; SIBLING-DEMOTE (src/forsiblingdemote.h) then reads that one, DECL-TWIN (src/fordecltwin.h) reads
-// its result, and the root is re-priced once on the final bytes.
+// its result, and the root is re-priced once on the final bytes. Under budget_tokens those two already ran on <sigs> before its rows
+// settled (DEMOTE-ALL-DIALECTS, assembleMcpFor), so they are held here.
 inline void insertFileSyms( std::string& out, const IngestResult& ing, const Graph& g, FileSymsArgs args, const rw::PricedRootInputs* price = nullptr )
 {
     if( out.ends_with( "</ctx>" ) )
@@ -2497,7 +2565,7 @@ inline void insertFileSyms( std::string& out, const IngestResult& ing, const Gra
         const std::string_view shaped = cut.empty() ? args.answer : std::string_view( cut );
         OneSideReachEdit edit = args.held ? OneSideReachEdit {} : demoteOneSideRows( ing, g, args.task, shaped, syms );
         std::string answer = !edit.answer.empty() ? std::move( edit.answer ) : std::move( cut );
-        demoteAndPointRowsInto( ing, g, args.task, args.answer, answer, args.held ); // SIBLING-DEMOTE, then DECL-TWIN
+        demoteAndPointRowsInto( ing, g, args.task, args.answer, answer, args.held, DemoteRegime::Default ); // SIBLING-DEMOTE, then DECL-TWIN
         if( !answer.empty() )
         {
             if( price != nullptr )
@@ -2766,7 +2834,7 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
         mcpForConf.note  += kForCoverageLegend;
     }
 
-    const std::vector<char>  impure    = computeImpure( ing, ix.g );
+    const std::vector<char>& impure    = sharedOnce( ix.impure, [ & ] { return computeImpure( ing, ix.g ); } );   // MCP-CALL-MEMO: once per index
 
     // fan-in counts: in-degree per node (how many symbols call this one — the "reuse" metric)
     std::vector<std::uint32_t> fanIn( S, 0 );
@@ -3100,7 +3168,7 @@ inline std::string legoText( const std::string& root, const std::string& type, R
         return {};
     }
 
-    const std::vector<char> impure = computeImpure( ing, ix.g );
+    const std::vector<char>& impure = sharedOnce( ix.impure, [ & ] { return computeImpure( ing, ix.g ); } );   // MCP-CALL-MEMO: once per index
     const std::vector<float> flat( ing.symbols.size(), 0.f );
 
     return captureXml( [ & ]( std::FILE* mem )
@@ -3279,7 +3347,7 @@ inline std::optional<std::string> exemplarText( const std::string& root, const s
 
     // the selector's two inputs, built exactly as the CLI builds them: tested= from computeQMetrics, fan-in
     // from the in-edge CSR row lengths.
-    const QMetrics             qm = computeQMetrics( ing, g );
+    const QMetrics&            qm = sharedOnce( ix.qmetrics, [ & ] { return computeQMetrics( ing, g ); } );   // MCP-CALL-MEMO: once per index
     const std::size_t          S  = ing.symbols.size();
     std::vector<std::uint32_t> fanIn( S, 0 );
     {
@@ -3309,9 +3377,7 @@ inline std::optional<std::string> exemplarText( const std::string& root, const s
     // a '\n' in kindOrTask is a legal XML char escapeXml passes through, and a raw newline outside CDATA is a
     // G4 breach whichever dialect emitted it.
     const std::string reqNote = xmlCommentText( kindOrTask );
-    const std::string kindNote = pick.fromTask ? ( " (task -> kind=" + std::string( symTag( pick.targetKind ) )
-                                                   + ( pick.lowConfidence ? ", low-confidence: weak match, fell back to fn" : "" ) + ")" )
-                                               : std::string();
+    const std::string kindNote = exemplarKindNote( pick );
 
     rw::MemoryStream stream;
     std::FILE* const mem = stream.open();
@@ -3335,7 +3401,7 @@ inline std::optional<std::string> exemplarText( const std::string& root, const s
                   symTag( pick.targetKind ), pick.candidateCount, ex( wsym.name ).c_str(),
                   ex( exSingleRoot ? sarif::rootRelativeUri( ing.files[ wsym.fileId ], exRootPrefix ) : std::string_view( ing.files[ wsym.fileId ] ) ).c_str(), wsym.line,
                   fin( pick.winner ), wsym.ccx, exRootAttr.c_str(), ts( pick.winner ) ? " tested=\"1\"" : "",
-                  pick.lowConfidence ? " low_confidence=\"1\"" : "",
+                  exemplarHedgeAttrs( pick ),
                   pick.overCcxBar    ? " over_ccx_bar=\"1\"" : "" );
     packBodies( mem, ing, { pick.winner }, 0 /* no byte budget in MCP (0 = unlimited) */, g.outOff, g.outTargets, g.outNameOnly, false, redact,
                 /*ranges=*/nullptr, /*noteIndex=*/nullptr, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,
@@ -3664,6 +3730,12 @@ inline std::string usesSelectorRefusal( const IngestResult& ing, const std::stri
     {
         return unserved;
     }
+    // B31 USES-FIELD-EXTERNAL: a bare member name of an unserved owner refuses with the qualified form's sentence (the CLI
+    // arm's rule) — external="1" would claim it has no definition in the tree, and it does (a lexical member declaration).
+    if( const std::string declared = unservedMemberDeclRefusal( ing, symbol ); !declared.empty() )
+    {
+        return declared;
+    }
 
     // no definition: refuse ONLY if it also has no use-site (early-exit scan — one match is enough to prove
     // this is a real external name rather than a typo).
@@ -3794,6 +3866,7 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
 
     std::vector<char> esc;
     const auto ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
+    const bool usUnindexed = usesRolesUnindexed( ing, defs );   // B31: the CLI --uses' unindexed_roles=, same predicate
 
     rw::MemoryStream stream;
     std::FILE* const mem = stream.open();
@@ -3812,7 +3885,8 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
                        "{}{}{}-->{}", kUsesLegendOpen,
                   ( std::string( usesValueRoleLegend( std::any_of( sites.begin(), sites.end(), []( const UseSite& u ) { return u.role == RefRole::Value; } ) ) )
                     + valueRefsDepthLegend( usDepthCut.files > 0 )
-                    + declinedLiteralCallsLegend( declinedLiteralCalls > 0 ) ).c_str(),   // exactly when the root carries the depth disclosure, as the CLI
+                    + declinedLiteralCallsLegend( declinedLiteralCalls > 0 )
+                    + unindexedRolesLegend( usUnindexed ) ).c_str(),   // exactly when the root carries the depth disclosure / unindexed_roles=, as the CLI
                   capLegendClause( computePageDisclosure( upageRows, sites.size(), upw.end,
                                                           page.limit, page.offset, usDiscloseCap ).active ),
                   graphCountDisclosure( rw::graphGaugeClauses( ix.g ) ).c_str(),
@@ -3824,8 +3898,9 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
     const bool         usSingleRoot = ing.realPaths.empty();
     const std::string  usRootPrefix = usSingleRoot ? sarif::rootPrefixOf( root ) : std::string();
     const std::string  usRootAttr   = usSingleRoot ? ( " root=\"" + ex( root ) + "\"" ) : std::string();
-    rw::emitTo( mem, "<uses of=\"{}\" defs=\"{}\" external=\"{}\" count=\"{}\"{}{}{}{}>",
-                  ex( symbol ).c_str(), defs.size(), external ? 1 : 0, sites.size(), usRootAttr.c_str(), upage, graphCountFloorAttrXml( ix.g ).c_str(),
+    rw::emitTo( mem, "<uses of=\"{}\" defs=\"{}\" external=\"{}\" count=\"{}\"{}{}{}{}{}>",
+                  ex( symbol ).c_str(), defs.size(), external ? 1 : 0, sites.size(), unindexedRolesAttrXml( usUnindexed ), usRootAttr.c_str(), upage,
+                  graphCountFloorAttrXml( ix.g ).c_str(),
                   ( valueRefsDepthAttrXml( ing, usDepthCut, VrRender{ usSingleRoot, usRootPrefix } )
                     + declinedLiteralCallsAttrXml( declinedLiteralCalls ) ).c_str() );   // of= echoes the selector as TYPED (an @-seed stays an @-seed)
     for( std::size_t siteIndex = upw.begin; siteIndex < upw.end; ++siteIndex )
@@ -4208,7 +4283,15 @@ inline constexpr char kConnectHeader[] =
     " max_tokens= is the token ceiling this bundle was SHAPED against (the max_tokens flag; absent = none"
     " was asked for); est_tokens= is what it cost, truncated=\"paths\" says the shaping had to cut, and"
     " over_ceiling=\"1\" says est_tokens exceeds max_tokens anyway (the trim ran out of things to drop before it"
-    " reached the ceiling; the bundle is then complete, not further trimmed) -->";
+    " reached the ceiling; the bundle is then complete, not further trimmed). t n= / s n=: a terminal's / a join's symbol name -->";
+
+// CONNECT-SOURCE-JOINT (graph.h connectSourceJoint): the reading of the root's source_joint= / test_joint= / test_joint_p=,
+// emitted only on the answer that carries them. (G4: no double hyphen.)
+inline constexpr std::string_view kConnectTestJointLegend =
+    "source_joint=\"none\": every terminal is source code and no source function joins the <unconnected> ones within radius= (the"
+    " search does not walk through test or fixture code); test_joint=/test_joint_p= name a test-class function the unrestricted"
+    " search joins them through (an undirected join, so not necessarily a caller of both): test-only evidence of how they are"
+    " used, not a source caller ";
 
 // The root element's own bytes: the <connect ...> start-tag PLUS the </connect> close. It is
 // self-referential (the start-tag's length depends on the digits of the number it carries), so it is
@@ -4295,6 +4378,15 @@ inline void packConnect( std::FILE* out, const IngestResult& ing, const Graph& g
     // GV-PATH-BIND (forgraphverb.h narrowRefusedSpelling): narrowed= and its clause, charged like the attribute above; absent (0 bytes) with none
     const std::string  connectNarrowedAttr   = narrowedAttrXml( narrowed );
     const std::string  connectNarrowedLegend = narrowed.empty() ? std::string() : "<!-- ripwire connect: " + std::string( narrowedVerbLegend( true ) ) + "-->";
+    // CONNECT-SOURCE-JOINT (graph.h connectSourceJoint): every terminal is source, a test-class node alone joins some of them, and
+    // the search did not walk through it: the root says so and names the test, charged like narrowed= above; absent (0 bytes) otherwise
+    std::string        connectTestJointAttr, connectTestJointLegend;
+    if( res.testJoint < ing.symbols.size() )
+    {
+        const Symbol& tj       = ing.symbols[ res.testJoint ];
+        connectTestJointAttr   = " source_joint=\"none\" test_joint=\"" + ex( tj.name ) + "\" test_joint_p=\"" + ex( pathRel( tj.fileId ) ) + ":" + std::to_string( tj.line ) + "\"";
+        connectTestJointLegend = "<!-- ripwire connect: " + std::string( kConnectTestJointLegend ) + "-->";
+    }
     // FE-B: the reading of via="name", when some <e> of this answer carries it — charged like the clauses above
     const bool         connectHasVia = std::any_of( res.groups.begin(), res.groups.end(), [ & ]( const ConnectGroup& grp )
     {
@@ -4313,7 +4405,8 @@ inline void packConnect( std::FILE* out, const IngestResult& ing, const Graph& g
                                         + ( connectHasMiss ? "<!-- ripwire connect: " + anchorMissLegend( true ) + "-->" : std::string() );
     const std::size_t  connectExtraBytes = connectRootAttr.size() + std::strlen( rootRelPathsLegend( !rootArg.empty() ) )
                                          + connectUnindexedLegend.size() + connectUnprovenAttr.size() + connectUnprovenLegend.size()
-                                         + connectAmbiguousAttr.size() + connectViaLegend.size() + connectNarrowedAttr.size() + connectNarrowedLegend.size();
+                                         + connectAmbiguousAttr.size() + connectViaLegend.size() + connectNarrowedAttr.size() + connectNarrowedLegend.size()
+                                         + connectTestJointAttr.size() + connectTestJointLegend.size();
 
     // §2.4a: the derived hub threshold every Steiner row's connects= is read against, computed ONCE (it is a
     // property of the graph, not of a row) and named on the root so the label is never a bare assertion.
@@ -4540,13 +4633,14 @@ inline void packConnect( std::FILE* out, const IngestResult& ing, const Graph& g
     {
         estTokens = connectEstTokens( payload.size(), connectExtraBytes + hopLegendXml.size() + hopRootXml.size() + std::strlen( connectOverAttr ) );
     }
-    rw::emitTo( out, "{}{}{}{}{}{}{}", rw::cstr( kConnectHeader ), connectUnindexedLegend.c_str(), connectUnprovenLegend.c_str(),
-                connectNarrowedLegend, connectViaLegend, hopLegendXml, rootRelPathsLegend( !rootArg.empty() ) );
-    rw::emitTo( out, "<connect terminals=\"{}\" nodes=\"{}\" edges=\"{}\" radius=\"{}\" groups=\"{}\"{}{}{} est_tokens=\"{}\" hub_floor=\"{}\"{}{}{}{}{}{}>",
+    rw::emitTo( out, "{}{}{}{}{}{}{}{}", rw::cstr( kConnectHeader ), connectUnindexedLegend.c_str(), connectUnprovenLegend.c_str(),
+                connectNarrowedLegend, connectTestJointLegend, connectViaLegend, hopLegendXml, rootRelPathsLegend( !rootArg.empty() ) );
+    rw::emitTo( out, "<connect terminals=\"{}\" nodes=\"{}\" edges=\"{}\" radius=\"{}\" groups=\"{}\"{}{}{}{} est_tokens=\"{}\" hub_floor=\"{}\"{}{}{}{}{}{}>",
                   res.terminals.size(), nodeTotal, edgeTotal, res.radius, connectedGroups,
                   connectUnprovenAttr.c_str(),   // H1: beside the counts it qualifies; absent at zero
                   connectAmbiguousAttr,          // 0.6.6 D1: absent when no many-definition pick tied
                   connectNarrowedAttr,           // GV-PATH-BIND: absent when no terminal was narrowed
+                  connectTestJointAttr,          // CONNECT-SOURCE-JOINT: absent unless only a test joins source terminals
                   estTokens, hubFloor,
                   rw::cstr( connectCeiling ), connectOverAttr, hopRootXml,
                   truncated ? " truncated=\"paths\"" : "", connectRootAttr.c_str(),
@@ -4580,7 +4674,7 @@ inline std::string connectText( const std::string& root, const std::vector<std::
     }
 
     const ConnectPicks  picks = joinTerminalPicks( ing, g, symbolSpecs, terminals, radius );   // 0.6.6 D1: the CLI's pick, same call
-    const ConnectResult res = connectSubgraph( g, terminals, radius );
+    const ConnectResult res = connectSourceJoint( ing, g, terminals, radius );   // CONNECT-SOURCE-JOINT: never a test joint for source terminals
     rw::MemoryStream stream;
     std::FILE* const mem = stream.open();
     if( !mem ) { err = "internal error"; return {}; }
@@ -4760,12 +4854,13 @@ inline QualityDeltaOutcome computeQualityDelta( const std::string& root )
     // The strict-equality test itself used to be MCP-only; the CLI carried a reachable-ancestor carve-out that
     // made it honor sidecars this arm dropped, which is the divergence R3 revoked.
     rw::quality::BaselineSelection baseSel = rw::quality::selectBaseline( root, sidecar, /*removeStaleFile=*/false );
+    rw::quality::TreePasses        passes;   // QD-IDENTITY-ONCE: the CLI's sharing, over this `ing` (verbs_quality.h DeltaBasis::passes)
     if( !baseSel.isSidecarHonored() )
     {
         // #228 part 1 — the IDENTITY BASIS, through the SAME seam the CLI takes (quality::computeHeadBasis).
         // This verb and the CLI must answer one tree one way in the same second; a per-caller copy of the
         // basis is precisely how they drifted apart before (the R3 divergence this arm's comment records).
-        rw::quality::HeadBasis basis = rw::quality::computeHeadBasis( root, ing, g, root );
+        rw::quality::HeadBasis basis = rw::quality::computeHeadBasis( root, ing, g, root, rw::kDefaultMaxFileBytes, {}, &passes );
         if( !basis.ok )
         {
             oc.ok     = false;
@@ -4785,7 +4880,7 @@ inline QualityDeltaOutcome computeQualityDelta( const std::string& root )
 
     rw::quality::HistoryUnread historyUnread;
     oc.regs       = rw::quality::computeDelta( ing, g, baseSel.snapshot, root, {}, rw::kDefaultMaxFileBytes, &oc.registerMacroExcluded, &oc.apiNewSurface,
-                                               nullptr, &oc.declinedCallExcluded, &oc.valueRefExcluded, rw::quality::KindScope{}, &historyUnread );
+                                               nullptr, &oc.declinedCallExcluded, &oc.valueRefExcluded, rw::quality::KindScope{}, &historyUnread, &passes );
     historyUnread.renames = heal.renames.refusedPartial && baseSel.marker == std::string_view( "sidecar" );   // the CLI's own rule
     oc.historyJson = rw::quality::historyUnreadDisclosure( historyUnread ).second;
 
@@ -4801,7 +4896,7 @@ inline QualityDeltaOutcome computeQualityDelta( const std::string& root )
     // pins the two surfaces to the same JSON key set).
     if( !acks.empty() )
     {
-        oc.staleAcks = rw::quality::computeStaleAcks( acks, rw::quality::computeSnapshot( ing, g, root ) );
+        oc.staleAcks = rw::quality::computeStaleAcks( acks, rw::quality::computeSnapshot( ing, g, root, nullptr, {}, &passes ) );
         rw::quality::stampStaleAckIdentity( oc.staleAcks, ing, root );   // M21(a): the CLI twin's sym=/p=
     }
 
@@ -4924,9 +5019,13 @@ inline std::pair<std::string, std::string> qualityDeltaJson( const std::string& 
                 out += ",\"" + std::string( facetName ) + "\":\"" + mcpdetail::jsonEscape( r.facet ) + "\"";
             }
         }
-        if( r.isNewSymbol )
+        if( const char* origin = rw::quality::originValue( r ) )
         {
-            out += ",\"origin\":\"new-symbol\""; // absent = preexisting-worse (mirrors the XML)
+            out += ",\"origin\":\"" + std::string( origin ) + "\""; // absent = preexisting-worse (mirrors the XML)
+        }
+        if( r.ceiling != 0 )
+        {
+            out += ",\"ceiling\":" + std::to_string( r.ceiling ); // QD-ENTRY-CEILING (mirrors the XML)
         }
         out += "}";
     }
@@ -5121,7 +5220,7 @@ inline std::string packTaskText( const std::string& root, const std::string& tas
         absorbCapDisclosure( docMentionInfo.caps, lr.docMentionNote, lr.capAttrs, lr.capJson );
     }
 
-    const std::vector<char>    impure = computeImpure( ing, g );
+    const std::vector<char>&   impure = sharedOnce( ix.impure, [ & ] { return computeImpure( ing, ix.g ); } );   // MCP-CALL-MEMO: once per index
     std::vector<std::uint32_t> fanIn( ing.symbols.size(), 0 );
     {
         const auto* ro = g.inEdges.rowOffsets();
@@ -5189,7 +5288,7 @@ inline FromTraceResult fromTraceText( const std::string& root, const std::string
     const IngestResult& ing = ix.ing;
     const Graph&        g   = ix.g;
 
-    const std::vector<char>    impure = computeImpure( ing, g );
+    const std::vector<char>&   impure = sharedOnce( ix.impure, [ & ] { return computeImpure( ing, ix.g ); } );   // MCP-CALL-MEMO: once per index
     std::vector<std::uint32_t> fanIn( ing.symbols.size(), 0 );
     {
         const auto* ro = g.inEdges.rowOffsets();

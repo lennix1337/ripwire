@@ -8,6 +8,7 @@
 #include "forpage.h"    // L-W: the --for --limit=N file page, coverage=, the thin rule and the widening next=
 #include "forowner.h"   // the question's owner (owner-hop's found set) and the one owner body of an explanatory question
 #include "forfold.h"    // body-fold: the whole bodies of the top ranked rows, appended to a compact-route answer
+#include "fordemoteall.h" // DEMOTE-ALL-DIALECTS: the demote rules in --json and under a soft target
 #include "formembers.h" // member-names: mem= on the shown owner rows of a compact-route answer
 #include "forslots.h"   // FOR-SLOTS: slots= on the shown initializer rows of a compact-route answer
 #include "fordottedstring.h" // STRING-IMPORT: the dotted-string literals naming a shown row
@@ -1584,21 +1585,12 @@ struct ForJsonRefillBudgets
     std::size_t sigsTarget;     // the ladder's target (the cut)
     std::size_t firstRowDrop;   // the first render's row budget (T plus the frame)
 };
+// DEMOTE-ALL-DIALECTS: the rows rendered again at row budget `rowDrop` (the soft refill's seam): the run's redaction tally and note
+// counts are this render's, and a failed render keeps the one before (and every reading taken from it) whole. false: it failed.
 template< class PackSigs >
-inline void forLensJsonSoftRefill( const PackSigs& packSigs, const ForLensJsonInputs& in, ForJsonRefillState st, ForJsonRefillBudgets b,
-                                   const rw::SigsCutContinuation& cutNext, const std::optional<rw::RedactCounts>& redactBeforeSigs )
+inline bool forLensJsonRowsAt( const PackSigs& packSigs, const ForLensJsonInputs& in, ForJsonRefillState st, std::size_t sigsTarget, std::size_t rowDrop,
+                               const rw::SigsCutContinuation& cutNext, const std::optional<rw::RedactCounts>& redactBeforeSigs )
 {
-    const std::size_t  cutRows  = st.json.size() - std::min( st.json.size(), st.cut.pastTargetBytes );
-    // the tail at its RESERVE: its share, capped at the head-scoped tail's whole stanza (the same at every N; the XML twin's
-    // rule) — not its filled bytes nor the cut-scoped tail's size, both of which step with N: rows stay monotone in N
-    const std::size_t  tailBytes = std::min( forLensJsonTailShare( in.tokenBudget, b.bundleBytes, b.fixedBytes, cutRows ),
-                                             forLensJsonTailStanza( rw::fileTailOldWalk( *in.fileTail ), 0, 0 ).size() );   // FOR-TAIL-WIDE F1: the old walk's part
-    const std::size_t  rowDrop   = rw::forSoftRowDropFill( b.bundleBytes, tailBytes );
-    if( rowDrop >= b.firstRowDrop )
-    {
-        return;
-    }
-    const std::string                     firstJson = st.json;
     const rw::SigsCutReport               firstCut  = st.cut;
     const bool                            firstCap  = st.capped;
     const std::size_t                     firstDrop = st.droppedPositive;
@@ -1617,19 +1609,36 @@ inline void forLensJsonSoftRefill( const PackSigs& packSigs, const ForLensJsonIn
     std::FILE* const rm = rw::openChargeStream( refillStream );
     if( rm != nullptr )
     {
-        packSigs( rm, b.sigsTarget, &st.capped, &st.droppedPositive, &st.shown, &st.cut );
+        packSigs( rm, sigsTarget, &st.capped, &st.droppedPositive, &st.shown, &st.cut );
     }
     const rw::MemoryStreamBytes refill = rm != nullptr ? refillStream.finish() : rw::MemoryStreamBytes {};
     if( rm != nullptr && refill.isWhole )
     {
         st.json.assign( refill.bytes );
-        return;
+        return true;
     }
-    st.json = firstJson;  st.cut = firstCut;  st.capped = firstCap;  st.droppedPositive = firstDrop;  st.notes = firstNote;  st.shown = firstIds;
+    st.cut = firstCut;  st.capped = firstCap;  st.droppedPositive = firstDrop;  st.notes = firstNote;  st.shown = firstIds;
     if( redactFirst )
     {
         *in.redact = *redactFirst;
     }
+    return false;
+}
+template< class PackSigs >
+inline void forLensJsonSoftRefill( const PackSigs& packSigs, const ForLensJsonInputs& in, ForJsonRefillState st, ForJsonRefillBudgets b,
+                                   const rw::SigsCutContinuation& cutNext, const std::optional<rw::RedactCounts>& redactBeforeSigs )
+{
+    const std::size_t  cutRows  = st.json.size() - std::min( st.json.size(), st.cut.pastTargetBytes );
+    // the tail at its RESERVE: its share, capped at the head-scoped tail's whole stanza (the same at every N; the XML twin's
+    // rule) — not its filled bytes nor the cut-scoped tail's size, both of which step with N: rows stay monotone in N
+    const std::size_t  tailBytes = std::min( forLensJsonTailShare( in.tokenBudget, b.bundleBytes, b.fixedBytes, cutRows ),
+                                             forLensJsonTailStanza( rw::fileTailOldWalk( *in.fileTail ), 0, 0 ).size() );   // FOR-TAIL-WIDE F1: the old walk's part
+    const std::size_t  rowDrop   = rw::forSoftRowDropFill( b.bundleBytes, tailBytes );
+    if( rowDrop >= b.firstRowDrop )
+    {
+        return;
+    }
+    (void)forLensJsonRowsAt( packSigs, in, st, b.sigsTarget, rowDrop, cutNext, redactBeforeSigs );
 }
 
 inline int emitForLensJsonPass( std::FILE* out, const std::string& header, const ForLensJsonInputs& in )
@@ -1727,6 +1736,7 @@ inline int emitForLensJsonPass( std::FILE* out, const std::string& header, const
     std::size_t sigsDroppedPositive = 0;   // A2: set only by the memstream-buffered render below (nullptr on the ENOMEM degrade path)
     std::vector<rw::NodeId> jsonShownIds;   // lane 2: the sigs rows actually emitted (the XML twin's shownSigIds)
     std::string sigsJson;
+    std::optional<std::size_t> jsonAtCutUndemoted;   // DEMOTE-ALL-DIALECTS: the rows at the cut before the pointers (the tail's charge)
     {
         rw::MemoryStream sigsStream;
         bool             isSigsBuffered = false;
@@ -1747,6 +1757,31 @@ inline int emitForLensJsonPass( std::FILE* out, const std::string& header, const
         {
             forLensJsonSoftRefill( packSigs, in, ForJsonRefillState{ sigsJson, sigsCut, sigsCapped, sigsDroppedPositive, noteCounts, jsonShownIds },
                                    ForJsonRefillBudgets{ fixedBytes, bundleBudget, sigsBudget, sigsBudgets.rowDrop }, cutNext, redactBeforeSigs );
+        }
+        // DEMOTE-ALL-DIALECTS (fordemoteall.h): SIBLING-DEMOTE and DECL-TWIN over the rows as the XML twin prints them, each pick a
+        // pointer object; under a soft target the bytes they free buy rows past the cut first (the rows stay a rank prefix)
+        if( isSigsBuffered )
+        {
+            const auto atCutOf = [ & ] { return sigsJson.size() - std::min( sigsJson.size(), sigsCut.pastTargetBytes ); };
+            const auto point = [ & ] { return rw::demoteJsonRows( in.ing, *in.graph, in.task, sigsJson, jsonShownIds,
+                                                                in.tokenBudget > 0 ? rw::DemoteRegime::Budgeted : rw::DemoteRegime::Default ); };
+            const auto renderAt = [ & ]( std::size_t rowDrop )
+            {
+                return forLensJsonRowsAt( packSigs, in, ForJsonRefillState{ sigsJson, sigsCut, sigsCapped, sigsDroppedPositive, noteCounts, jsonShownIds },
+                                          sigsBudget, rowDrop, cutNext, redactBeforeSigs );
+            };
+            std::string pointed = in.tokenBudget > 0
+                ? rw::refillRowsForDemote( sigsCut.rowDropBudgetBytes, [ & ]() -> const std::string& { return sigsJson; }, [ & ] { return sigsCut.rowDropCut; },
+                                           [ & ] { return jsonShownIds.size(); }, renderAt, point )
+                : point();
+            // the tail below is funded from the rows AT THE CUT; pastTargetBytes measures the rows as rendered, so the charge is taken
+            // before the pointers shorten them: bytes freed past the target are not at-target bytes (CodeRabbit 4543056277), and the
+            // refill above already spent the freed bytes on rows
+            jsonAtCutUndemoted = atCutOf();
+            if( !pointed.empty() )
+            {
+                sigsJson = std::move( pointed );
+            }
         }
         ForLensBlockCharge sigsCharge;   // the sink: an unmeasured block takes the omitting path below
         if( !isSigsBuffered )
@@ -1850,7 +1885,7 @@ inline int emitForLensJsonPass( std::FILE* out, const std::string& header, const
     // DEEP-TAIL (FOLD C: page 0 of the file page), the explicit-regime fill (forLensJsonTailStanza above): reserve first — funded
     // from what the rows AT THE CUT left of the bundle budget (the same share the refill above priced the rows against)
     // lane 2: the rank rows exclude the files of the rows emitted (after a refill: the rows it kept — the XML twin's rule)
-    const std::size_t  jsonCutRows = sigsJson.size() - std::min( sigsJson.size(), sigsCut.pastTargetBytes );
+    const std::size_t  jsonCutRows = jsonAtCutUndemoted.value_or( sigsJson.size() - std::min( sigsJson.size(), sigsCut.pastTargetBytes ) );
     const rw::FileTail jsonTail    = rw::computeFileTail( in.ing, in.rank, *in.evidence, jsonShownIds, in.rootArg, in.task );
     std::size_t        jsonTailShown = 0;
     tailStanza = forLensJsonTailStanza( jsonTail, in.tokenBudget, forLensJsonTailShare( in.tokenBudget, bundleBudget, fixedBytes, jsonCutRows ), &jsonTailShown );
@@ -3139,9 +3174,10 @@ inline std::string shapedForFileSymsAnswer( const MainDispatch& d, const std::st
     {
         out = std::move( cut );
     }
-    // SIBLING-DEMOTE is held by --token-budget alone: a bare --max-tokens is not read by --for (cli.h notice: "nothing was dropped"), so
-    // the answer under it is the flagless one, demote included (forbodyfoldcheck F8m)
-    rw::demoteAndPointRowsInto( d.ing, d.g, d.cfg.forTask, captured, out, held && d.cfg.tokenBudget > 0 ); // SIBLING-DEMOTE, then DECL-TWIN
+    // under --token-budget the rules already ran on <sigs> before its rows settled (DEMOTE-ALL-DIALECTS, runForLens), so they are held
+    // here; a bare --max-tokens is not read by --for (cli.h notice: "nothing was dropped"), so the answer under it is the flagless one,
+    // demote included (forbodyfoldcheck F8m)
+    rw::demoteAndPointRowsInto( d.ing, d.g, d.cfg.forTask, captured, out, held && d.cfg.tokenBudget > 0, rw::DemoteRegime::Default ); // SIBLING-DEMOTE, then DECL-TWIN
     if( !out.empty() && price )
     {
         rw::repriceRootAfterCut( out, *price, captured.size() );   // signed: the pointers and legend may outweigh the rows they replace
@@ -3242,23 +3278,24 @@ inline void appendMetBridge( const MainDispatch& d, const rw::Config& sub, std::
 // gets that verb's DEFAULT answer inside <graph_verb endpoints="subject">, just before </ctx>, on the graph this run built
 // (no re-index). Every byte before it is the ordinary answer; nothing resolves → nothing is printed. XML only (the
 // --json / columnar dialects keep their single document; the verb is one call away there).
-inline void appendSubjectGraphVerbBlock( const MainDispatch& d, std::span<const rw::NodeId> served )
+// Returns whether the block (or its held tag) was printed.
+inline bool appendSubjectGraphVerbBlock( const MainDispatch& d, std::span<const rw::NodeId> served )
 {
     const rw::Config& cfg = d.cfg;
     if( cfg.json || cfg.columnar || cfg.candidates || d.multiRoot )
     {
-        return;
+        return false;
     }
     const std::optional<rw::GraphSubjectArgs> args = rw::chooseGraphSubjectArgs( d.ing, cfg.forTask );
     if( !args )
     {
-        return;
+        return false;
     }
     if( cfg.tokenBudget > 0 )   // --token-budget (the budget --for honours; shapingflagcheck (A) pins the --max-tokens read sites, so this reads only the one)
     {
         // a token budget is a request the block must obey (S2): the verb does not run, the tag names it (held="budget", verb= is the call)
         rw::emitRaw( stdout, rw::graphSubjectOpenXml( *args, rw::GraphSubjectOpen{ .held = true } ).c_str() );
-        return;
+        return true;
     }
     rw::Config sub = cfg;   // the verb runs as its own bare call: its default caps, no page window, no --for shaping
     sub.forTask    = {};
@@ -3315,6 +3352,29 @@ inline void appendSubjectGraphVerbBlock( const MainDispatch& d, std::span<const 
         }
     }
     rw::emitRaw( stdout, std::string( rw::kGraphSubjectCloseXml ).c_str() );
+    return true;
+}
+
+// RE-ASK (SENTENCE-SUBJECT card 2, src/subjectanchor.h sentenceReaskInvocation): a sentence that spells code and asks for its callers
+// or a path, answered with no <callers> and no <graph_verb> block, gets ONE <reask next="…"/> naming the bare call that answers it,
+// just before </ctx>. XML only, like the blocks it stands in for; outside est_tokens. "" otherwise.
+inline constexpr std::string_view kReaskLegend =
+    "<!-- ripwire for reask: the task names code in a sentence and asks for its callers or a call path, and this answer carries no "
+    "callers or graph_verb block for it; next= is the same question in its bare form, the one call that answers it -->";
+inline void appendSentenceReask( const MainDispatch& d, bool subjectBlockPrinted )
+{
+    const rw::Config& cfg = d.cfg;
+    if( subjectBlockPrinted || cfg.json || cfg.columnar || cfg.candidates || d.multiRoot )
+    {
+        return;
+    }
+    const std::string invocation = rw::sentenceReaskInvocation( d.ing, cfg.forTask );
+    // the callers form stands in for <callers by="subject">, so the caller-hop A/B switch (RIPWIRE_NO_CALLER_HOP) turns it off with it
+    if( invocation.empty() || ( invocation.starts_with( "--callers=" ) && !rw::forCallerHopOn() ) )
+    {
+        return;
+    }
+    rw::emitRaw( stdout, ( std::string( kReaskLegend ) + "<reask" + rw::nextAttrXml( invocation ) + "/>" ).c_str() );
 }
 
 std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, const ForLensPassMode& mode )
@@ -4842,6 +4902,49 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // Re-rendered only when that budget is narrower than the first render's, which changes only rows past the cut: the
         // sections' scope (sigsRowsAtTarget) and funding read the rows AT the cut. The first render's redaction count is
         // replaced, never added to; a re-render whose buffer fails keeps the first render and its readings whole.
+        // The rows rendered again at row budget `rowDrop` (round C's refill below, and DEMOTE-ALL-DIALECTS' after it): the render's
+        // redaction count replaces the one before, never adds to it; a render whose buffer fails keeps the one before and its readings.
+        std::optional<RedactCounts> redactRowsBefore = redactBeforeSigs, redactRowsAfter = redactAfterSigs;   // the latest render's span
+        const auto renderRowsAt = [ & ]( std::size_t rowDrop ) -> bool
+        {
+            const rw::SigsCutReport   firstCut       = forSigsCut;
+            const std::size_t         firstDropped   = forDroppedPositive;
+            const bool                firstCapped    = forSigsCapped;
+            const std::vector<NodeId> firstShown     = shownSigIds;
+            const std::optional<RedactCounts> redactNow = redactPtr != nullptr ? std::optional<RedactCounts>( *redactPtr ) : std::nullopt;
+            rw::redactTakeBack( redactPtr, redactRowsBefore, redactRowsAfter );   // the latest render's count comes back out
+            const std::optional<RedactCounts> redactBeforeThis = redactPtr != nullptr ? std::optional<RedactCounts>( *redactPtr ) : std::nullopt;
+            forSigsCut                     = rw::SigsCutReport {};
+            forSigsCut.continuationRequest = &forSigsNext;
+            forSigsCut.rowDropBudgetBytes  = rowDrop;
+            forSigsCut.pastTargetDisclosed = false;
+            std::string refill;
+            if( preRender( renderSigs, refill ) )
+            {
+                sigsStr = std::move( refill );
+                redactRowsBefore = redactBeforeThis;
+                redactRowsAfter  = redactPtr != nullptr ? std::optional<RedactCounts>( *redactPtr ) : std::nullopt;
+                // the first render's spelling of the same attribute (no second fixed buffer: fixedbufsweep's census)
+                droppedPositiveNote = forDroppedPositive > 0 ? " dropped_positive=\"" + std::to_string( forDroppedPositive ) + "\""
+                                                             : std::string();
+                sigsCeilingNote = rw::sigsCutReportLegend( forSigsCut );   // a soft target: no default ceiling, no guard reading
+                // lane 2: a row the refill dropped lands in the tail's rank rows — re-listed against the rows now shown, at
+                // the same share (the share, not the rows, is what the refill priced)
+                const FileTail refilledTail = computeFileTail( ing, lensRank, lr.evidence, shownSigIds, flRootArg, cfg.forTask );
+                tailStr     = renderForFileTailXml( refilledTail, cfg.tokenBudget, bundleBudget, tailSpentBytes, &tailShownRows );
+                tailPrinted = rw::emittedTailPaths( refilledTail, tailShownRows );
+                return true;
+            }
+            forSigsCut         = firstCut;
+            forDroppedPositive = firstDropped;
+            forSigsCapped      = firstCapped;
+            shownSigIds        = firstShown;
+            if( redactNow )
+            {
+                *redactPtr = *redactNow;
+            }
+            return false;
+        };
         if( forSoftTarget && sigsPreRendered && forSigsCut.pastTarget > 0 )
         {
             // the tail is charged at its RESERVE — its share, capped at the whole render of the head-scoped tail (forFileTail: the
@@ -4859,41 +4962,22 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             const std::size_t rowDropFill    = rw::forSoftRowDropFill( bundleBudget, sectionsServed );
             if( rowDropFill < sigsBudgets.rowDrop )
             {
-                const rw::SigsCutReport   firstCut       = forSigsCut;
-                const std::size_t         firstDropped   = forDroppedPositive;
-                const bool                firstCapped    = forSigsCapped;
-                const std::vector<NodeId> firstShown     = shownSigIds;
-                const std::optional<RedactCounts> redactNow = redactPtr != nullptr ? std::optional<RedactCounts>( *redactPtr ) : std::nullopt;
-                rw::redactTakeBack( redactPtr, redactBeforeSigs, redactAfterSigs );   // the first render's count comes back out
-                forSigsCut                     = rw::SigsCutReport {};
-                forSigsCut.continuationRequest = &forSigsNext;
-                forSigsCut.rowDropBudgetBytes  = rowDropFill;
-                forSigsCut.pastTargetDisclosed = false;
-                std::string refill;
-                if( preRender( renderSigs, refill ) )
-                {
-                    sigsStr = std::move( refill );
-                    // the first render's spelling of the same attribute (no second fixed buffer: fixedbufsweep's census)
-                    droppedPositiveNote = forDroppedPositive > 0 ? " dropped_positive=\"" + std::to_string( forDroppedPositive ) + "\""
-                                                                 : std::string();
-                    sigsCeilingNote = rw::sigsCutReportLegend( forSigsCut );   // a soft target: no default ceiling, no guard reading
-                    // lane 2: a row the refill dropped lands in the tail's rank rows — re-listed against the rows now shown, at
-                    // the same share (the share, not the rows, is what the refill priced)
-                    const FileTail refilledTail = computeFileTail( ing, lensRank, lr.evidence, shownSigIds, flRootArg, cfg.forTask );
-                    tailStr     = renderForFileTailXml( refilledTail, cfg.tokenBudget, bundleBudget, tailSpentBytes, &tailShownRows );
-                    tailPrinted = rw::emittedTailPaths( refilledTail, tailShownRows );
-                }
-                else
-                {
-                    forSigsCut         = firstCut;
-                    forDroppedPositive = firstDropped;
-                    forSigsCapped      = firstCapped;
-                    shownSigIds        = firstShown;
-                    if( redactNow )
-                    {
-                        *redactPtr = *redactNow;
-                    }
-                }
+                (void)renderRowsAt( rowDropFill );
+            }
+        }
+        // DEMOTE-ALL-DIALECTS (fordemoteall.h): under a soft target SIBLING-DEMOTE and DECL-TWIN run here, on <sigs> read with the
+        // rows and hop rows rendered around it, before the rows are settled: the bytes they free buy rows past the cut (rows stay a
+        // rank prefix), and est_tokens= prices the result like any row. The no-budget answer is shaped after <syms> instead.
+        if( forSoftTarget && sigsPreRendered && rw::demoteRulesOn() )
+        {
+            const std::string before = forHdrXml + filePageXml + unusedXml;
+            const std::string after  = autoSection.xml + slot.xml;
+            const auto        point  = [ & ] { return rw::demoteAndPointBlock( ing, g, cfg.forTask, before, sigsStr, after ); };
+            std::string pointed = rw::refillRowsForDemote( forSigsCut.rowDropBudgetBytes, [ & ]() -> const std::string& { return sigsStr; },
+                                                           [ & ] { return forSigsCut.rowDropCut; }, [ & ] { return shownSigIds.size(); }, renderRowsAt, point );
+            if( !pointed.empty() )
+            {
+                sigsStr = std::move( pointed );
             }
         }
 
@@ -5187,7 +5271,8 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             rw::emitChargedSection( stdout, graphSection, [ & ]{ packGraphBlock( stdout, ing, lensRank, g.outOff, g.outTargets ); } );
         }
         appendForTaskRowBlocks( d );                                     // DECL-ROW: "" unless the task reads as a signature change of one C/C++/Go function
-        appendSubjectGraphVerbBlock( d, servedAnswerBodies().bodies );   // FOR-ROUTE-DECLINED: "" unless the task is spelled as a graph question that resolves; the bodies this answer carries print no second copy in its path hop bodies
+        const bool graphBlock = appendSubjectGraphVerbBlock( d, servedAnswerBodies().bodies );   // FOR-ROUTE-DECLINED: "" unless the task is spelled as a graph question that resolves; the bodies this answer carries print no second copy in its path hop bodies
+        appendSentenceReask( d, graphBlock || headerParts.callerHopPresent );   // RE-ASK: "" unless a code-spelling sentence's callers / path got no block
         // ALIAS-IMPORT (forreexport.h): the `pub use` / `export … from` hops to a definition the task names; "" when none. XML only, like the block above.
         if( !cfg.json && !cfg.columnar && !cfg.candidates && !d.multiRoot && rw::forReexportOn() )
         {
@@ -5364,9 +5449,7 @@ std::optional<int> runTargetedViews( const MainDispatch& d )
         // `--exemplar=$'a\nb'` emitted a raw newline outside CDATA. xmlCommentText is the shared scrub (it runs
         // BEFORE ex(), so entity escaping is unchanged and control-free input stays byte-identical).
         const std::string reqNote = xmlCommentText( cfg.exemplar );
-        const std::string kindNote = pick.fromTask ? ( " (task -> kind=" + std::string( symTag( pick.targetKind ) )
-                                                       + ( pick.lowConfidence ? ", low-confidence: weak match, fell back to fn" : "" ) + ")" )
-                                                    : std::string();   // stable storage for %s
+        const std::string kindNote = exemplarKindNote( pick );   // stable storage for %s
         // §B6 M13: the rule is exemplar.h's kExemplarSelectionRule, RENDERED — this legend used to lead with
         // complexity while the composite leads with the fixture penalty, and the MCP twin said a third thing.
         // §B7.9 (CA4): the root element carries in=, ccx= and (conditionally) tested=, and this legend
@@ -5382,7 +5465,7 @@ std::optional<int> runTargetedViews( const MainDispatch& d )
         rw::emitTo( stdout, "<!-- ripwire exemplar for \"{}\"{}: the repo's best-in-class {} to imitate — {}. "
                      "On the root, the three attributes that ARE that ordering's evidence: in=reuse-count "
                      "(callers), ccx=cognitive complexity, tested=1 when a test reaches it (OMITTED, never 0, "
-                     "when none does). The body follows in a bodies section, its callee signatures in a calls "
+                     "when none does). The body follows in a bodies section (b t= its kind, l= its first line), its callee signatures in a calls "
                      "child; both disclose truncation the house way: total= is how many qualified, shown= how "
                      "many are printed, capped=1 when the two differ (calls omits shown= and capped= when its "
                      "list is complete). Copy its shape, not its text.{} -->",
@@ -5395,7 +5478,7 @@ std::optional<int> runTargetedViews( const MainDispatch& d )
                      symTag( pick.targetKind ), pick.candidateCount, ex( wsym.name ).c_str(),
                      ex( tvSingleRoot ? rw::sarif::rootRelativeUri( ing.files[ wsym.fileId ], tvRootPrefix ) : std::string_view( ing.files[ wsym.fileId ] ) ).c_str(), wsym.line,
                      fin( pick.winner ), wsym.ccx, exemplarRootAttr.c_str(), ts( pick.winner ) ? " tested=\"1\"" : "",
-                     pick.lowConfidence ? " low_confidence=\"1\"" : "",
+                     exemplarHedgeAttrs( pick ),
                      pick.overCcxBar    ? " over_ccx_bar=\"1\"" : "" );
         packBodies( stdout, ing, { pick.winner }, cfg.packBudgetBytes, g.outOff, g.outTargets, g.outNameOnly, cfg.compress, redactPtr,
                    /*ranges=*/nullptr, /*noteIndex=*/nullptr, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,

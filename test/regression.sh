@@ -305,6 +305,7 @@ for _g in \
     aliasdefcheck \
     anchorbodycheck \
     anchorcheck \
+    anchorhonestycheck \
     archcheck \
     archhonestcheck \
     archmetricscheck \
@@ -349,6 +350,7 @@ for _g in \
     candheadcheck \
     candidatescheck \
     canoncheck \
+    capdisclosemapcheck \
     capdisclosurecheck \
     capsweepcheck \
     ccheck \
@@ -395,6 +397,7 @@ for _g in \
     connectcheck \
     connectcorecheck \
     connectjoincheck \
+    connectsourcejointcheck \
     constcheck \
     contextratiocheck \
     coplintcheck \
@@ -432,6 +435,7 @@ for _g in \
     defoverdeclcheck \
     defslookupcheck \
     degradedhintcheck \
+    demoterefillcheck \
     dependencypincheck \
     deplangscheck \
     depsprecisecheck \
@@ -455,7 +459,9 @@ for _g in \
     dottedstringcheck \
     droppedpositivecheck \
     duprowcheck \
+    dupshortcheck \
     dynmapsimdcheck \
+    edgemarkcheck \
     editcheckanswercheck \
     editcheckcheck \
     editcheckdeclcheck \
@@ -530,6 +536,7 @@ for _g in \
     forctorhopcheck \
     fordeclrowcheck \
     fordecltwincheck \
+    fordemoteallcheck \
     fordisclosurecheck \
     fordispatchhopcheck \
     fordocbodycheck \
@@ -548,6 +555,7 @@ for _g in \
     fornotesjsoncheck \
     foronesidecheck \
     forrankordercheck \
+    forreadercallerscheck \
     forregrowcheck \
     forrootlegendcheck \
     forroutecheck \
@@ -601,6 +609,7 @@ for _g in \
     gvassemblycheck \
     handlerrulecheck \
     hasacheck \
+    hashsetcheck \
     hazardpatterncheck \
     headbinstagecheck \
     headsnapcachecheck \
@@ -628,6 +637,7 @@ for _g in \
     impacttypecheck \
     importcapcheck \
     importnarrowcheck \
+    importspellingcheck \
     includeanglecheck \
     includeprecisecheck \
     indexoutcheck \
@@ -713,6 +723,7 @@ for _g in \
     mcphandlecheck \
     mcpincrementalcheck \
     mcpmanifestcheck \
+    mcponeparsecheck \
     mcprangeedgecheck \
     mcpreadloopcheck \
     mcpredactcheck \
@@ -735,6 +746,7 @@ for _g in \
     mdembedcheck \
     mdsectioncheck \
     memguardcheck \
+    memstatscheck \
     mentioncapcheck \
     mentioncheck \
     mentionsverbcheck \
@@ -846,8 +858,11 @@ for _g in \
     qdclonepaircheck \
     qddegradecheck \
     qddialscheck \
+    qdentryceilingcheck \
+    qdmonstercheck \
     qdrefpaircheck \
     qdtestdeadcheck \
+    qdtype3oncecheck \
     qextractionkeycheck \
     qoriginoraclecheck \
     qrevtokencheck \
@@ -950,6 +965,7 @@ for _g in \
     runtracecheck \
     rustanccheck \
     rustimportprecisecheck \
+    rustmacropathcheck \
     rustqualcheck \
     rustrootscheck \
     safedeletecheck \
@@ -968,6 +984,7 @@ for _g in \
     selectorscopecheck \
     selfcheckcheck \
     selfcontainedcheck \
+    sentencesubjectcheck \
     shadowcheck \
     shallowhistorycheck \
     shapingflagcheck \
@@ -1053,6 +1070,7 @@ for _g in \
     usescheck \
     usesliteralcheck \
     usesselectorcheck \
+    usesunarmedcheck \
     usingdeclcheck \
     utf8scrubcheck \
     vendoredassetcheck \
