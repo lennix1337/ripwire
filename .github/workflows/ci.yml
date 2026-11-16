@@ -344,7 +344,7 @@ jobs:
           case "$new" in ''|*[!0-9]*) echo "::warning::unreadable new= in $st; the tracking issue is left untouched"; exit 0 ;; esac
           if ! gh api "repos/$REPO/labels/$label" --silent 2>/dev/null; then
             gh label create "$label" --repo "$REPO" --color FBCA04 \
-              --description "Nightly advisory clang-tidy found rows not in .clang-tidy-baseline.txt; opened and closed by .github/workflows/ci.yml only"
+              --description "Nightly advisory clang-tidy rows not in .clang-tidy-baseline.txt; managed by ci.yml only"
           fi
           open="$( gh issue list --repo "$REPO" --label "$label" --state open --json number --jq '.[0].number // empty' )"
           if [ "$new" -gt 0 ]; then
